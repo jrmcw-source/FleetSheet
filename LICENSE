@@ -1,24 +1,43 @@
-<!-- FleetSheet is an independent open-source project by its author.
-     There is no LLC or other business entity behind it. -->
+<!-- FleetSheet is an independent project by its author, Jason
+     McWhirter. There is no LLC or other business entity behind it. -->
 
-MIT License
+FleetSheet License -- free to use, no redistribution
 
-Copyright (c) 2026 FleetSheet
+Copyright (c) 2026 Jason McWhirter. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+WHAT YOU MAY DO
+You may download FleetSheet, free of charge, from the author's official
+distribution points (this GitHub repository and its Releases), install
+it, and use it -- including in your business -- at no cost.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+WHAT YOU MAY NOT DO
+FleetSheet is NOT open-source software, and this license grants no
+open-source rights. The source code is publicly viewable so anyone can
+see what the software does; viewing is not a grant of rights. You may
+NOT:
+- redistribute FleetSheet or any part of it: no re-uploading,
+  mirroring, republishing, bundling with other products, or otherwise
+  distributing copies, whether modified or unmodified;
+- sell, rent, lease, or sublicense FleetSheet or any part of it;
+- distribute any version of FleetSheet that you have modified.
+All rights not expressly granted in this license are reserved by the
+author. (GitHub's Terms of Service allow viewing and forking a public
+repository within GitHub itself; a fork grants no right to distribute
+FleetSheet anywhere else.)
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+THIRD-PARTY COMPONENTS
+FleetSheet bundles third-party components that remain under their own
+licenses -- WinSparkle (MIT License; see licenses/) and the Inter font
+family (SIL Open Font License; see fonts/). This license applies to
+FleetSheet itself, not to those components.
+
+NO WARRANTY -- USE AT YOUR OWN RISK
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. THE AUTHOR
+PROVIDES NO SUPPORT FOR THIS SOFTWARE. See EULA.md / EULA.txt for the
+full terms that govern use.

@@ -2,7 +2,9 @@
 
 **Track your equipment to the bank.** A one-desk equipment rental tracker with compliance checks and invoicing/accounts receivable — built for the small construction-adjacent shop where one person does it all.
 
-FleetSheet is free and open-source (MIT). It is provided as-is with no support — see [EULA.md](EULA.md).
+FleetSheet is free to download and use. It is not open source: the source is public to read, but redistribution is prohibited — see [LICENSE](LICENSE). It is provided as-is with no support — see [EULA.md](EULA.md).
+
+**Author and maintainer:** Jason McWhirter — created, owned, and maintained by Jason McWhirter ([@jrmcw-source](https://github.com/jrmcw-source)), the developer behind this repository and its releases.
 
 ---
 
@@ -43,20 +45,20 @@ Your data lives in a single SQLite file on your machine. Automatic daily backups
 ## Development setup
 
 ```bash
-git clone https://github.com/<org>/fleetsheet.git
-cd fleetsheet
+git clone https://github.com/jrmcw-source/FleetSheet.git
+cd FleetSheet
 python3 -m venv venv
 source venv/bin/activate   # or venv\Scripts\activate on Windows
 # Core has zero dependencies. Optional extras:
 pip install reportlab segno pypdf
-python3 app/app.py         # serves on http://127.0.0.1:8765
+python3 app.py             # serves on http://127.0.0.1:8765
 ```
 
 The test suite lives alongside the app: `test_ux.py`, `test_business_rules.py`, `test_compliance.py`, `test_schema.py`, `test_tabecho.py`.
 
 ## Project status
 
-- **Free and open-source** under the MIT License — see [LICENSE](LICENSE)
+- **Free to use, no redistribution** under the FleetSheet License — see [LICENSE](LICENSE)
 - **No support is offered.** This is a side project by a solo developer. The [EULA](EULA.md) is AS-IS / NO SUPPORT / NO LIABILITY / USE AT YOUR OWN RISK. The app includes a self-diagnostics System Health page; beyond that, you're on your own (politely).
 - **No warranty, no professional advice.** FleetSheet is a record-keeping tool. It does not provide tax, legal, or financial advice, and it never infers tax — every rate and jurisdiction is your explicit decision.
 

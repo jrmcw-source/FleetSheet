@@ -1,10 +1,10 @@
 # END-USER LICENSE AGREEMENT (EULA)
 
-**FleetSheet — Free Open-Source Desktop Software**
+**FleetSheet — Free Desktop Software**
 
 **READ THIS FIRST. BY CLICKING "I AGREE" OR BY INSTALLING, COPYING, OR USING THIS SOFTWARE, YOU ACCEPT THESE TERMS. IF YOU DO NOT ACCEPT THEM, DO NOT INSTALL OR USE THE SOFTWARE.**
 
-This End-User License Agreement ("Agreement") is between you ("User") and FleetSheet ("Licensor"). FleetSheet is provided free of charge as open-source software.
+This End-User License Agreement ("Agreement") is between you ("User") and FleetSheet ("Licensor"). FleetSheet is provided free of charge. It is not open-source software; the FleetSheet License (see LICENSE) states the terms under which it may be used.
 
 ---
 
@@ -42,9 +42,9 @@ TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL THE LICENSO
 
 Some jurisdictions do not allow the exclusion or limitation of certain damages; in such jurisdictions, liability is limited to the greatest extent permitted by law.
 
-## 7. LICENSE GRANT (OPEN SOURCE)
+## 7. LICENSE GRANT
 
-The Software is licensed under the MIT License (see LICENSE file). Subject to this Agreement, you may use, copy, modify, and distribute the Software in accordance with the MIT License terms. **This Agreement's disclaimers of warranty, limitations of liability, and exclusions of support apply regardless of how you obtained the Software and survive any termination.**
+The Software is licensed under the FleetSheet License (see LICENSE file). Subject to this Agreement, you may install and use the Software free of charge. **Redistribution is prohibited: you may not distribute, sublicense, sell, rent, or re-publish the Software or any part of it, modified or unmodified.** **This Agreement's disclaimers of warranty, limitations of liability, and exclusions of support apply regardless of how you obtained the Software and survive any termination.**
 
 ## 8. NO OBLIGATION TO UPDATE
 
@@ -64,7 +64,7 @@ This Agreement shall be governed by the laws of the State of Louisiana, without 
 
 ## 12. ENTIRE AGREEMENT
 
-This Agreement, together with the MIT License, constitutes the entire agreement regarding the Software. If any provision is held unenforceable, the remaining provisions continue in full effect. The Licensor's failure to enforce any provision is not a waiver.
+This Agreement, together with the FleetSheet License, constitutes the entire agreement regarding the Software. If any provision is held unenforceable, the remaining provisions continue in full effect. The Licensor's failure to enforce any provision is not a waiver.
 
 ---
 
