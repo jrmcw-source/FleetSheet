@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+
+# SQLite databases — never commit data files
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Installer / packaging outputs
+*.exe
+*.msi
+dist/
+build/
+*.spec
+installer-output/
+*.dmg
+
+# Code-signing certificates and keys — NEVER commit these
+*.pfx
+*.p12
+*.pem
+*.key
+*.jks
+*.keystore
+codesign/
+certs/private/
+
+# Test artifacts and logs
+*.log
+fleetsheet-launch.log
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Local dev overrides
+.env
+*.local
