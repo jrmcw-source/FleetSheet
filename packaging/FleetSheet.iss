@@ -60,7 +60,6 @@ AppUpdatesURL={#MyAppURL}
 ; --- Per-user install: NO admin / NO UAC prompt. This is the #1 install
 ; --- friction reducer for non-technical users on locked-down shop PCs.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 
 ; --- Install location: per-user, writable without elevation.
 DefaultDirName={localappdata}\{#MyAppName}
