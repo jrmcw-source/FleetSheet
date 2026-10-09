@@ -34,7 +34,7 @@
 
 #define MyAppName "FleetSheet"
 #define MyAppPublisher "FleetSheet"
-#define MyAppURL "https://github.com/"
+#define MyAppURL "https://github.com/jrmcw-source/FleetSheet"
 #define MyAppExeName "pythonw.exe"
 
 ; --- Version: read from the VERSION file next to this script (one line,
