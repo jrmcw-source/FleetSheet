@@ -486,6 +486,9 @@ class Handler(views_accounting.AccountingViews,
                 self._send_bytes(raw, "image/jpeg")
             except Exception:
                 self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            return
         if path == "/manual":
             # Operation Manual PDF (Jason 2026-10-07)
             try:
@@ -493,6 +496,8 @@ class Handler(views_accounting.AccountingViews,
                     self._send_bytes(mf.read(), "application/pdf")
             except Exception:
                 self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
             return
         if path.startswith("/fonts/inter-") and path.endswith(".ttf"):
             # Bundled Inter typeface (offline-safe). Exempt from every gate:
@@ -507,6 +512,7 @@ class Handler(views_accounting.AccountingViews,
                     self._send_bytes(_f.read(), "font/ttf")
             except Exception:
                 self.send_response(404)
+                self.send_header("Content-Length", "0")
                 self.end_headers()
             return
         if path == "/version":
@@ -536,6 +542,7 @@ class Handler(views_accounting.AccountingViews,
                 self._send_bytes(base64.b64decode(raw_b64), mime or "image/png")
             except Exception:
                 self.send_response(404)
+                self.send_header("Content-Length", "0")
                 self.end_headers()
             return
         con = engine.connect()
@@ -802,6 +809,7 @@ class Handler(views_accounting.AccountingViews,
                     _note_yard_heartbeat(_tok)
                 else:
                     self.send_response(400)
+                    self.send_header("Content-Length", "0")
                     self.end_headers()
                     return
             _yn = _yard_active_count()
