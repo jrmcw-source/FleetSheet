@@ -1,134 +1,108 @@
-# Windows Code Signing — Cheapest Legal Path
+# Windows Code Signing — Current Status and Future Path
 
-**Goal:** sign `FleetSheet-Setup-<VERSION>.exe` (and the Inno uninstaller)
-so non-technical users don't hit SmartScreen / Smart App Control walls.
+**DECISION (Jason McWhirter, 2026-10-09): FleetSheet v1.0 ships UNSIGNED.**
+No code-signing certificate has been purchased, and none will be for v1.0.
+This file records why, and what the path looks like if signing ever returns.
+
 **Windows-only.** No Mac content in this workstream.
 
-**Status: not yet purchased.** Do this before the first public listing.
+---
+
+## 1. Why v1.0 is unsigned
+
+- **The Certum open-source route is closed.** It required FleetSheet to be
+  open source under an OSI-approved license (e.g. MIT). FleetSheet is **not**
+  open source: it is source-available under the custom FleetSheet License
+  (free to download and use; redistribution, sublicensing, and resale
+  prohibited — see `LICENSE`). The license changed on 2026-10-08; any older
+  note in this repo describing FleetSheet as MIT-licensed is stale.
+- **The strategy caps spend at ~$0.** FleetSheet is released free under a
+  maximal AS-IS / no-support EULA. A commercial certificate (~$100–300/yr)
+  buys less SmartScreen friction, not a different outcome, at this scale.
+- **Accepted cost:** SmartScreen will show an "unrecognized app" warning for
+  the unsigned installer, and Windows 11 Smart App Control can block
+  unsigned executables outright on machines where it is enabled. That is a
+  known, accepted trade-off for v1.0, not an oversight.
+
+**Do not buy an EV certificate for SmartScreen purposes, ever.** Microsoft
+removed EV's instant-reputation behavior in 2024; OV and EV are treated
+identically ("unrecognized until reputation accumulates"). An EV cert bought
+for SmartScreen is $200–500/yr set on fire.
+
+Reputation reality (for any future signed release): every new file hash
+starts at zero reputation, so each release re-triggers the warning until
+reputation rebuilds (weeks + hundreds of installs). Signing removes
+"Unknown publisher"; it does not remove the warning on day one.
 
 ---
 
-## 1. What to buy (cheapest first)
+## 2. Update signing is separate — and it IS active
 
-| Option | Cost | Notes |
-|---|---|---|
-| **Certum Open-Source Code Signing (OV)** | **~$25–70/yr** | **Cheapest legal route — but ONLY if FleetSheet is open-source** (public repo, OSI-approved license such as MIT). Apply through Certum's open-source program. Identity validation required. Ships on a cryptographic card/token — allow 1–3 weeks for the token to arrive by mail. |
-| Sectigo / DigiCert OV via reseller | ~$100–300/yr | Standard commercial OV cert. No open-source requirement. Reputation builds the same way. |
-| Microsoft Artifact Signing | ~$9.99/mo (~$120/yr) | Microsoft's recommended non-Store path. Cloud-based signing, **no USB token**, CI-friendly. Confirm individual/sole-proprietor eligibility at signup. |
+Do not confuse code signing (Authenticode, this document) with the
+**WinSparkle update channel**, which is signed with an Ed25519 keypair:
 
-**Pick:** Certum open-source if the repo is public + MIT (it is, per the plan).
-Otherwise the Sectigo-reseller OV is the next cheapest.
+- The **public key** is baked into the shipped build.
+- The **private key** (`eddsa_priv.pem`) lives only on the maintainer's
+  machine at `%LOCALAPPDATA%\FleetSheet\UpdateSigning\`, with a secure
+  backup. **Never** commit it to this repo, and never send it through chat
+  or email.
+- Every `appcast.xml` release entry must carry the EdDSA signature produced
+  with that private key (WinSparkle's `generate_appcast` / sign-update
+  tooling), or installed copies will refuse the update.
 
-### ⚠️ DO NOT buy an EV certificate for SmartScreen
-
-**EV ($200–500/yr) no longer grants SmartScreen bypass.** Microsoft removed
-the instant-reputation behavior in 2024. Since then, OV and EV are treated
-identically: both show "unrecognized until reputation accumulates." An EV
-cert for SmartScreen purposes is $200–500/yr set on fire.
-
-Reputation reality (both OV and EV):
-- Every NEW file hash starts at zero reputation — **each release re-triggers
-  the warning until reputation rebuilds** (weeks + hundreds of installs).
-- Unsigned is strictly worse: warning on every build, forever, and
-  Windows 11 Smart App Control can block unsigned executables outright.
-- Signing is necessary but not sufficient. Ship it anyway — it's the floor.
+Losing that private key means losing the ability to update existing
+installs. Guard it accordingly.
 
 ---
 
-## 2. How to apply (Certum open-source program)
+## 3. If signing returns (paid v2.0 / real traction)
 
-1. Publish the repo publicly with an OSI-approved license (MIT).
-2. Apply at Certum's site under their open-source / community program.
-   You'll need: proof of the public repo, personal identity documents
-   (individual) — the certificate is issued to a **legal name** for
-   individual enrollment.
-3. Complete their identity validation (email + document checks).
-4. Receive the cryptographic token by mail. Install Certum's middleware
-   so Windows sees the certificate.
-5. Export the certificate **thumbprint** (see step 4) — you'll need it for
-   every signing command.
+Trigger: download volume or a paid tier that justifies the spend. Path:
 
-Keep the token physically safe. If it's lost/stolen, revoke through Certum
-immediately — a compromised signing cert is worse than none.
+1. Buy a **standard commercial OV certificate** issued to **Jason
+   McWhirter** personally — Sectigo/DigiCert via a reseller (~$100–300/yr)
+   or Microsoft Artifact Signing (~$9.99/mo, cloud-based, no USB token;
+   confirm individual eligibility at signup). **Not** an open-source
+   program certificate: the FleetSheet License does not qualify, and
+   open-source program certs are revoked if used to sign commercially
+   distributed software.
+2. Install the **Windows SDK** on the build machine for `signtool.exe`
+   (`C:\Program Files (x86)\Windows Kits\10\bin\<ver>\x64\signtool.exe`).
+3. Record the certificate **thumbprint** (40 hex chars, no spaces):
+   `certutil -store My | findstr /C:"Cert Hash"` — store it safely,
+   **not** in this repo.
+4. Sign at Inno compile time (this also signs the uninstaller, which is
+   what `SignedUninstaller=yes` in `FleetSheet.iss` is for):
 
----
+   ```bat
+   iscc /S"certsign=signtool sign /fd SHA256 /sha1 <THUMBPRINT> /tr http://timestamp.digicert.com /td SHA256 $p" FleetSheet.iss
+   ```
 
-## 3. How to sign the installer (after Inno builds it)
+   Fallback timestamp server: `http://timestamp.sectigo.com`. **Never skip
+   the `/tr` timestamp** — it is what keeps the signature valid after the
+   certificate expires.
+5. To sign an already-built installer by hand:
 
-You need `signtool.exe` — ships with the **Windows SDK**
-(`C:\Program Files (x86)\Windows Kits\10\bin\<ver>\x64\signtool.exe`).
-Install the SDK once on the build machine.
+   ```bat
+   signtool sign /fd SHA256 /sha1 <THUMBPRINT-NOHYPHENS> /tr http://timestamp.digicert.com /td SHA256 "FleetSheet-Setup-1.0.exe"
+   ```
 
-```bat
-:: 1. Find your certificate thumbprint (40 hex chars, no spaces):
-certutil -store My | findstr /C:"Cert Hash"
+6. Verify before publishing:
 
-:: 2. Sign the installer (SHA-256 only — SHA-1 dual-signing is obsolete):
-signtool sign /fd SHA256 /sha1 <THUMBPRINT-NOHYPHENS> ^
-  /tr http://timestamp.digicert.com /td SHA256 ^
-  "output\FleetSheet-Setup-2026-10-08u.exe"
+   ```bat
+   signtool verify /pa /v "FleetSheet-Setup-1.0.exe"
+   ```
 
-:: 3. Sign EVERYTHING you ship that executes: the uninstaller is handled
-::    by Inno (SignedUninstaller=yes + /S flag, see FleetSheet.iss header),
-::    but also sign FleetSheet-Start.bat? No — .bat files can't be signed.
-::    Sign: the setup exe, the uninstaller (via Inno), pythonw.exe is
-::    already signed by the PSF — leave vendor binaries alone.
-```
+   Expected: `Successfully verified`, a certificate chain ending in a
+   trusted root, and a timestamp present. Cross-check via right-click →
+   Properties → **Digital Signatures**. Then test a fresh download on a
+   clean Windows machine and note exactly what SmartScreen shows.
 
-**Timestamp servers** (RFC 3161 — the timestamp is what keeps the signature
-valid after the cert expires; NEVER skip `/tr`):
-- `http://timestamp.digicert.com` (primary)
-- `http://timestamp.sectigo.com` (fallback)
+Signed-release checklist:
 
-**Inno integration** (signs at compile time, including the uninstaller):
-```bat
-iscc /S"certsign=signtool sign /fd SHA256 /sha1 <THUMBPRINT> /tr http://timestamp.digicert.com /td SHA256 $p" FleetSheet.iss
-```
-The `;SignTool=certsign $p` line in FleetSheet.iss is commented out until
-you have a thumbprint — uncomment it when you do. (`$p` = file to sign,
-`$f` also works; `$q...$q` quotes.)
-
----
-
-## 4. How to verify the signature
-
-```bat
-:: Full verification (chain, timestamp, file hash):
-signtool verify /pa /v "output\FleetSheet-Setup-2026-10-08u.exe"
-```
-Expected: `Successfully verified` + `Signing Certificate Chain` ending in
-a trusted root + `Timestamp` present.
-
-Manual check: right-click the exe → Properties → **Digital Signatures** tab
-→ select the signature → Details → "This digital signature is OK" and the
-timestamp counter-signature is listed.
-
-Also verify on a **clean Windows 10/11 VM** (or a friend's PC) that has
-never seen the file: download it fresh and confirm what the user sees.
-Expect the SmartScreen "unrecognized app" interstitial on early releases —
-that is the reputation system working as designed, not a signing failure.
-
----
-
-## 5. Release checklist (signing portion)
-
-- [ ] Certum open-source cert issued, token in hand, thumbprint recorded
-- [ ] `signtool.exe` installed on the build machine (Windows SDK)
-- [ ] `;SignTool=` line in FleetSheet.iss uncommented
-- [ ] Inno compiled with `/S` flag → installer AND uninstaller signed
-- [ ] `signtool verify /pa /v` passes on the output exe
-- [ ] Timestamp present (check with `/v`)
-- [ ] Clean-VM download test: note exactly what SmartScreen shows
-- [ ] Thumbprint + token stored safely (NOT in the repo)
-
-## 6. Costs, blunt summary
-
-| Item | Cost |
-|---|---|
-| Certum open-source OV (Windows) | ~$25–70/yr |
-| Apple Developer (Mac — separate workstream) | $99/yr |
-| Windows SDK / signtool | $0 |
-| **EV certificate** | **$0 — do not buy** |
-
-Minimum viable trust spend for Windows: **~$25–70/yr**. Everything else
-in the packaging workstream is developer time.
+- [ ] Commercial OV cert issued to Jason McWhirter; thumbprint recorded (outside the repo)
+- [ ] `signtool.exe` available on the build machine
+- [ ] Inno compiled with the `/S"certsign=..."` define → installer AND uninstaller signed
+- [ ] `signtool verify /pa /v` passes; timestamp present
+- [ ] Clean-machine download test: SmartScreen behavior noted
+- [ ] Appcast entry signed with the WinSparkle Ed25519 key (section 2 — required either way)
