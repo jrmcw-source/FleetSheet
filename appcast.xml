@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>FleetSheet Updates</title>
+    <link>https://github.com/jrmcw-source/FleetSheet/releases</link>
+    <description>FleetSheet for Windows — update feed</description>
+    <language>en</language>
+    <item>
+      <title>FleetSheet 1.1.0</title>
+      <pubDate>Mon, 26 Oct 2026 19:56:42 +0000</pubDate>
+      <sparkle:version>1.1.0</sparkle:version>
+      <enclosure url="https://github.com/jrmcw-source/FleetSheet/releases/download/v1.1/FleetSheet-Setup-1.1.0.exe"
+                 type="application/octet-stream"
+                 length="22244263"
+                 sparkle:version="1.1.0"
+                 sparkle:edSignature="I07XTAXYOqbLXNPktM9tMPlsi0Vbwv1KHMGoMHbEknCBOm8C3ngI0xgeS6uhemQUHtytmki2aur7W0hw0KDZDw==" />
+    </item>
+  </channel>
+</rss>
