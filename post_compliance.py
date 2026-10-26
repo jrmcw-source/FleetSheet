@@ -1,5 +1,4 @@
 """FleetSheet POST actions — certification/calibration flow: compliance packs and checklist items."""
-import html
 from datetime import date
 
 import engine
@@ -34,15 +33,17 @@ def handle_post(handler, con, data, u):
                 notes = data.get("notes") or ""
                 if data.get("data_book_ok") == "1":
                     notes = (notes + " " if notes else "") + "[data book checked]"
+                # Attribution (Batch 3 #13): no visible Clerk field —
+                # the desk-session identity is stamped by the handler.
                 engine.record_completion(con, int(eid), data.get("done_date"),
                                          data.get("result") or "pass",
                                          data.get("evidence"), notes,
-                                         data.get("clerk"))
+                                         handler.desk(con))
                 up = (handler._files or {}).get("doc_file")
                 if up and up[2]:
                     engine.save_unit_doc(con, aid, data.get("evidence") or up[0] or "compliance doc",
                                          "other", up[0] or "", up[2],
-                                         data.get("clerk"))
+                                         handler.desk(con))
                 handler._redirect(nxt + ("&" if "?" in nxt else "?") + "msg=" + quote_plus("Recorded"))
             except (ValueError, TypeError) as e:
                 handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus(str(e)))
@@ -69,31 +70,6 @@ def handle_post(handler, con, data, u):
                 handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Check removed"))
             except (ValueError, TypeError) as e:
                 handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus(str(e)))
-    elif u.path == "/compliance/doc/upload":
-            aid = data.get("asset_id") or ""
-            up = (handler._files or {}).get("doc_file")
-            try:
-                if not up or not up[2]:
-                    raise ValueError("Choose a file to attach")
-                doc_id = engine.save_unit_doc(con, aid, data.get("title"),
-                                             data.get("kind") or "other",
-                                             up[0] or "", up[2],
-                                             data.get("clerk"))
-                handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Document added to the data book"))
-            except ValueError as e:
-                handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus(str(e)))
-    elif u.path == "/compliance/doc/delete":
-            try:
-                doc_id = int(data.get("doc_id") or 0)
-            except (TypeError, ValueError):
-                doc_id = 0
-            row = engine.get_unit_doc(con, doc_id)
-            aid = row["asset_id"] if row else ""
-            if engine.delete_unit_doc(con, doc_id):
-                handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Document removed"))
-            else:
-                handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus("Unknown document"))
-    # ---- Cert records: every certification/calibration/function test names its asset. ----
     elif u.path == "/compliance/cert/save":
             cert_id = (data.get("cert_id") or "").strip()
             try:
@@ -102,8 +78,10 @@ def handle_post(handler, con, data, u):
                     engine.update_cert(
                         con, int(cert_id),
                         kind=data.get("kind"), title=data.get("title"),
-                        cert_number=data.get("cert_number"), issuer=data.get("issuer"),
-                        issued_date=data.get("issued_date"), expiry_date=data.get("expiry_date"),
+                        cert_number=data.get("cert_number"),
+                        issuer=data.get("issuer"),
+                        issued_date=data.get("issued_date"),
+                        expiry_date=data.get("expiry_date"),
                         notes=data.get("notes"))
                 else:
                     aid = (data.get("asset_id") or "").strip()
@@ -114,13 +92,15 @@ def handle_post(handler, con, data, u):
                         issuer=data.get("issuer") or "",
                         issued_date=data.get("issued_date") or None,
                         expiry_date=data.get("expiry_date") or None,
-                        notes=data.get("notes") or "", clerk=data.get("clerk") or "")
-                    # Optional evidence file: into this unit's data book, attached to the record.
+                        notes=data.get("notes") or "",
+                        clerk=handler.desk(con))
+                    # Optional evidence file: into this unit's data
+                    # book, attached to the record.
                     up = (handler._files or {}).get("doc_file")
                     if up and up[2]:
                         doc_id = engine.save_unit_doc(
                             con, aid, data.get("title") or "certificate",
-                            "cert", up[0] or "", up[2], data.get("clerk"))
+                            "cert", up[0] or "", up[2], handler.desk(con))
                         engine.attach_cert_evidence(con, cert_id, doc_id)
                 handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Certificate saved"))
             except (ValueError, TypeError) as e:
@@ -130,7 +110,8 @@ def handle_post(handler, con, data, u):
             cert_id = (data.get("cert_id") or "").strip()
             aid = handler._cert_asset(con, cert_id)
             try:
-                engine.attach_cert_evidence(con, int(cert_id), int(data.get("doc_id") or 0))
+                engine.attach_cert_evidence(con, int(cert_id),
+                                            int(data.get("doc_id") or 0))
                 handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Evidence attached"))
             except (ValueError, TypeError) as e:
                 handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus(str(e)))
@@ -138,7 +119,8 @@ def handle_post(handler, con, data, u):
             cert_id = (data.get("cert_id") or "").strip()
             aid = handler._cert_asset(con, cert_id)
             try:
-                engine.set_cert_superseded(con, int(cert_id), data.get("restore") != "1")
+                engine.set_cert_superseded(con, int(cert_id),
+                                           data.get("restore") != "1")
                 handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Certificate updated"))
             except (ValueError, TypeError) as e:
                 handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus(str(e)))
@@ -150,6 +132,49 @@ def handle_post(handler, con, data, u):
                 handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Certificate removed"))
             except (ValueError, TypeError) as e:
                 handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus(str(e)))
+    elif u.path == "/compliance/doc/upload":
+            aid = (data.get("asset_id") or "").strip()
+            valid_unit = bool(aid) and con.execute(
+                "SELECT 1 FROM assets WHERE asset_id=?", (aid,)).fetchone() is not None
+            up = (handler._files or {}).get("doc_file")
+            try:
+                if not valid_unit:
+                    raise ValueError("Pick a unit from the list")
+                if not up or not up[2]:
+                    raise ValueError("Choose a file to attach")
+                doc_type = (data.get("doc_type") or data.get("kind") or "").strip()
+                title = (data.get("title") or "").strip() or doc_type
+                kind = doc_type or "other"
+                replace = data.get("replace") == "1"
+                prior = ([d for d in engine.list_unit_docs(con, aid)
+                          if (d["kind"] or "") == kind] if replace else [])
+                doc_id = engine.save_unit_doc(con, aid, title,
+                                             kind,
+                                             up[0] or "", up[2],
+                                             handler.desk(con))
+                replaced = False
+                if replace and prior:
+                    for d in prior:
+                        engine.delete_unit_doc(con, d["doc_id"])
+                    replaced = True
+                msg = "Document replaced" if replaced else "Document added to the data book"
+                handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus(msg))
+            except ValueError as e:
+                if valid_unit:
+                    handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus(str(e)))
+                else:
+                    handler._redirect("/compliance?err=" + quote_plus(str(e)))
+    elif u.path == "/compliance/doc/delete":
+            try:
+                doc_id = int(data.get("doc_id") or 0)
+            except (TypeError, ValueError):
+                doc_id = 0
+            row = engine.get_unit_doc(con, doc_id)
+            aid = row["asset_id"] if row else ""
+            if engine.delete_unit_doc(con, doc_id):
+                handler._redirect(f"/ucompliance/{aid}?msg=" + quote_plus("Document removed"))
+            else:
+                handler._redirect(f"/ucompliance/{aid}?err=" + quote_plus("Unknown document"))
     else:
         return False
     return True

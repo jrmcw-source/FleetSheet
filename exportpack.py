@@ -22,15 +22,18 @@ def _csv(headers: list[str], rows: list[dict]) -> bytes:
 def tickets_rows(con) -> list[dict]:
     out = []
     q = con.execute(
-        """SELECT t.ticket_id, t.status, t.on_rent, t.off_rent, t.rate_type, t.invoice_no,
+        """SELECT t.ticket_id, t.status, t.on_rent, t.off_rent, t.rate_type,
+                  i.invoice_no AS invoice_no,
                   t.job_name, t.po,
                   c.customer_id, c.account_name,
                   a.asset_id, a.unit_no, a.category, a.description,
-                  s.site_id, s.site_name, s.loc_id
+                  s.site_id, s.site_name, j.loc_id AS loc_id
            FROM tickets t
-           JOIN customers c ON c.customer_id = t.customer_id
-           JOIN assets a ON a.asset_id = t.asset_id
-           JOIN sites s ON s.site_id = t.site_id
+           JOIN customers c ON c.id = t.customer_id
+           JOIN assets a ON a.id = t.asset_id
+           JOIN sites s ON s.id = t.site_id
+           LEFT JOIN jurisdictions j ON j.id = s.loc_id
+           LEFT JOIN invoices i ON i.id = t.invoice_id
            ORDER BY t.on_rent"""
     )
     for t in q:
@@ -86,8 +89,9 @@ TICKET_COLS = [
 def invoices_rows(con) -> list[dict]:
     out = []
     for i in con.execute(
-        """SELECT i.invoice_no, i.invoice_date, i.status, i.terms, i.customer_id, c.account_name
-           FROM invoices i JOIN customers c ON c.customer_id = i.customer_id
+        """SELECT i.invoice_no, i.invoice_date, i.status, i.terms,
+                  c.customer_id, c.account_name
+           FROM invoices i JOIN customers c ON c.id = i.customer_id
            ORDER BY i.invoice_date"""
     ):
         tot = engine.invoice_totals(con, i["invoice_no"])
@@ -154,10 +158,14 @@ UNIT_COLS = [
 def wo_rows(con) -> list[dict]:
     out = []
     for w in con.execute(
-        """SELECT w.*, a.unit_no, c.account_name
+        """SELECT w.*, a.unit_no, a.asset_id AS asset_code,
+                  c.account_name, c.customer_id AS cust_code,
+                  tk.ticket_id AS ticket_no, iv.invoice_no AS inv_no
            FROM work_orders w
-           JOIN assets a ON a.asset_id = w.asset_id
-           LEFT JOIN customers c ON c.customer_id = w.customer_id
+           JOIN assets a ON a.id = w.asset_id
+           LEFT JOIN customers c ON c.id = w.customer_id
+           LEFT JOIN tickets tk ON tk.id = w.ticket_id
+           LEFT JOIN invoices iv ON iv.id = w.invoice_id
            ORDER BY w.open_date"""
     ):
         cost = engine.wo_cost(w["labor"], w["parts"], w["other_cost"])
@@ -171,12 +179,12 @@ def wo_rows(con) -> list[dict]:
             "status": w["status"],
             "charge_to": w["charge_to"],
             "work_type": w["work_type"],
-            "asset_id": w["asset_id"],
+            "asset_id": w["asset_code"],
             "unit_no": w["unit_no"],
-            "customer_id": w["customer_id"] or "",
+            "customer_id": w["cust_code"] or "",
             "account_name": w["account_name"] or "Yard (internal)",
-            "ticket_id": w["ticket_id"] or "",
-            "invoice_no": w["invoice_no"] or "",
+            "ticket_id": w["ticket_no"] or "",
+            "invoice_no": w["inv_no"] or "",
             "labor": w["labor"],
             "parts": w["parts"],
             "other_cost": w["other_cost"],
@@ -217,11 +225,14 @@ CUST_COLS = ["customer_id", "account_name", "short_name", "city_st", "terms", "t
 def collections_rows(con) -> list[dict]:
     out = []
     for r in con.execute(
-        """SELECT c.pay_id, c.pay_date, c.invoice_no, c.method, c.amount, c.kind, c.cm_no, c.ref_no,
-                  i.customer_id, cu.account_name
+        """SELECT c.pay_id, c.pay_date, i.invoice_no, c.method, c.amount,
+                  c.kind, cm.cm_no, c.ref_no,
+                  cu.customer_id, cu.account_name,
+                  COALESCE(c.carried_from, '') AS carried_from
            FROM collections c
-           JOIN invoices i ON i.invoice_no = c.invoice_no
-           JOIN customers cu ON cu.customer_id = i.customer_id
+           JOIN invoices i ON i.id = c.invoice_id
+           JOIN customers cu ON cu.id = i.customer_id
+           LEFT JOIN credit_memos cm ON cm.id = c.cm_id
            ORDER BY c.pay_date, c.pay_id"""
     ):
         amt = float(r["amount"] or 0)
@@ -237,6 +248,11 @@ def collections_rows(con) -> list[dict]:
             "kind": r["kind"],
             "cm_no": r["cm_no"] or "",
             "ref_no": r["ref_no"] or "",
+            # carried_from (2026-10-23): non-blank on rows mirrored
+            # onto this invoice from a work order / ticket at
+            # invoicing — the same money event as that document's
+            # own ledger row; exclude them when totalling money in.
+            "carried_from": r["carried_from"] or "",
             "amount": amt,
             "signed_amount": signed,
         })
@@ -245,8 +261,48 @@ def collections_rows(con) -> list[dict]:
 
 COL_COLS = [
     "pay_id", "pay_date", "month", "invoice_no", "customer_id", "account_name",
-    "method", "kind", "cm_no", "ref_no", "amount", "signed_amount",
+    "method", "kind", "cm_no", "ref_no", "carried_from", "amount", "signed_amount",
 ]
+
+
+def payalloc_rows(con) -> list[dict]:
+    """Money in broken down by document line (Jason 2026-10-23;
+    generalized the same day): one row per allocation of a payment —
+    or of a credit applied, or of a settling Cash In (source 'cash',
+    carrying its payment id) — that was recorded line by line, across
+    all four money documents (doc_kind / doc_ref name the document;
+    invoice_no stays filled for invoice rows). The document-level
+    remainder of such an amount reads line 'Blanket'. Amounts
+    recorded blanket-only carry no rows here — they are whole in the
+    collections pack. Settlements carried onto an invoice at
+    invoicing carry carried=1 (with carried_from naming the source
+    document) — they are the invoice-side reflection of the source
+    document's rows, not new money. Record-only cash breakdowns
+    (Cash Out, no payment id) stay in the cash book and are not
+    repeated here."""
+    out = []
+    for a in engine.list_payment_allocations(con):
+        if a["source"] == "cash" and not a["pay_id"]:
+            continue  # record-only cash; the cash book lists it
+        out.append({
+            "pay_id": a["pay_id"] or "",
+            "batch_id": a["batch_id"] or "",
+            "pay_date": str(a["pay_date"] or "")[:10],
+            "source": a["source"],
+            "cm_no": a["cm_no"],
+            "doc_kind": a["doc_kind"],
+            "doc_ref": a["doc_ref"],
+            "invoice_no": a["invoice_no"],
+            "carried": int(a["carried"] or 0),
+            "carried_from": a.get("carried_from") or "",
+            "line": a["line_label"],
+            "line_note": a["line_note"],
+            "amount": float(a["amount"]),
+        })
+    return out
+
+
+PA_COLS = ["pay_id", "batch_id", "pay_date", "source", "cm_no", "doc_kind", "doc_ref", "invoice_no", "carried", "carried_from", "line", "line_note", "amount"]
 
 
 def credits_rows(con) -> list[dict]:
@@ -258,6 +314,49 @@ def credits_rows(con) -> list[dict]:
 
 
 CM_COLS = ["cm_no", "cm_date", "customer_id", "reason", "notes", "face", "applied", "unapplied"]
+
+
+def doccollections_rows(con) -> list[dict]:
+    """The other half of the one ledger (Jason 2026-10-23,
+    universality): money taken against work orders, tickets, and
+    sales — payments (+ signed) and credits (− signed), cash-door
+    rows carrying their cash entry id. Together with the collections
+    pack (invoice money, carried mirrors flagged) this is every
+    money-in event exactly once."""
+    out = []
+    try:
+        rows = con.execute(
+            """SELECT dc.*, COALESCE(cu.account_name, '') AS account_name,
+                      cu.customer_id AS cust_code, cm.cm_no AS cm_number
+               FROM doc_collections dc
+               LEFT JOIN customers cu ON cu.id = dc.customer_id
+               LEFT JOIN credit_memos cm ON cm.id = dc.cm_id
+               ORDER BY dc.pay_date, dc.pay_id""").fetchall()
+    except Exception:
+        return out
+    for r in rows:
+        amt = float(r["amount"] or 0)
+        out.append({
+            "pay_id": r["pay_id"],
+            "batch_id": r["batch_id"] or "",
+            "pay_date": str(r["pay_date"])[:10],
+            "month": str(r["pay_date"])[:7],
+            "doc_kind": r["doc_kind"],
+            "doc_ref": engine.doc_num(con, r["doc_kind"], r["doc_id"]) or "",
+            "customer_id": r["cust_code"] or "",
+            "account_name": r["account_name"],
+            "method": r["method"],
+            "kind": r["kind"],
+            "cm_no": r["cm_number"] or "",
+            "ref_no": r["ref_no"] or "",
+            "cash_entry_id": r["cash_entry_id"] or "",
+            "amount": amt,
+            "signed_amount": -amt if r["kind"] == "credit" else amt,
+        })
+    return out
+
+
+DC_COLS = ["pay_id", "batch_id", "pay_date", "month", "doc_kind", "doc_ref", "customer_id", "account_name", "method", "kind", "cm_no", "ref_no", "cash_entry_id", "amount", "signed_amount"]
 
 
 def petty_rows(con) -> list[dict]:
@@ -274,18 +373,22 @@ PACKS = {
     "work_orders": (WO_COLS, wo_rows),
     "customers": (CUST_COLS, customers_rows),
     "collections": (COL_COLS, collections_rows),
+    "doc_collections": (DC_COLS, doccollections_rows),
+    "payment_allocations": (PA_COLS, payalloc_rows),
     "credit_memos": (CM_COLS, credits_rows),
     "petty_cash": (PC_COLS, petty_rows),
 }
 
 PACK_LABELS = [
     ("all", "Everything — all packs"),
-    ("tickets", "Tickets"),
+    ("tickets", "Rental Tickets"),
     ("invoices", "Invoices"),
     ("units", "Units"),
     ("work_orders", "Work orders"),
     ("customers", "Customers"),
     ("collections", "Payments & credits"),
+    ("doc_collections", "Payments — Work Order / Rental Ticket / Sale"),
+    ("payment_allocations", "Payments by line"),
     ("credit_memos", "Credit memos"),
     ("petty_cash", "Petty cash"),
 ]
@@ -301,6 +404,8 @@ PACK_DATES = {
     "work_orders": ("open_date",),
     "customers": (),
     "collections": ("pay_date",),
+    "doc_collections": ("pay_date",),
+    "payment_allocations": ("pay_date",),
     "credit_memos": ("cm_date",),
     "petty_cash": ("txn_date",),
 }

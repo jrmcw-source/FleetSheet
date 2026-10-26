@@ -262,7 +262,7 @@ def do_install():
         for d in pkgdirs:
             cmd += ["--find-links", d]
         cmd += list(extra)
-        cmd += ["segno", "pypdf", "reportlab"]
+        cmd += ["segno", "pypdf", "reportlab", "pillow"]
         return subprocess.run(cmd, capture_output=True, text=True)
 
     r = pip_install()
@@ -276,7 +276,7 @@ def do_install():
 
     # 4. Verify the imports.
     try:
-        import segno, pypdf, reportlab  # noqa: F401
+        import segno, pypdf, reportlab, PIL  # noqa: F401
     except ImportError as e:
         fail("A package did not import correctly: %s" % e)
     log("Components ready.")

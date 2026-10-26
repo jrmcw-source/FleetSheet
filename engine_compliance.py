@@ -5,19 +5,18 @@ from calendar import monthrange
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from pathlib import Path
-import hashlib
-import hmac
-import os
-import secrets
 
 from engine_core import (
     _money,
     _mf,
     _ms,
+    asset_key,
+    asset_code,
     ttl_cached,
     parse_date,
     _parse,
     terms_days,
+    format_phone_number,
     _row_get,
     require_clerk,
     list_crew,
@@ -114,11 +113,14 @@ from engine_core import (
 """FleetSheet engine: certification/calibration flow — compliance packs, per-unit checklists, completions, due/overdue watch."""
 
 __all__ = ['checklist_next_due', 'checklist_status', 'list_packs', 'get_pack', 'assign_pack', 'unit_packs', 'add_custom_requirement', 'update_checklist_item', 'remove_checklist_item', 'record_completion', 'item_history', 'unit_checklist', 'compliance_summary', 'fleet_compliance_watch',
+           'compliance_groups', 'daily_check_units',
            'list_vendors', 'save_vendor', 'delete_vendor', 'set_checklist_performer',
-           'ensure_cert_tables', 'save_cert', 'update_cert', 'delete_cert', 'get_cert',
-           'list_certs', 'fleet_certs', 'cert_status', 'set_cert_superseded',
-           'attach_cert_evidence', 'operative_cert_expiry', 'migrate_legacy_cert_expiry',
-           'CERT_KINDS']
+           'ensure_cert_tables', 'save_cert', 'get_cert',
+           'list_certs', 'fleet_certs', 'cert_status',
+           'set_cert_superseded', 'attach_cert_evidence', 'delete_cert',
+           'update_cert',
+           'operative_cert_expiry', 'migrate_legacy_cert_expiry',
+           'LEGACY_CERT_KIND_LABELS', 'cert_kind_label']
 
 
 def _ensure_vendor_tables(con: sqlite3.Connection) -> None:
@@ -132,6 +134,12 @@ def _ensure_vendor_tables(con: sqlite3.Connection) -> None:
     cols = {r[1] for r in con.execute("PRAGMA table_info(equipment_compliance)")}
     if "performer_id" not in cols:
         con.execute("ALTER TABLE equipment_compliance ADD COLUMN performer_id INTEGER REFERENCES vendors(vendor_id)")
+    # Vendor Contact (Batch 3 #9b): the person to ask for when calling.
+    vcols = {r[1] for r in con.execute("PRAGMA table_info(vendors)")}
+    if vcols and "contact" not in vcols:
+        con.execute("ALTER TABLE vendors ADD COLUMN contact TEXT NOT NULL DEFAULT ''")
+    if vcols and "notes" not in vcols:
+        con.execute("ALTER TABLE vendors ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
     con.commit()
 
 
@@ -143,24 +151,30 @@ def list_vendors(con: sqlite3.Connection) -> list:
 
 def save_vendor(con: sqlite3.Connection, name: str, kind: str = "vendor",
                 phone: str = "", email: str = "", specialties: str = "",
-                notes: str = "", vendor_id: int | None = None) -> int:
+                contact: str = "", notes: str = "",
+                vendor_id: int | None = None) -> int:
     _ensure_vendor_tables(con)
     name = (name or "").strip()
     if not name:
         raise ValueError("Give the vendor a name")
     kind = kind if kind in ("vendor", "crew") else "vendor"
+    # Vendor phone passes through the ONE phone formatter (Batch 3 #9c),
+    # the same path company phones take at save.
     if vendor_id:
         con.execute(
             """UPDATE vendors SET name=?, kind=?, phone=?, email=?,
-               specialties=?, notes=? WHERE vendor_id=?""",
-            (name, kind, phone.strip(), email.strip(), specialties.strip(),
-             notes.strip(), vendor_id))
+               specialties=?, contact=?, notes=? WHERE vendor_id=?""",
+            (name, kind, format_phone_number(phone or ""), email.strip(),
+             specialties.strip(), (contact or "").strip(), notes.strip(),
+             vendor_id))
         con.commit()
         return int(vendor_id)
     cur = con.execute(
-        """INSERT INTO vendors (name, kind, phone, email, specialties, notes)
-           VALUES (?,?,?,?,?,?)""",
-        (name, kind, phone.strip(), email.strip(), specialties.strip(), notes.strip()))
+        """INSERT INTO vendors (name, kind, phone, email, specialties,
+           contact, notes)
+           VALUES (?,?,?,?,?,?,?)""",
+        (name, kind, format_phone_number(phone or ""), email.strip(),
+         specialties.strip(), (contact or "").strip(), notes.strip()))
     con.commit()
     return int(cur.lastrowid)
 
@@ -237,7 +251,7 @@ def checklist_status(row, today=None) -> str:
 def list_packs(con: sqlite3.Connection):
     return con.execute(
         """SELECT p.pack_id, p.name, p.blurb, COUNT(r.req_id) AS n_reqs
-           FROM compliance_packs p LEFT JOIN compliance_requirements r ON r.pack_id = p.pack_id
+           FROM compliance_packs p LEFT JOIN compliance_requirements r ON r.pack_id = p.id
            GROUP BY p.pack_id ORDER BY p.name"""
     ).fetchall()
 def get_pack(con: sqlite3.Connection, pack_id: str):
@@ -246,7 +260,7 @@ def get_pack(con: sqlite3.Connection, pack_id: str):
     if pack:
         reqs = con.execute(
             "SELECT * FROM compliance_requirements WHERE pack_id=? ORDER BY sort_order, name",
-            (pack_id,),
+            (pack["id"],),
         ).fetchall()
     return pack, reqs
 def assign_pack(con: sqlite3.Connection, asset_id: str, pack_id: str) -> int:
@@ -257,10 +271,11 @@ def assign_pack(con: sqlite3.Connection, asset_id: str, pack_id: str) -> int:
     if not con.execute("SELECT 1 FROM assets WHERE asset_id=?", (asset_id,)).fetchone():
         raise ValueError("Unknown unit")
     added = 0
+    akey = asset_key(con, asset_id)
     for r in reqs:
         exists = con.execute(
             "SELECT 1 FROM equipment_compliance WHERE asset_id=? AND req_id=?",
-            (asset_id, r["req_id"]),
+            (akey, r["req_id"]),
         ).fetchone()
         if exists:
             continue
@@ -268,17 +283,19 @@ def assign_pack(con: sqlite3.Connection, asset_id: str, pack_id: str) -> int:
             """INSERT INTO equipment_compliance
                (asset_id, pack_id, req_id, trigger, interval_months, deployed_backstop_months)
                VALUES (?,?,?,?,?,?)""",
-            (asset_id, pack_id, r["req_id"], r["trigger"], r["interval_months"],
+            (akey, pack["id"], r["req_id"], r["trigger"], r["interval_months"],
              r["deployed_backstop_months"]),
         )
         added += 1
     con.commit()
     return added
 def unit_packs(con: sqlite3.Connection, asset_id: str):
-    """Pack ids already assigned to a unit."""
+    """Pack ids (slugs) already assigned to a unit."""
     return [r[0] for r in con.execute(
-        "SELECT DISTINCT pack_id FROM equipment_compliance WHERE asset_id=? AND pack_id IS NOT NULL",
-        (asset_id,))]
+        """SELECT DISTINCT p.pack_id FROM equipment_compliance e
+           JOIN compliance_packs p ON p.id = e.pack_id
+           WHERE e.asset_id=? AND e.pack_id IS NOT NULL""",
+        (asset_key(con, asset_id),))]
 def add_custom_requirement(con: sqlite3.Connection, asset_id: str, name: str, trigger: str,
                            interval_months=None, backstop_months=None, notes: str = "") -> int:
     name = (name or "").strip()
@@ -288,13 +305,12 @@ def add_custom_requirement(con: sqlite3.Connection, asset_id: str, name: str, tr
         raise ValueError("Pick a trigger")
     bv = _pos_or_none(backstop_months)
     if trigger in ("per_job", "manufacturer") and bv is None:
-        raise ValueError("Per-job / manufacturer checks need a deployed backstop (months) — "
-                         "without one the check can never come due")
+        raise ValueError("Per-job / manufacturer checks need a deployed backstop (months)")
     cur = con.execute(
         """INSERT INTO equipment_compliance
            (asset_id, custom_name, trigger, interval_months, deployed_backstop_months, notes)
            VALUES (?,?,?,?,?,?)""",
-        (asset_id, name, trigger, _pos_or_none(interval_months), bv,
+        (asset_key(con, asset_id), name, trigger, _pos_or_none(interval_months), bv,
          notes or ""),
     )
     con.commit()
@@ -311,8 +327,7 @@ def update_checklist_item(con: sqlite3.Connection, eqc_id: int, trigger: str | N
     iv = row["interval_months"] if interval_months is None else _pos_or_none(interval_months)
     bv = row["deployed_backstop_months"] if backstop_months is None else _pos_or_none(backstop_months)
     if trig in ("per_job", "manufacturer") and bv is None and row["req_id"] is None:
-        raise ValueError("Per-job / manufacturer checks need a deployed backstop (months) — "
-                         "without one the check can never come due")
+        raise ValueError("Per-job / manufacturer checks need a deployed backstop (months)")
     cn = row["custom_name"]
     if row["req_id"] is None and custom_name is not None:
         cn = custom_name.strip()
@@ -373,10 +388,10 @@ def unit_checklist(con: sqlite3.Connection, asset_id: str, today=None):
                    WHERE eqc_id=e.eqc_id ORDER BY done_date DESC, event_id DESC LIMIT 1) AS last_result
            FROM equipment_compliance e
            LEFT JOIN compliance_requirements r ON r.req_id = e.req_id
-           LEFT JOIN compliance_packs p ON p.pack_id = e.pack_id
+           LEFT JOIN compliance_packs p ON p.id = e.pack_id
            LEFT JOIN vendors v ON v.vendor_id = e.performer_id
            WHERE e.asset_id=? ORDER BY e.eqc_id""",
-        (asset_id,),
+        (asset_key(con, asset_id),),
     ).fetchall()
     out = []
     for r in rows:
@@ -396,11 +411,16 @@ def compliance_summary(con: sqlite3.Connection, asset_id: str, today=None) -> di
 @ttl_cached()
 def fleet_compliance_watch(con: sqlite3.Connection, today=None):
     """Units with overdue/due checklist items — dashboard + reports feed.
-    Single query for all assets (was N+1: one unit_checklist per asset)."""
+    Single query for all assets (was N+1: one unit_checklist per asset).
+
+    Batch 3 #18: per-shift rows are NOT part of the dated watch. A check
+    due every morning is a routine, not a debt — it never appears here,
+    in the ticker, or in any watch count. It surfaces only as the Today
+    aggregate from daily_check_units()."""
     today = today or date.today()
     _ensure_vendor_tables(con)
     rows = con.execute(
-        """SELECT e.*,
+        """SELECT e.*, a.asset_id AS asset_code,
                   r.name AS req_name, r.criterion, r.evidence AS req_evidence,
                   r.source, r.basis, r.note AS req_note,
                   p.name AS pack_name,
@@ -410,14 +430,16 @@ def fleet_compliance_watch(con: sqlite3.Connection, today=None):
                   (SELECT result FROM compliance_events
                    WHERE eqc_id=e.eqc_id ORDER BY done_date DESC, event_id DESC LIMIT 1) AS last_result
            FROM equipment_compliance e
-           JOIN assets a ON a.asset_id = e.asset_id AND a.active = 1
+           JOIN assets a ON a.id = e.asset_id AND a.active = 1
            LEFT JOIN compliance_requirements r ON r.req_id = e.req_id
-           LEFT JOIN compliance_packs p ON p.pack_id = e.pack_id
+           LEFT JOIN compliance_packs p ON p.id = e.pack_id
            LEFT JOIN vendors v ON v.vendor_id = e.performer_id
            ORDER BY a.unit_no, e.eqc_id""",
     ).fetchall()
     out = []
     for r in rows:
+        if r["trigger"] == "per_shift":
+            continue  # dated watch only — see docstring (Batch 3 #18)
         d = dict(r)
         d["display_name"] = r["custom_name"] or r["req_name"] or "(unnamed)"
         d["next_due_live"] = checklist_next_due(r["trigger"], r["interval_months"],
@@ -425,9 +447,9 @@ def fleet_compliance_watch(con: sqlite3.Connection, today=None):
         d["status"] = checklist_status(r, today)
         if d["status"] in ("overdue", "due"):
             out.append({
-                "asset_id": r["asset_id"], "unit_no": r["unit_no"],
+                "asset_id": r["asset_code"], "unit_no": r["unit_no"],
                 "description": r["description"], "item": d["display_name"],
-                "eqc_id": r["eqc_id"],
+                "eqc_id": r["eqc_id"], "trigger": r["trigger"],
                 "status": d["status"],
                 "next_due": d["next_due_live"].isoformat() if d["next_due_live"] else "",
                 "last_done": r["last_done"] or "",
@@ -438,6 +460,62 @@ def fleet_compliance_watch(con: sqlite3.Connection, today=None):
     return out
 
 
+def compliance_groups(con: sqlite3.Connection, today=None):
+    """The dated watch GROUPED by unit (Batch 3 #18 — grouping is the
+    mandatory shape everywhere the watch surfaces as attention).
+
+    One group per unit: worst status first (any overdue outranks due),
+    then earliest next-due. Each group carries its items sorted
+    most-urgent first, the due/overdue split, and the most urgent item
+    as ``first``. Per-shift rows never appear (they are not in the
+    watch)."""
+    watch = fleet_compliance_watch(con, today)
+    by_unit = {}
+    for w in watch:
+        by_unit.setdefault(w["asset_id"], []).append(w)
+    groups = []
+    for aid, items in by_unit.items():
+        items.sort(key=lambda w: (0 if w["status"] == "overdue" else 1,
+                                  w["next_due"] or "9999"))
+        n_over = sum(1 for w in items if w["status"] == "overdue")
+        groups.append({
+            "asset_id": aid,
+            "unit_no": items[0]["unit_no"],
+            "items": items,
+            "total": len(items),
+            "n_due": len(items) - n_over,
+            "n_overdue": n_over,
+            "status": "overdue" if n_over else "due",
+            "first": items[0],
+        })
+    groups.sort(key=lambda g: (0 if g["status"] == "overdue" else 1,
+                               g["first"]["next_due"] or "9999",
+                               g["unit_no"]))
+    return groups
+
+
+def daily_check_units(con: sqlite3.Connection, today=None) -> int:
+    """How many units have a per-shift check outstanding today
+    (Batch 3 #18): the per-shift aggregate for Today — one number,
+    never per-row watch entries."""
+    today = today or date.today()
+    _ensure_vendor_tables(con)
+    units = set()
+    for r in con.execute(
+            """SELECT e.* FROM equipment_compliance e
+               JOIN assets a ON a.id = e.asset_id AND a.active = 1
+               WHERE e.trigger = 'per_shift'"""):
+        d = dict(r)
+        d["last_result"] = con.execute(
+            "SELECT result FROM compliance_events WHERE eqc_id=? "
+            "ORDER BY done_date DESC, event_id DESC LIMIT 1",
+            (r["eqc_id"],)).fetchone()
+        d["last_result"] = d["last_result"][0] if d["last_result"] else None
+        if checklist_status(d, today) == "due":
+            units.add(r["asset_id"])
+    return len(units)
+
+
 # ---------------------------------------------------------------------------
 # Cert identity (Q5, 2026-09-27): every certification, calibration, and
 # function test is a first-class record that NAMES ITS ASSET. No more
@@ -446,12 +524,22 @@ def fleet_compliance_watch(con: sqlite3.Connection, today=None):
 # so an auditor can always see which asset a document certifies.
 # ---------------------------------------------------------------------------
 
-CERT_KINDS = {
+# Cert kinds live in the lookups table now (Issue 4, 2026-10-15) so the
+# global Other/-Add- dropdown rule applies. Stored values are display
+# strings ("Function test"); this map only translates legacy slug values
+# ("function_test") still sitting in older databases.
+LEGACY_CERT_KIND_LABELS = {
     "certification": "Certification",
     "calibration": "Calibration",
     "function_test": "Function test",
     "other": "Other",
 }
+
+
+def cert_kind_label(kind: str) -> str:
+    """Display label for a stored cert kind: legacy slugs map over,
+    anything else shows as-is (typed-over Other values included)."""
+    return LEGACY_CERT_KIND_LABELS.get((kind or "").strip(), (kind or "").strip())
 
 _MIGRATED_TITLE = "Certificate (migrated from unit record)"
 
@@ -464,8 +552,14 @@ def ensure_cert_tables(con: sqlite3.Connection) -> None:
 
 
 def _clean_cert_kind(kind: str) -> str:
+    # Global dropdown rule (Issue 4): any non-empty string is a valid kind
+    # — picking Other and typing over it saves on that record. Empty still
+    # defaults to "Certification". Nothing is silently remapped. The -Add-
+    # sentinel is never a value.
     kind = (kind or "").strip()
-    return kind if kind in CERT_KINDS else "certification"
+    if kind == "__add__":
+        kind = ""
+    return kind if kind else "Certification"
 
 
 def _clean_iso(d):
@@ -494,7 +588,7 @@ def save_cert(con: sqlite3.Connection, asset_id: str, kind: str, title: str,
            (asset_id, kind, title, cert_number, issuer, issued_date,
             expiry_date, notes, clerk)
            VALUES (?,?,?,?,?,?,?,?,?)""",
-        (asset_id, _clean_cert_kind(kind), title,
+        (asset_key(con, asset_id), _clean_cert_kind(kind), title,
          (cert_number or "").strip(), (issuer or "").strip(),
          _clean_iso(issued_date), _clean_iso(expiry_date),
          notes or "", clerk or ""),
@@ -503,10 +597,67 @@ def save_cert(con: sqlite3.Connection, asset_id: str, kind: str, title: str,
     return cur.lastrowid
 
 
-def update_cert(con: sqlite3.Connection, cert_id: int, kind: str | None = None,
-                title: str | None = None, cert_number: str | None = None,
-                issuer: str | None = None, issued_date=None, expiry_date=None,
-                notes: str | None = None) -> None:
+def get_cert(con: sqlite3.Connection, cert_id: int):
+    ensure_cert_tables(con)
+    r = con.execute(
+        """SELECT c.*, a.unit_no, a.description AS asset_desc,
+                  d.title AS doc_title, d.filename AS doc_filename
+           FROM asset_certs c
+           JOIN assets a ON a.id = c.asset_id
+           LEFT JOIN unit_docs d ON d.doc_id = c.evidence_doc_id
+           WHERE c.cert_id=?""",
+        (cert_id,)).fetchone()
+    return dict(r) if r else None
+
+
+def set_cert_superseded(con: sqlite3.Connection, cert_id: int,
+                        superseded: bool = True) -> None:
+    """Mark an old cert superseded when it is renewed — history
+    stays, but it no longer drives the operative expiry."""
+    ensure_cert_tables(con)
+    if not con.execute("SELECT 1 FROM asset_certs WHERE cert_id=?",
+                       (cert_id,)).fetchone():
+        raise ValueError("Unknown certificate")
+    con.execute("UPDATE asset_certs SET superseded=? WHERE cert_id=?",
+                (1 if superseded else 0, cert_id))
+    con.commit()
+
+
+def attach_cert_evidence(con: sqlite3.Connection, cert_id: int,
+                         doc_id: int) -> None:
+    """Tie a data-book document to the cert record. The document
+    must belong to the SAME asset — the evidence always identifies
+    the asset it covers."""
+    ensure_cert_tables(con)
+    cert = con.execute("SELECT asset_id FROM asset_certs WHERE cert_id=?",
+                       (cert_id,)).fetchone()
+    if not cert:
+        raise ValueError("Unknown certificate")
+    doc = con.execute("SELECT asset_id FROM unit_docs WHERE doc_id=?",
+                      (doc_id,)).fetchone()
+    if not doc:
+        raise ValueError("Unknown document")
+    if doc["asset_id"] != cert["asset_id"]:
+        raise ValueError("That document belongs to a different unit")
+    con.execute("UPDATE asset_certs SET evidence_doc_id=? WHERE cert_id=?",
+                (doc_id, cert_id))
+    con.commit()
+
+
+def delete_cert(con: sqlite3.Connection, cert_id: int) -> None:
+    """Remove the record. Attached evidence stays in the unit's
+    data book — paperwork is never destroyed by deleting a record."""
+    ensure_cert_tables(con)
+    con.execute("DELETE FROM asset_certs WHERE cert_id=?", (cert_id,))
+    con.commit()
+
+
+def update_cert(con: sqlite3.Connection, cert_id: int,
+                kind: str | None = None, title: str | None = None,
+                cert_number: str | None = None,
+                issuer: str | None = None, issued_date=None,
+                expiry_date=None, notes: str | None = None) -> None:
+    """Edit a cert record in place; fields passed as None stand."""
     ensure_cert_tables(con)
     row = con.execute("SELECT * FROM asset_certs WHERE cert_id=?",
                       (cert_id,)).fetchone()
@@ -530,27 +681,6 @@ def update_cert(con: sqlite3.Connection, cert_id: int, kind: str | None = None,
     con.commit()
 
 
-def delete_cert(con: sqlite3.Connection, cert_id: int) -> None:
-    """Remove the record. Attached evidence stays in the unit's data book —
-    paperwork is never destroyed by deleting a record."""
-    ensure_cert_tables(con)
-    con.execute("DELETE FROM asset_certs WHERE cert_id=?", (cert_id,))
-    con.commit()
-
-
-def get_cert(con: sqlite3.Connection, cert_id: int):
-    ensure_cert_tables(con)
-    r = con.execute(
-        """SELECT c.*, a.unit_no, a.description AS asset_desc,
-                  d.title AS doc_title, d.filename AS doc_filename
-           FROM asset_certs c
-           JOIN assets a ON a.asset_id = c.asset_id
-           LEFT JOIN unit_docs d ON d.doc_id = c.evidence_doc_id
-           WHERE c.cert_id=?""",
-        (cert_id,)).fetchone()
-    return dict(r) if r else None
-
-
 def list_certs(con: sqlite3.Connection, asset_id: str, today=None):
     """Every cert record for a unit, with evidence doc and live status."""
     ensure_cert_tables(con)
@@ -558,15 +688,15 @@ def list_certs(con: sqlite3.Connection, asset_id: str, today=None):
         """SELECT c.*, a.unit_no,
                   d.title AS doc_title, d.filename AS doc_filename
            FROM asset_certs c
-           JOIN assets a ON a.asset_id = c.asset_id
+           JOIN assets a ON a.id = c.asset_id
            LEFT JOIN unit_docs d ON d.doc_id = c.evidence_doc_id
            WHERE c.asset_id=? ORDER BY c.superseded, c.expiry_date, c.cert_id""",
-        (asset_id,)).fetchall()
+        (asset_key(con, asset_id),)).fetchall()
     out = []
     for r in rows:
         d = dict(r)
         d["status"] = cert_status(d, today)
-        d["kind_label"] = CERT_KINDS.get(d["kind"], d["kind"])
+        d["kind_label"] = cert_kind_label(d["kind"])
         out.append(d)
     return out
 
@@ -579,14 +709,14 @@ def fleet_certs(con: sqlite3.Connection, today=None):
         """SELECT c.*, a.unit_no, a.description AS asset_desc,
                   d.title AS doc_title
            FROM asset_certs c
-           JOIN assets a ON a.asset_id = c.asset_id
+           JOIN assets a ON a.id = c.asset_id
            LEFT JOIN unit_docs d ON d.doc_id = c.evidence_doc_id
            ORDER BY a.unit_no, c.superseded, c.expiry_date""").fetchall()
     out = []
     for r in rows:
         d = dict(r)
         d["status"] = cert_status(d, today)
-        d["kind_label"] = CERT_KINDS.get(d["kind"], d["kind"])
+        d["kind_label"] = cert_kind_label(d["kind"])
         out.append(d)
     return out
 
@@ -605,39 +735,6 @@ def cert_status(cert, today=None) -> str:
     return "expired" if exp < today else "valid"
 
 
-def set_cert_superseded(con: sqlite3.Connection, cert_id: int,
-                        superseded: bool = True) -> None:
-    """Mark an old cert superseded when it is renewed — history stays, but it
-    no longer drives the operative expiry."""
-    ensure_cert_tables(con)
-    if not con.execute("SELECT 1 FROM asset_certs WHERE cert_id=?",
-                       (cert_id,)).fetchone():
-        raise ValueError("Unknown certificate")
-    con.execute("UPDATE asset_certs SET superseded=? WHERE cert_id=?",
-                (1 if superseded else 0, cert_id))
-    con.commit()
-
-
-def attach_cert_evidence(con: sqlite3.Connection, cert_id: int,
-                         doc_id: int) -> None:
-    """Tie a data-book document to the cert record. The document must belong
-    to the SAME asset — the evidence always identifies the asset it covers."""
-    ensure_cert_tables(con)
-    cert = con.execute("SELECT asset_id FROM asset_certs WHERE cert_id=?",
-                       (cert_id,)).fetchone()
-    if not cert:
-        raise ValueError("Unknown certificate")
-    doc = con.execute("SELECT asset_id FROM unit_docs WHERE doc_id=?",
-                      (doc_id,)).fetchone()
-    if not doc:
-        raise ValueError("Unknown document")
-    if doc["asset_id"] != cert["asset_id"]:
-        raise ValueError("That document belongs to a different unit")
-    con.execute("UPDATE asset_certs SET evidence_doc_id=? WHERE cert_id=?",
-                (doc_id, cert_id))
-    con.commit()
-
-
 def operative_cert_expiry(con: sqlite3.Connection, asset_id: str):
     """The expiry that drives fit-checks and alerts: the earliest expiry
     among the asset's live (non-superseded) cert records. Falls back to the
@@ -648,7 +745,7 @@ def operative_cert_expiry(con: sqlite3.Connection, asset_id: str):
         """SELECT MIN(expiry_date) FROM asset_certs
            WHERE asset_id=? AND superseded=0
              AND expiry_date IS NOT NULL AND expiry_date != ''""",
-        (asset_id,)).fetchone()
+        (asset_key(con, asset_id),)).fetchone()
     if row and row[0]:
         return str(row[0])[:10]
     leg = con.execute("SELECT cert_expire FROM assets WHERE asset_id=?",
@@ -664,23 +761,34 @@ def migrate_legacy_cert_expiry(con: sqlite3.Connection) -> int:
     rerun never duplicates."""
     ensure_cert_tables(con)
     moved = 0
+    # Build 'v': on a re-keyed book the cert rows reference the asset's
+    # engine key; on a pre-'v' book (this runs before the re-key inside
+    # migrate_legacy_schema) they reference its code. The assets.asset_id
+    # display column is the bridge in both shapes.
+    _rekeyed = "id" in [r[1] for r in con.execute("PRAGMA table_info(assets)")]
     for a in con.execute(
             """SELECT asset_id, cert_expire FROM assets
                WHERE cert_expire IS NOT NULL AND TRIM(cert_expire) != ''"""):
         exp = str(a["cert_expire"])[:10]
+        akey = a["asset_id"]
+        if _rekeyed:
+            _r = con.execute("SELECT id FROM assets WHERE asset_id=?",
+                             (a["asset_id"],)).fetchone()
+            if not _r:
+                continue
+            akey = _r[0]
         exists = con.execute(
             """SELECT 1 FROM asset_certs
                WHERE asset_id=? AND title=? AND COALESCE(expiry_date,'')=?""",
-            (a["asset_id"], _MIGRATED_TITLE, exp)).fetchone()
+            (akey, _MIGRATED_TITLE, exp)).fetchone()
         if exists:
             continue
         con.execute(
             """INSERT INTO asset_certs
                (asset_id, kind, title, expiry_date, notes)
                VALUES (?,?,?,?,?)""",
-            (a["asset_id"], "certification", _MIGRATED_TITLE, exp,
-             "Migrated from the unit record's bare expiry date. "
-             "Attach the paperwork and renew as a proper record."),
+            (akey, "certification", _MIGRATED_TITLE, exp,
+             "Migrated from the unit record's bare expiry date."),
         )
         moved += 1
     con.commit()

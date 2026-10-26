@@ -1,43 +1,68 @@
-<!-- FleetSheet is an independent project by its author, Jason
-     McWhirter. There is no LLC or other business entity behind it. -->
+FleetSheet License
 
-FleetSheet License -- free to use, no redistribution
+Copyright (c) 2026 FleetSheet
 
-Copyright (c) 2026 Jason McWhirter. All rights reserved.
+FleetSheet is free to use. This license governs your use of the FleetSheet
+software and its source code (the "Software"). The Software is provided by
+FleetSheet ("Licensor"). FleetSheet is not a company, LLC, or other business
+entity; it is the name under which the author distributes the Software.
+FleetSheet is not open-source software.
 
-WHAT YOU MAY DO
-You may download FleetSheet, free of charge, from the author's official
-distribution points (this GitHub repository and its Releases), install
-it, and use it -- including in your business -- at no cost.
+1. FREE USE. You may use the Software free of charge for your own business
+   or personal use.
 
-WHAT YOU MAY NOT DO
-FleetSheet is NOT open-source software, and this license grants no
-open-source rights. The source code is publicly viewable so anyone can
-see what the software does; viewing is not a grant of rights. You may
-NOT:
-- redistribute FleetSheet or any part of it: no re-uploading,
-  mirroring, republishing, bundling with other products, or otherwise
-  distributing copies, whether modified or unmodified;
-- sell, rent, lease, or sublicense FleetSheet or any part of it;
-- distribute any version of FleetSheet that you have modified.
-All rights not expressly granted in this license are reserved by the
-author. (GitHub's Terms of Service allow viewing and forking a public
-repository within GitHub itself; a fork grants no right to distribute
-FleetSheet anywhere else.)
+2. SOURCE-AVAILABLE TO READ. You may read the Software's source code. The
+   source is made available so you can inspect it and understand what the
+   Software does. Reading the source grants no other right.
 
-THIRD-PARTY COMPONENTS
-FleetSheet bundles third-party components that remain under their own
-licenses -- WinSparkle (MIT License; see licenses/) and the Inter font
-family (SIL Open Font License; see fonts/). This license applies to
-FleetSheet itself, not to those components.
+3. NO REDISTRIBUTION. You may not copy, distribute, publish, sublicense,
+   share, or otherwise redistribute the Software or any substantial portion
+   of it, in original or modified form, by any means.
 
-NO WARRANTY -- USE AT YOUR OWN RISK
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. THE AUTHOR
-PROVIDES NO SUPPORT FOR THIS SOFTWARE. See EULA.md / EULA.txt for the
-full terms that govern use.
+4. NO MODIFYING FOR DISTRIBUTION. You may not modify the Software for
+   distribution. You may not distribute any modified version of the
+   Software, in whole or in part.
+
+5. NO MONETIZATION. You may not sell, rent, lease, charge for, or
+   otherwise monetize the Software itself or any part of it. You may not
+   charge others for access to the Software. Nothing in this section limits
+   your use of the Software to run your own business.
+
+6. AS-IS, NO WARRANTY. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY
+   OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+   WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND
+   NONINFRINGEMENT. THE LICENSOR DOES NOT WARRANT THAT THE SOFTWARE WILL
+   BE ERROR-FREE, UNINTERRUPTED, SECURE, OR FREE OF DEFECTS. YOU ASSUME
+   ALL RISK FOR YOUR USE OF THE SOFTWARE.
+
+7. NO SUPPORT. The Licensor provides no support for the Software. There
+   is no help desk, no support contact, and no obligation to fix bugs,
+   answer questions, or assist with installation, configuration, or use.
+
+8. NO OBLIGATION TO UPDATE. The Licensor has no obligation to provide
+   updates, patches, bug fixes, or new versions. Any updates provided
+   are voluntary and subject to this license.
+
+9. NO LIABILITY. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN
+   NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY INDIRECT, INCIDENTAL,
+   SPECIAL, CONSEQUENTIAL, OR PUNITIVE DAMAGES ARISING OUT OF OR RELATED
+   TO YOUR USE OF OR INABILITY TO USE THE SOFTWARE. THE LICENSOR'S TOTAL
+   LIABILITY UNDER THIS LICENSE SHALL NOT EXCEED THE AMOUNTS YOU PAID
+   FOR THE SOFTWARE IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM.
+   BECAUSE THE SOFTWARE IS PROVIDED FREE OF CHARGE, THIS AMOUNT IS
+   $0.00 (ZERO DOLLARS).
+
+10. TERMINATION. This license is effective until terminated. Your rights
+    terminate automatically if you breach any term. Upon termination you
+    must cease all use and destroy all copies.
+
+11. GOVERNING LAW. This license is governed by the laws of the State of
+    Louisiana, without regard to conflict-of-law principles. Any dispute
+    shall be brought exclusively in the state or federal courts located
+    in Lafayette Parish, Louisiana, and you consent to personal
+    jurisdiction there.
+
+12. ENTIRE AGREEMENT. This license, together with the End-User License
+    Agreement (EULA), constitutes the entire agreement regarding the
+    Software. If any provision is held unenforceable, the remaining
+    provisions continue in full effect.

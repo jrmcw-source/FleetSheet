@@ -17,6 +17,7 @@ from engine_core import (
     parse_date,
     _parse,
     terms_days,
+    format_phone_number,
     _row_get,
     require_clerk,
     list_crew,
@@ -24,12 +25,46 @@ from engine_core import (
     drop_crew,
     _reserve_counter,
     _next_doc,
+    peek_next_doc,
+    validate_new_doc_no,
+    key_of,
+    num_of,
+    doc_key,
+    doc_num,
+    DOC_TABLES,
+    cust_key,
+    cust_code,
+    asset_key,
+    asset_code,
+    site_key,
+    site_code,
+    loc_key,
+    loc_code,
+    _next_pay_key,
+    pay_key_of,
+    pay_id_of,
+    peek_next_invoice_no,
+    peek_next_ticket_no,
     _set_quote_link,
     lookups,
+    add_lookup,
+    CURATED_LOOKUP_KINDS,
+    deleted_lookups,
+    clear_deleted_lookup,
+    delete_lookup,
+    clean_line_type,
+    clean_line_uom,
+    uom_to_rate_type,
     period_bounds,
     _ensure_device_tables,
     get_option,
     set_option,
+    MODULE_NAMES,
+    COND_NOT_RECORDED,
+    module_on,
+    set_module,
+    module_seen,
+    stamp_module_seen,
     _pbkdf2,
     pin_is_set,
     get_pin_secret,
@@ -120,6 +155,10 @@ from engine_assets import (
     fit_reason,
     possession_rules,
     ticket_money,
+    ticket_lines,
+    save_ticket_lines,
+    sync_flat_charges_to_lines,
+    FREIGHT_CATS,
     asset_status,
     next_ticket_id,
     create_ticket,
@@ -131,6 +170,8 @@ from engine_assets import (
     read_ticket_photo,
     create_sale,
     list_sales,
+    next_sale_id,
+    peek_next_sale_id,
     set_status,
     ready_work_orders,
     next_asset_id,
@@ -144,6 +185,7 @@ from engine_assets import (
     next_wo_id,
     wo_cost,
     save_wo,
+    wo_lines,
     report_work_orders,
     HAUL_BY,
     DELIVER_TO,
@@ -153,22 +195,44 @@ from engine_assets import (
     clean_deliver_to,
     haul_consequence,
     haul_from,
+    resolve_haul_text,
+    transport_display,
     RATE_UNITS,
     clean_rate_unit,
     ticket_hours,
     day_equivalent,
+    ASSET_STATUSES,
+    clean_asset_status,
+    rentable_or_raise,
 )
 
 from engine_accounting import (
     next_invoice_id,
+    PO_STATUSES,
     create_invoice,
     invoice_has_lines,
     _next_pay_id,
     _refresh_invoice_status,
     record_payment,
+    record_doc_payment,
+    quote_money_block,
+    apply_doc_credit,
+    doc_line_states,
+    doc_has_line_allocations,
+    set_doc_line_note,
+    doc_total,
+    doc_settled,
+    doc_balance,
+    DOC_LABELS,
+    next_batch_id,
+    invoice_line_states,
+    invoice_has_line_allocations,
+    list_payment_allocations,
+    set_invoice_line_note,
     next_cm_id,
     credit_applied,
     credit_open,
+    credit_lines,
     _apply_credit_rows,
     issue_credit_memo,
     apply_open_credit,
@@ -181,6 +245,10 @@ from engine_accounting import (
     save_quote,
     set_quote_status,
     issue_change_order,
+    save_change_order,
+    change_order_assoc,
+    associated_change_orders,
+    PAYABLE_KINDS,
     quote_totals,
     quote_pack,
     convert_quote,
@@ -189,6 +257,9 @@ from engine_accounting import (
     petty_book,
     set_pc_float,
     record_petty,
+    CASH_ENTRY_METHODS,
+    record_cash_entry,
+    list_cash_entries,
     invoice_totals,
     invoice_totals_batch,
     invoice_balances_batch,
@@ -196,7 +267,6 @@ from engine_accounting import (
     invoice_locked,
     set_invoice_po,
     upsert_po_record,
-    ack_po_record,
     po_record,
     backfill_po_records,
     po_check,
@@ -205,6 +275,8 @@ from engine_accounting import (
     get_invoice_doc,
     read_invoice_doc,
     delete_invoice_doc,
+    list_invoice_docs,
+    set_invoice_doc_print,
     invoice_job_box,
     INV_DOC_KINDS,
     add_invoice_line,
@@ -235,23 +307,26 @@ from engine_compliance import (
     unit_checklist,
     compliance_summary,
     fleet_compliance_watch,
+    compliance_groups,
+    daily_check_units,
     list_vendors,
     save_vendor,
     delete_vendor,
     set_checklist_performer,
     ensure_cert_tables,
     save_cert,
-    update_cert,
-    delete_cert,
     get_cert,
     list_certs,
     fleet_certs,
     cert_status,
     set_cert_superseded,
     attach_cert_evidence,
+    delete_cert,
+    update_cert,
     operative_cert_expiry,
     migrate_legacy_cert_expiry,
-    CERT_KINDS,
+    LEGACY_CERT_KIND_LABELS,
+    cert_kind_label,
 )
 
 from engine_alerts import (
@@ -266,6 +341,8 @@ from engine_alerts import (
     set_ticker_cats,
     TICKER_CATS,
     CAT_LABELS,
+    list_snoozed,
+    unack_alert,
 )
 
 from engine_today import (
@@ -274,6 +351,7 @@ from engine_today import (
     top_of_day,
     today_must_do,
     today_can_do,
+    module_nudge,
     today_later,
     today_tomorrow,
     today_everything,
@@ -286,6 +364,7 @@ from engine_today import (
     list_stickies,
     update_sticky,
     done_sticky,
+    snooze_sticky,
     add_done_manual,
     remove_done_manual,
     done_today,
@@ -297,6 +376,9 @@ from engine_today import (
 )
 
 from engine_reports import (
+    BUCKETS,
+    BUCKET_LABELS,
+    FLOW_SECTIONS,
     ar_aging,
     fleet_utilization,
     weeks_flow,
@@ -307,6 +389,15 @@ from engine_reports import (
     get_custom_report,
     save_custom_report,
     delete_custom_report,
+    MIXED_KINDS,
+    MIXED_KIND_LABELS,
+    MIXED_COLUMNS,
+    mixed_range,
+    mixed_rows,
+    list_mixed_presets,
+    get_mixed_preset,
+    save_mixed_preset,
+    delete_mixed_preset,
 )
 from engine_health import (
     SEVERITIES,
@@ -364,15 +455,27 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
 def init_db(con: sqlite3.Connection | None = None) -> sqlite3.Connection:
     own = con is None
     con = con or connect()
-    con.executescript(SCHEMA.read_text())
-    con.executescript(SEED_PACKS.read_text())
+    try:
+        con.executescript(SCHEMA.read_text())
+    except sqlite3.OperationalError:
+        # A pre-'v' book: its tables predate the surrogate-key columns
+        # the schema's indexes name, so the index statements cannot
+        # run yet. Migrate first (the re-key at the end of the ledger
+        # creates the indexes against the rebuilt tables), then apply
+        # the schema again — every statement is IF NOT EXISTS.
+        migrate_legacy_schema(con)
+        con.executescript(SCHEMA.read_text())
     if con.execute("SELECT COUNT(*) FROM company").fetchone()[0] == 0:
         con.execute(
             """INSERT INTO company (id, name, dba, address, phone, billing_email)
-               VALUES (1, 'YOUR COMPANY LLC', 'Your yard', '', '', '')"""
+               VALUES (1, 'YOUR COMPANY LLC', NULL, '', '', '')"""
         )
     seed_lookups(con)
     migrate_legacy_schema(con)
+    # Pack seeds run AFTER the migration (build 'v'): the requirement
+    # rows resolve their pack's engine key from the pack's slug, which
+    # only exists once the re-key has run on a pre-'v' book.
+    con.executescript(SEED_PACKS.read_text())
     con.commit()
     return con
 def seed_lookups(con: sqlite3.Connection) -> None:
@@ -382,32 +485,85 @@ def seed_lookups(con: sqlite3.Connection) -> None:
         "rate_type": ["Day", "Week", "Hour", "Special", "Monthly", "Standby", "Yard"],
         "category": ["Pump", "Generator", "Tank", "Light Tower", "Compressor", "Pressure Control", "Flowback", "Vehicle / Trailer", "Living Quarters", "Lifting Gear", "Test Equipment", "Shop Tools", "Other"],
         "yard": ["Lafayette Yard", "New Iberia Yard", "Field / Customer", "Vendor / Subrental", "In Transit"],
-        "terms": ["Due on Receipt", "Net 10", "Net 15", "Net 30", "Net 45", "Net 60"],
-        "pay_method": ["ACH", "Check", "Wire", "Card", "Cash", "Petty cash"],
+        "terms": ['Due on Receipt', 'Net 7', 'Net 10', 'Net 15', 'Net 21', 'Net 30', 'Net 45', 'Net 60', 'Net 90', '1/10 Net 30', '2/10 Net 30', 'Cash in Advance', 'Payment in Advance', 'COD', 'Cash with Order', 'Cash before Shipment', 'Cash Next Delivery', 'End of Month (EOM)', 'Net 30 EOM', '15 MFI', '50% Upfront'],
+        "pay_method": ["ACH", "Check", "Wire", "Card", "Cash", "Venmo", "Bitcoin", "Traveler's Check", "Other"],
+        # Unit designations (Batch 3, Oct 23): the trade's three piles —
+        # held to rent, held for sale, own-use gear we track. The
+        # operator can add their own term or write over, because it's
+        # theirs (same list-plus-custom pattern). NOT a curated kind:
+        # no tombstone machinery — fresh DBs seed these; existing DBs
+        # gain any missing preset on the ordinary seed pass.
+        "designation": ["Fleet", "Stock", "Plant"],
         "condition": ["Excellent", "Good", "Fair", "Poor", "Damaged", "Available", "Repair — minor", "Repair — major", "Unusable"],
         "regime": ["USCG", "DNV", "ABS", "BV", "Lloyd's", "API / OEM only", "BSEE + USCG", "None / Onshore"],
         "flag_state": ["USA", "Panama", "Liberia", "Marshall Islands", "Bahamas", "Norway", "UK", "Mexico"],
         "waters": ["Land", "Inland Waters", "State Waters", "Offshore", "International Waters"],
         "wo_type": ["PM / service", "Repair — minor", "Repair — major", "Inspection / cert", "Warranty", "On-job repair", "Other"],
         "wo_status": ["Open", "In progress", "Complete", "Void"],
-        "inv_uom": ["Each", "Hours", "Days", "Weeks", "Months", "Miles", "Loads", "Feet", "Gallons", "Lot"],
+        "inv_uom": ['Each', 'Hours', 'Days', 'Weeks', 'Months', 'Miles', 'Loads', 'Feet', 'Gallons', 'Lot', 'Minutes', 'Years', 'Pieces', 'Pairs', 'Sets', 'Dozen', 'Cases', 'Packages', 'Boxes', 'Pallets', 'Jobs', 'Trips', 'Calls', 'Deliveries', 'Pickups', 'Visits', 'Flat Fee', 'Ounces', 'Pounds', 'Hundredweight', 'Tons', 'Fluid Ounces', 'Cups', 'Pints', 'Quarts', 'Barrels', 'Cubic Inches', 'Cubic Feet', 'Cubic Yards', 'Inches', 'Yards', 'Square Inches', 'Square Feet', 'Square Yards', 'Acres', 'Square Miles', 'Bags', 'Sacks', 'Rolls', 'Sheets', 'Kits', 'Cans', 'Bottles', 'Crates', 'Cartons', 'Bundles', 'Truckloads'],
+        "inv_item": ['Labor', 'Parts', 'Service', 'Equipment Rental', 'Equipment Sale', 'Materials', 'Supplies', 'Shop Supplies', 'Consumables', 'Delivery', 'Pickup', 'Freight', 'Hauling', 'Transportation', 'Mileage', 'Travel', 'Per Diem', 'Service Call', 'Setup', 'Installation', 'Inspection', 'Testing', 'Certification', 'Repair', 'Maintenance', 'Preventive Maintenance', 'Cleaning', 'Fuel', 'Fuel Surcharge', 'Damage Waiver', 'Environmental Fee', 'Disposal', 'Storage', 'Standby', 'Operator', 'Mobilization', 'Demobilization', 'Loading', 'Unloading', 'Waiting Time', 'Late Return', 'Damage Repair', 'Replacement', 'Subcontractor', 'Permit Fee', 'Administrative Fee', 'Other'],
         "inv_cat": ["Rental", "Labor", "Item", "Mileage", "Freight", "Fuel", "Consumable", "Mobilization", "Demobilization", "Other"],
+        # Cert kinds (Issue 4, 2026-10-15): moved from hardcoded CERT_KINDS
+        # so the global Other/-Add- dropdown rule applies to them too.
+        "cert_kind": ["Certification", "Calibration", "Function test", "Other"],
+        # Compliance document types (laptop-pass fix round, 2026-10-20):
+        # the master list behind the Upload Certificate picker on the
+        # Compliance page — curated in Setup -> Billing like the other
+        # Spec 7 lists (enabled set + add/delete/restore, tombstones).
+        "comp_doc": ['Load Test', 'Proof Load Test', 'Load Chart', 'NDT',
+                     'Visual Inspection', 'Ultrasonic/Sonic Testing',
+                     'Magnetic Particle Inspection', 'Radiographic Testing',
+                     'Liquid Penetrant Testing', 'Eddy Current Inspection',
+                     'Positive Material Identification', 'Hydrostatic Test',
+                     'Pressure Test', 'Relief Valve Test', 'Hardness Test',
+                     'Calibration Certificate', 'Certificate of Conformance',
+                     'Mill Test Report', 'Manufacturer Data Book',
+                     'Inspection Report', 'Third-Party Inspection', 'DNV',
+                     'USCG', 'UL', 'ABS', 'API Inspection',
+                     'ASME Certification', 'Thorough Examination',
+                     'DOT Certification', 'Other'],
         "pc_category": [
             "Opening float", "Replenish", "Invoice cash in",
             "Fuel", "Parts", "Postage", "Parking", "Tolls", "Meals",
             "Office", "Tools", "Travel", "Other",
         ],
     }
+    # Item 6 tombstones (2026-10-20): values the operator deleted from
+    # a curated master list are never reseeded — this runs on every
+    # init_db, so without the skip a deletion would silently resurrect
+    # on the next page load, and a list emptied by deletion would come
+    # back whole. Never-initialized books carry no tombstones and seed
+    # normally.
+    try:
+        _deleted = deleted_lookups(con)
+    except Exception:
+        _deleted = {}
     for kind, vals in packs.items():
+        _gone = set(_deleted.get(kind, []))
         for i, v in enumerate(vals):
+            if v in _gone:
+                continue
             rows.append((kind, v, i))
     con.executemany("INSERT OR IGNORE INTO lookups(kind,value,sort_order) VALUES (?,?,?)", rows)
+def restore_factory_lookups(con: sqlite3.Connection, kind: str) -> None:
+    """Restore one curated master list to the shipped factory list
+    (Item 6): clears the kind's deletion tombstones and reseeds, so
+    every factory value comes back in factory order (values the
+    operator added stay — restore adds the factory set back, it does
+    not wipe custom entries). The factory-on enabled set is reset by
+    the caller (Setup -> Billing handler), which owns ENABLED_CORES.
+    No record/document row is touched."""
+    if kind not in CURATED_LOOKUP_KINDS:
+        raise ValueError("List cannot be restored here")
+    clear_deleted_lookup(con, kind)
+    seed_lookups(con)
+    con.commit()
 def dashboard(con: sqlite3.Connection) -> dict:
     on_rent = con.execute(
         "SELECT COUNT(*) FROM tickets WHERE status IN ('On Rent','Standby')"
     ).fetchone()[0]
     ready = con.execute(
-        "SELECT ticket_id FROM tickets WHERE status IN ('Ready to Bill','Off Rent') AND (invoice_no IS NULL OR invoice_no='')"
+        "SELECT ticket_id FROM tickets WHERE status IN ('Ready to Bill','Off Rent') AND invoice_id IS NULL"
     ).fetchall()
     ready_amt = sum(ticket_money(con, r["ticket_id"])["total"] for r in ready)
     open_ar = 0.0
@@ -443,7 +599,9 @@ def dashboard(con: sqlite3.Connection) -> dict:
         "ar_n": ar_n,
         "certs": certs,
         "active": active,
-        "pc_balance": petty_balance(con),
+        # Petty cash is NOT read here (Jason 2026-10-23, petty-cash
+        # seal): the drawer is its own universe; no dashboard, report,
+        # or balance outside /petty consumes it.
         "open_quotes": con.execute(
             "SELECT COUNT(*) FROM quotes WHERE status IN ('Draft','Sent','Accepted')"
         ).fetchone()[0],
@@ -456,30 +614,18 @@ def dashboard(con: sqlite3.Connection) -> dict:
 # ---------------------------------------------------------------------------
 # Self-sufficiency backend (Jason 2026-10-08, Step 1 of the makeover plan).
 #
-# Self-diagnosing + self-correcting support for non-technical users:
-# integrity tripwires, verified backups, corruption auto-recovery, a health
-# snapshot for the System Health page, and self-healing config files.
+# Self-diagnosing support for non-technical users: integrity tripwires
+# and a health snapshot for the System Health page.
 #
 # Rules every function below obeys:
 #   * Never raises on bad input — returns ok=False with a plain-language
 #     message instead.
-#   * Never deletes user data. Damaged files are quarantined (renamed with a
-#     timestamp), never removed. Only files matching OUR OWN backup naming
-#     pattern are ever pruned, and only to the requested retention count.
+#   * Never deletes user data.
 #   * Standard library only.
 # ---------------------------------------------------------------------------
-import json as _json
 import re as _re
 import shutil as _shutil
 import time as _time
-
-_SELFHEAL_TS = "%Y%m%d-%H%M%S"
-_BACKUP_PREFIX = "fleetsheet-backup-"
-_BACKUP_SUFFIX = ".db"
-
-
-def _selfheal_stamp():
-    return datetime.now().strftime(_SELFHEAL_TS)
 
 
 def _selfheal_msg(exc):
@@ -524,21 +670,6 @@ def _list_our_backups(backup_dir):
     return files
 
 
-def check_integrity(con):
-    """Fast integrity tripwire for startup. Returns (ok, message)."""
-    try:
-        if con is None:
-            return (False, "No database connection was available to check.")
-        rows = con.execute("PRAGMA quick_check").fetchall()
-        vals = [r[0] for r in rows]
-        if len(vals) == 1 and str(vals[0]).lower() == "ok":
-            return (True, "Database integrity check passed.")
-        problems = "; ".join(str(v)[:120] for v in vals[:5])
-        return (False, "The database reported problems: %s" % problems)
-    except Exception as e:
-        return (False, "Could not check the database: %s" % _selfheal_msg(e))
-
-
 def full_integrity_check(db_path):
     """Deep check: PRAGMA integrity_check + foreign_key_check, read-only.
 
@@ -568,153 +699,6 @@ def full_integrity_check(db_path):
     if issues:
         return (False, issues[:20])
     return (True, [])
-
-
-def verified_backup(db_path, backup_dir, keep=7):
-    """Create a verified backup. Returns (ok, backup_path_or_error_message).
-
-    Uses the SQLite Online Backup API (never a raw file copy of a live DB).
-    The backup is integrity-checked before it is kept; a failed backup is
-    discarded. Prunes OUR OWN older backups to `keep` newest.
-    """
-    try:
-        keep = max(1, int(keep))
-    except Exception:
-        keep = 7
-    try:
-        src = Path(db_path)
-        if not src.is_file():
-            return (False, "No database file was found to back up.")
-        dst_dir = Path(backup_dir)
-        try:
-            dst_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            return (False, "Could not create the backup folder: %s"
-                    % _selfheal_msg(e))
-        name = "%s%s%s" % (_BACKUP_PREFIX, _selfheal_stamp(), _BACKUP_SUFFIX)
-        dst = dst_dir / name
-        if dst.exists():
-            # Same-second rerun: make the name unique, never overwrite.
-            dst = dst_dir / ("%s%s-%d%s" % (_BACKUP_PREFIX, _selfheal_stamp(),
-                                            os.getpid(), _BACKUP_SUFFIX))
-        scon = sqlite3.connect(str(src))
-        try:
-            tcon = sqlite3.connect(str(dst))
-            try:
-                scon.backup(tcon)
-                # Fold any WAL back into the file so the backup is one
-                # clean, self-contained .db with no -wal/-shm sidecars.
-                try:
-                    tcon.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                except Exception:
-                    pass
-            finally:
-                tcon.close()
-        finally:
-            scon.close()
-        ok, issues = full_integrity_check(dst)
-        if not ok:
-            try:
-                dst.unlink()
-            except Exception:
-                pass
-            return (False, "The backup did not pass its health check and was "
-                    "discarded: %s" % "; ".join(issues[:3]))
-        # The read-only health check above can recreate -shm/-wal sidecars;
-        # drop them now so the backup is one clean, self-contained .db file.
-        for sidecar in (str(dst) + "-wal", str(dst) + "-shm",
-                        str(dst) + "-journal"):
-            try:
-                Path(sidecar).unlink()
-            except Exception:
-                pass
-        # Prune only our own backups, oldest beyond `keep`.
-        for old in _list_our_backups(dst_dir)[keep:]:
-            try:
-                old.unlink()
-            except Exception:
-                pass
-        return (True, str(dst))
-    except Exception as e:
-        return (False, "Backup failed: %s" % _selfheal_msg(e))
-
-
-def auto_recover(db_path, backup_dir):
-    """Recover from corruption. Returns (ok, restored_from, user_message).
-
-    If the database fails its integrity check: quarantine the damaged file
-    (+ -wal/-shm/-journal) with a timestamp suffix — NEVER delete — then
-    restore the newest backup that passes its own integrity check, and verify
-    the restored file too. The message is written for a non-technical user.
-
-    The caller should make sure no other process (e.g. the app server) holds
-    the database open before calling this.
-    """
-    try:
-        p = Path(db_path)
-    except Exception:
-        return (False, "", "The database location was not usable, so no "
-                "recovery was attempted. Your files were not touched.")
-    ok, _issues = full_integrity_check(p)
-    if ok:
-        return (True, "", "The database checked out fine — no recovery was "
-                "needed.")
-    stamp = _selfheal_stamp()
-    quarantined = []
-    for suffix in ("", "-wal", "-shm", "-journal"):
-        f = Path(str(p) + suffix) if suffix else p
-        if f.is_file():
-            q = f.with_name("%s.corrupt-%s" % (f.name, stamp))
-            try:
-                # Never overwrite an earlier quarantine from the same second.
-                if q.exists():
-                    q = f.with_name("%s.corrupt-%s-%d"
-                                    % (f.name, stamp, os.getpid()))
-                f.rename(q)
-                quarantined.append(str(q))
-            except Exception as e:
-                return (False, "",
-                        "The damaged database could not be moved aside safely "
-                        "(%s). Nothing was deleted; please ask for help."
-                        % _selfheal_msg(e))
-    # Newest backup that passes its own health check.
-    chosen = None
-    try:
-        candidates = _list_our_backups(backup_dir)
-    except Exception:
-        candidates = []
-    for cand in candidates:
-        cok, _ = full_integrity_check(cand)
-        if cok:
-            chosen = cand
-            break
-    if chosen is None:
-        return (False, "",
-                "The database was damaged and no healthy backup was found. "
-                "Your damaged file was kept (renamed with today's date, not "
-                "deleted). Please ask for help — do not delete anything.")
-    try:
-        _shutil.copy2(str(chosen), str(p))
-    except Exception as e:
-        return (False, "",
-                "The damaged database was set aside, but the backup could "
-                "not be restored (%s). Nothing was deleted."
-                % _selfheal_msg(e))
-    rok, _ = full_integrity_check(p)
-    if not rok:
-        return (False, "",
-                "The backup was copied back but did not pass its final "
-                "health check. Your files were kept — please ask for help.")
-    try:
-        when = datetime.strptime(chosen.stem[len(_BACKUP_PREFIX):],
-                                 "%Y%m%d-%H%M%S").strftime("%B %d, %Y at %I:%M %p")
-    except Exception:
-        when = chosen.name
-    return (True, str(chosen),
-            "We found a problem in your data file and repaired it by "
-            "restoring your backup from %s. Anything entered after that "
-            "backup may need to be re-entered. Your damaged file was kept "
-            "under a new name — nothing was deleted." % when)
 
 
 def health_snapshot(db_path, backup_dir):
@@ -800,88 +784,3 @@ def health_snapshot(db_path, backup_dir):
     return snap
 
 
-def config_atomic_write(config_path, data):
-    """Write config atomically: temp file + fsync + rename. Never raises.
-
-    Returns (ok, message). The old file is only replaced once the new one
-    is fully written and flushed, so a crash mid-write cannot corrupt it.
-    """
-    try:
-        p = Path(config_path)
-    except Exception:
-        return (False, "The settings location was not usable.")
-    try:
-        text = _json.dumps(data, indent=2, sort_keys=True)
-    except Exception as e:
-        return (False, "The settings could not be saved (%s)."
-                % _selfheal_msg(e))
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        return (False, "The settings folder could not be created (%s)."
-                % _selfheal_msg(e))
-    tmp = p.with_name("%s.tmp-%d" % (p.name, os.getpid()))
-    try:
-        with tmp.open("w", encoding="utf-8") as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(str(tmp), str(p))
-        return (True, "Settings saved.")
-    except Exception as e:
-        try:
-            tmp.unlink()
-        except Exception:
-            pass
-        return (False, "The settings could not be saved (%s)."
-                % _selfheal_msg(e))
-
-
-def config_self_heal(config_path, defaults):
-    """Read a JSON config; heal it if broken. Returns (healed, message).
-
-    On parse failure the broken file is renamed to config.json.bad.N (N
-    counting up, never overwriting an earlier quarantine) and regenerated
-    from `defaults`. A missing file is created from defaults. A healthy
-    file returns (False, ...) — nothing was wrong.
-    """
-    try:
-        p = Path(config_path)
-    except Exception:
-        return (False, "The settings location was not usable.")
-    if not isinstance(defaults, dict):
-        return (False, "The default settings were not valid.")
-    if not p.is_file():
-        ok, msg = config_atomic_write(p, defaults)
-        if ok:
-            return (True, "Settings file was missing, so a fresh one was "
-                    "created from the defaults.")
-        return (False, msg)
-    try:
-        with p.open("r", encoding="utf-8") as fh:
-            _json.load(fh)
-        return (False, "Settings are fine — nothing needed fixing.")
-    except Exception:
-        pass
-    # Broken: quarantine under a non-colliding name, then regenerate.
-    n = 1
-    while True:
-        q = p.with_name("%s.bad.%d" % (p.name, n))
-        if not q.exists():
-            break
-        n += 1
-        if n > 9999:  # sanity bound; never spin forever
-            return (False, "The settings file is broken and could not be "
-                    "set aside safely. Your files were not touched.")
-    try:
-        p.rename(q)
-    except Exception as e:
-        return (False, "The broken settings file could not be set aside "
-                "(%s). Your files were not touched." % _selfheal_msg(e))
-    ok, msg = config_atomic_write(p, defaults)
-    if ok:
-        return (True, "Your settings file was damaged, so it was set aside "
-                "as %s (not deleted) and fresh settings were created."
-                % q.name)
-    return (False, "The settings file was damaged and set aside as %s, but "
-            "fresh settings could not be written (%s)." % (q.name, msg))

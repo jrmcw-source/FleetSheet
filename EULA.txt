@@ -1,10 +1,10 @@
 END-USER LICENSE AGREEMENT (EULA)
 
-FleetSheet — Free Desktop Software
+FleetSheet — Free Source-Available Desktop Software
 
 READ THIS FIRST. BY CLICKING "I AGREE" OR BY INSTALLING, COPYING, OR USING THIS SOFTWARE, YOU ACCEPT THESE TERMS. IF YOU DO NOT ACCEPT THEM, DO NOT INSTALL OR USE THE SOFTWARE.
 
-This End-User License Agreement ("Agreement") is between you ("User") and FleetSheet ("Licensor"). FleetSheet is provided free of charge. It is not open-source software; the FleetSheet License (see LICENSE) states the terms under which it may be used.
+This End-User License Agreement ("Agreement") is between you ("User") and FleetSheet ("Licensor"). FleetSheet is provided free of charge as source-available software.
 
 ---
 
@@ -42,9 +42,9 @@ THE LICENSOR'S TOTAL LIABILITY UNDER THIS AGREEMENT SHALL NOT EXCEED THE AMOUNTS
 
 Some jurisdictions do not allow the exclusion or limitation of certain damages; in such jurisdictions, liability is limited to the greatest extent permitted by law.
 
-7. LICENSE GRANT
+7. LICENSE GRANT (SOURCE-AVAILABLE)
 
-The Software is licensed under the FleetSheet License (see LICENSE file). Subject to this Agreement, you may install and use the Software free of charge. Redistribution is prohibited: you may not distribute, sublicense, sell, rent, or re-publish the Software or any part of it, modified or unmodified. This Agreement's disclaimers of warranty, limitations of liability, and exclusions of support apply regardless of how you obtained the Software and survive any termination.
+The Software is licensed under the FleetSheet License (see LICENSE file). Subject to this Agreement, you may use the Software free of charge and read its source code. You may not redistribute the Software, modify it for distribution, or monetize it. This Agreement's disclaimers of warranty, limitations of liability, and exclusions of support apply regardless of how you obtained the Software and survive any termination.
 
 8. NO OBLIGATION TO UPDATE
 

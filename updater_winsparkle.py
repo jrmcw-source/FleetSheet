@@ -1,105 +1,143 @@
-"""WinSparkle updater wrapper (FleetSheet, Windows installs only).
+"""WinSparkle updater wrapper — Windows-only, MENU-ONLY checks.
 
-Implements packaging/WINSPARKLE.md section 3a. Every entry point is a
-safe no-op when WinSparkle is unavailable — not Windows, DLL absent, or
-no public key baked in yet — so the rest of the app never has to care
-whether the updater is live. The DLL (WinSparkle.dll, x64) ships next
-to this module in the installed app folder. The copy in this repo is
-the official WinSparkle 0.9.4 release binary, SHA-256 verified against
-the upstream GitHub release on 2026-10-08:
-9b43b1c16ee39fb9a91b5bd75138767898779510e0836be2919250607cdbe8ab
+How it works: WinSparkle (WinSparkle.dll, shipped next to this file) reads
+a static appcast feed over HTTPS, compares versions, and — only when the
+operator asks — shows its own "update available" dialog. If the operator
+accepts, WinSparkle downloads the new installer, verifies the Ed25519
+signature against the public key below, runs the installer, and asks the
+app to quit (see the shutdown callback in init()).
 
-The Ed25519 PUBLIC key below is the trust root for update signatures.
-It is safe to ship in source. The matching PRIVATE key never enters
-this repo: it lives on the build machine only and signs each release's
-installer for the appcast (see WINSPARKLE.md section 5).
+Decision (Jason 2026-10-15), check behavior B — MENU-ONLY: the app NEVER
+checks on its own. ``win_sparkle_set_automatic_check_for_updates(0)``.
+The only trigger is Admin → "Check for Updates…". Nothing is ever
+downloaded or installed without the operator approving in WinSparkle's
+dialog. Do not flip automatic checks on without Jason's say-so.
+
+Every call in this module is a safe no-op when the DLL is absent (dev
+machines, Mac builds), the platform isn't Windows, WinSparkle was never
+initialized, or no real public key has been configured. The updater can
+never break app startup.
 """
 import ctypes
 import os
 import sys
 
-# Ed25519 PUBLIC key (base64). Pairing VERIFIED 2026-10-08: Jason ran
-# winsparkle-tool public-key against eddsa_priv.pem on the build
-# laptop (%LOCALAPPDATA%\FleetSheet\UpdateSigning) and the derived
-# string matched the agent build's updater_config.json exactly. The
-# private key never leaves that folder (plus Jason's USB backup).
-_ed_pubkey_b64 = "GbNJ0rT+GOjRhNm0PpTa36mMWxCQsMlBylRBXtk1Rc4="
+_APPCAST_URL = "https://raw.githubusercontent.com/jrmcw-source/FleetSheet/main/appcast.xml"
 
-_APPCAST_URL = ("https://github.com/jrmcw-source/FleetSheet"
-                "/releases/latest/download/appcast.xml")
+# PLACEHOLDER PUBLIC KEY — NOT A REAL KEY. Jason generates the real
+# Ed25519 keypair on his own laptop (gen_keys.py, build machine only)
+# and pastes ONLY the public key here. The private key NEVER enters the
+# repo and is never sent anywhere. Until a real key is pasted, init()
+# refuses to configure WinSparkle and every call in this module is a
+# no-op — the updater is inert, never half-wired.
+_ED_PUBKEY_B64_PLACEHOLDER = "REPLACE_WITH_REAL_PUBLIC_KEY"
+_ED_PUBKEY_B64 = _ED_PUBKEY_B64_PLACEHOLDER
 
 _ws = None
-_shutdown_cb = None  # ctypes callback object — kept alive at module level
+_initialized = False
+_shutdown_cb_ref = None  # keep the CFUNCTYPE alive: GC of it would crash
+
+
+def _dll_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "WinSparkle.dll")
+
+
+def _key_configured():
+    """True only when a real (non-placeholder) public key is set."""
+    return bool(_ED_PUBKEY_B64) and _ED_PUBKEY_B64 != _ED_PUBKEY_B64_PLACEHOLDER
+
+
+def available():
+    """True when a real update check could run: Windows + DLL present +
+    a real public key configured. No DLL load, safe to call anywhere."""
+    return (sys.platform.startswith("win")
+            and os.path.isfile(_dll_path())
+            and _key_configured())
 
 
 def _load():
+    """Load WinSparkle.dll once; None when unavailable. Never raises."""
     global _ws
     if _ws is not None:
         return _ws
     if not sys.platform.startswith("win"):
         return None
-    dll = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                       "WinSparkle.dll")
-    if not os.path.isfile(dll):
+    if not os.path.isfile(_dll_path()):
         return None
     try:
-        _ws = ctypes.CDLL(dll)
+        ws = ctypes.CDLL(_dll_path())
     except Exception:
         return None
-    # NOTE: win_sparkle_set_app_details takes wchar_t* (wide strings).
-    _ws.win_sparkle_set_app_details.argtypes = [ctypes.c_wchar_p,
-                                                ctypes.c_wchar_p,
-                                                ctypes.c_wchar_p]
-    _ws.win_sparkle_set_appcast_url.argtypes = [ctypes.c_char_p]
-    # WinSparkle 0.9.x renamed the Ed25519 setter: the export is
-    # win_sparkle_set_eddsa_public_key (the 0.8 name no longer exists).
-    _ws.win_sparkle_set_eddsa_public_key.argtypes = [ctypes.c_char_p]
-    _ws.win_sparkle_set_eddsa_public_key.restype = ctypes.c_int
+    try:
+        # NOTE: win_sparkle_set_app_details takes wchar_t* (wide strings).
+        ws.win_sparkle_set_app_details.argtypes = [ctypes.c_wchar_p,
+                                                   ctypes.c_wchar_p,
+                                                   ctypes.c_wchar_p]
+        ws.win_sparkle_set_appcast_url.argtypes = [ctypes.c_char_p]
+        ws.win_sparkle_set_ed25519_pub_key.argtypes = [ctypes.c_char_p]
+        ws.win_sparkle_set_ed25519_pub_key.restype = ctypes.c_int
+        ws.win_sparkle_set_automatic_check_for_updates.argtypes = [ctypes.c_int]
+        ws.win_sparkle_set_shut_down_request_callback.argtypes = [
+            ctypes.CFUNCTYPE(None)]
+    except Exception:
+        return None
+    _ws = ws
     return _ws
 
 
+def _invoke_shutdown(fn):
+    try:
+        fn()
+    except Exception:
+        pass
+
+
 def init(version, on_shutdown_request=None):
-    """Start the updater once, after the server is up. Returns True when
-    the updater is live. on_shutdown_request, when given, is called on
-    WinSparkle's thread when the user accepts an update, so the app can
-    stop its HTTP server before the new installer runs."""
-    global _shutdown_cb
-    if not _ed_pubkey_b64:
+    """Configure WinSparkle once at app startup (after the server binds).
+    Returns True when the updater is live. Never raises. No-op (False)
+    when the DLL is absent, the platform isn't Windows, or the
+    placeholder key is still in place."""
+    global _initialized, _shutdown_cb_ref
+    if _initialized:
+        return True
+    if not _key_configured():
         return False
     ws = _load()
-    if not ws:
+    if ws is None:
         return False
     try:
-        ws.win_sparkle_set_app_details("FleetSheet", "FleetSheet", version)
+        ws.win_sparkle_set_app_details("FleetSheet", "FleetSheet",
+                                       str(version))
         ws.win_sparkle_set_appcast_url(_APPCAST_URL.encode("utf-8"))
-        # 0.9.x semantics: returns 1 on success, 0 on failure.
-        if ws.win_sparkle_set_eddsa_public_key(
-                _ed_pubkey_b64.encode("utf-8")) != 1:
+        if ws.win_sparkle_set_ed25519_pub_key(
+                _ED_PUBKEY_B64.encode("utf-8")) != 0:
             return False
+        # Decision B (menu-only): NO automatic checks. The only trigger
+        # is the operator clicking Admin → "Check for Updates…".
+        ws.win_sparkle_set_automatic_check_for_updates(0)
         if on_shutdown_request is not None:
-            cb_type = ctypes.CFUNCTYPE(None)
-
-            def _ask_shutdown():
-                try:
-                    on_shutdown_request()
-                except Exception:
-                    pass
-
-            _shutdown_cb = cb_type(_ask_shutdown)
-            ws.win_sparkle_set_shut_down_request_callback(_shutdown_cb)
-        ws.win_sparkle_set_automatic_check_for_updates(1)
-        ws.win_sparkle_set_update_check_interval(7 * 24 * 3600)  # weekly
+            # Fired when the operator accepts an update: the app must quit
+            # so the new installer can replace it.
+            _shutdown_cb_ref = ctypes.CFUNCTYPE(None)(
+                lambda: _invoke_shutdown(on_shutdown_request))
+            ws.win_sparkle_set_shut_down_request_callback(_shutdown_cb_ref)
         ws.win_sparkle_init()
+        _initialized = True
         return True
     except Exception:
         return False
 
 
 def check_now():
-    """Menu action: 'Check for Updates'. Shows WinSparkle's own UI.
-    Returns True when the check was actually handed to WinSparkle."""
+    """Operator-triggered check (Admin → "Check for Updates…"). Shows
+    WinSparkle's own dialog. Returns True when a check was actually
+    triggered; False when the updater is unavailable (never initialized,
+    no DLL, not Windows, placeholder key). Never raises."""
+    if not _initialized:
+        return False
     ws = _load()
-    if not ws or not _ed_pubkey_b64:
+    if ws is None:
         return False
     try:
         ws.win_sparkle_check_update_with_ui()
@@ -109,9 +147,13 @@ def check_now():
 
 
 def cleanup():
+    """Shut WinSparkle down. Safe no-op when it was never initialized."""
+    if not _initialized:
+        return
     ws = _load()
-    if ws:
-        try:
-            ws.win_sparkle_cleanup()
-        except Exception:
-            pass
+    if ws is None:
+        return
+    try:
+        ws.win_sparkle_cleanup()
+    except Exception:
+        pass

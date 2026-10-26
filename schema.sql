@@ -1,4 +1,10 @@
 -- FleetSheet SQLite schema. Calculations live in app code / views, not user cells.
+-- Build 'v' (2026-10-25): numbers are never keys. Every table carries an
+-- engine-assigned surrogate key (id, or the table's own integer key such as
+-- line_id / doc_id / entry_id) as its PRIMARY KEY. Operator-facing numbers
+-- and codes (invoice_no, ticket_id, customer_id, ...) are UNIQUE display
+-- columns: their values, formats, and presentation are unchanged, and all
+-- references between tables run on the surrogate keys underneath.
 PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS company (
@@ -29,12 +35,24 @@ CREATE TABLE IF NOT EXISTS company (
   bill_both_dates INTEGER NOT NULL DEFAULT 1,
   fiscal_start_month INTEGER NOT NULL DEFAULT 1,
   tooltips INTEGER NOT NULL DEFAULT 1,
-  yard_loc_id TEXT REFERENCES jurisdictions(loc_id),
+  yard_loc_id INTEGER REFERENCES jurisdictions(id),
   desk_name TEXT,
   backup_dir TEXT,
   last_backup TEXT,
   next_wo INTEGER NOT NULL DEFAULT 101,
-  next_payment INTEGER NOT NULL DEFAULT 1
+  next_payment INTEGER NOT NULL DEFAULT 1,
+  next_pay_key INTEGER NOT NULL DEFAULT 1,
+  backup_schedule TEXT NOT NULL DEFAULT 'weekly',
+  backup_every_days INTEGER NOT NULL DEFAULT 7,
+  yard_state TEXT,
+  yard_country TEXT DEFAULT 'US',
+  phys_street TEXT,
+  phys_street2 TEXT,
+  phys_city TEXT,
+  phys_county TEXT,
+  phys_state TEXT,
+  phys_zip TEXT,
+  next_sale INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS company_phones (
@@ -46,7 +64,8 @@ CREATE TABLE IF NOT EXISTS company_phones (
 );
 
 CREATE TABLE IF NOT EXISTS customers (
-  customer_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id TEXT NOT NULL UNIQUE,
   account_name TEXT NOT NULL,
   short_name TEXT,
   bill_to TEXT,
@@ -67,15 +86,38 @@ CREATE TABLE IF NOT EXISTS customers (
 
 CREATE TABLE IF NOT EXISTS customer_phones (
   phone_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id TEXT NOT NULL REFERENCES customers(customer_id),
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
   label TEXT NOT NULL,
   number TEXT NOT NULL,
   is_main INTEGER NOT NULL DEFAULT 0,
   sort INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS customer_locations (
+  location_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  location_name TEXT NOT NULL,
+  street TEXT,
+  street2 TEXT,
+  city TEXT,
+  state TEXT,
+  zip TEXT,
+  is_primary INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS customer_contacts (
+  contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  name TEXT NOT NULL,
+  role TEXT,
+  phone TEXT,
+  email TEXT,
+  is_primary INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS jurisdictions (
-  loc_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  loc_id TEXT NOT NULL UNIQUE,
   loc_class TEXT NOT NULL,
   country TEXT,
   region TEXT,
@@ -92,21 +134,28 @@ CREATE TABLE IF NOT EXISTS jurisdictions (
 );
 
 CREATE TABLE IF NOT EXISTS sites (
-  site_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  site_id TEXT NOT NULL UNIQUE,
   site_name TEXT NOT NULL,
   operator TEXT,
   rig_name TEXT,
   flag_state TEXT,
   waters TEXT,
   primary_regime TEXT,
-  customer_id TEXT REFERENCES customers(customer_id),
-  loc_id TEXT REFERENCES jurisdictions(loc_id),
+  customer_id INTEGER REFERENCES customers(id),
+  loc_id INTEGER REFERENCES jurisdictions(id),
   tax_exempt INTEGER NOT NULL DEFAULT 0,
-  notes TEXT
+  notes TEXT,
+  street TEXT,
+  street2 TEXT,
+  city TEXT,
+  state TEXT,
+  zip TEXT
 );
 
 CREATE TABLE IF NOT EXISTS assets (
-  asset_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  asset_id TEXT NOT NULL UNIQUE,
   unit_no TEXT NOT NULL,
   category TEXT,
   description TEXT,
@@ -132,6 +181,8 @@ CREATE TABLE IF NOT EXISTS assets (
   active INTEGER NOT NULL DEFAULT 1,
   condition TEXT DEFAULT 'Available',
   cert_operator INTEGER NOT NULL DEFAULT 0,
+  designation TEXT NOT NULL DEFAULT 'Fleet',
+  status TEXT NOT NULL DEFAULT 'Active',
   notes TEXT,
   sold_date TEXT,
   sold_amount REAL,
@@ -139,10 +190,11 @@ CREATE TABLE IF NOT EXISTS assets (
 );
 
 CREATE TABLE IF NOT EXISTS tickets (
-  ticket_id TEXT PRIMARY KEY,
-  customer_id TEXT NOT NULL REFERENCES customers(customer_id),
-  site_id TEXT NOT NULL REFERENCES sites(site_id),
-  asset_id TEXT NOT NULL REFERENCES assets(asset_id),
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id TEXT NOT NULL UNIQUE,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  site_id INTEGER REFERENCES sites(id),
+  asset_id INTEGER NOT NULL REFERENCES assets(id),
   job_name TEXT,
   well_or_pad TEXT,
   afe TEXT,
@@ -162,13 +214,15 @@ CREATE TABLE IF NOT EXISTS tickets (
   customer_transport INTEGER NOT NULL DEFAULT 0,
   haul_by TEXT NOT NULL DEFAULT 'we',
   deliver_to TEXT NOT NULL DEFAULT 'job_site',
-  tax_loc_id TEXT REFERENCES jurisdictions(loc_id),
+  tax_loc_id INTEGER REFERENCES jurisdictions(id),
   waiver_yn INTEGER NOT NULL DEFAULT 1,
+  fit_override TEXT NOT NULL DEFAULT '',
+  billed_note TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL CHECK (status IN (
     'Quoted','Reserved','Dispatched','On Rent','Standby','Off Rent','Ready to Bill','Billed','Closed','Void'
   )),
-  invoice_no TEXT,
-  quote_no TEXT,
+  invoice_id INTEGER REFERENCES invoices(id),
+  quote_id INTEGER REFERENCES quotes(id),
   location_note TEXT,
   attached_to TEXT,
   clerk TEXT,
@@ -178,31 +232,51 @@ CREATE TABLE IF NOT EXISTS tickets (
   out_photo TEXT,
   out_by TEXT,
   out_at TEXT,
+  out_src TEXT,
   in_condition TEXT,
   in_note TEXT,
   in_meter TEXT,
   in_photo TEXT,
   in_by TEXT,
   in_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  in_src TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  haul_note TEXT NOT NULL DEFAULT '',
+  deliver_note TEXT NOT NULL DEFAULT '',
+  soft_reserve INTEGER NOT NULL DEFAULT 0,
+  ref_ticket TEXT
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
-  invoice_no TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  invoice_no TEXT NOT NULL UNIQUE,
   invoice_date TEXT NOT NULL,
-  customer_id TEXT NOT NULL REFERENCES customers(customer_id),
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
   terms TEXT NOT NULL,
   notes TEXT,
-  quote_no TEXT,
+  quote_id INTEGER REFERENCES quotes(id),
   po TEXT,
-  status TEXT NOT NULL CHECK (status IN ('Draft','Ready','Sent','Partial','Paid','Disputed','Write-off'))
+  status TEXT NOT NULL CHECK (status IN ('Draft','Ready','Sent','Partial','Paid','Disputed','Write-off')),
+  adjustment REAL DEFAULT 0,
+  adj_label TEXT DEFAULT '',
+  adj_taxable INTEGER DEFAULT 0,
+  tax_exempt_op INTEGER DEFAULT 0,
+  tax_rate REAL,
+  contact_name TEXT,
+  bar_text TEXT,
+  ref_ticket TEXT,
+  po_expire TEXT,
+  po_cost_code TEXT,
+  po_notes TEXT,
+  shipped_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS invoice_lines (
   line_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  invoice_no TEXT NOT NULL REFERENCES invoices(invoice_no),
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
   po_line TEXT,
   category TEXT NOT NULL,
+  item TEXT DEFAULT '',
   description TEXT NOT NULL,
   qty REAL NOT NULL DEFAULT 1,
   uom TEXT NOT NULL,
@@ -215,22 +289,47 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
   tax_name TEXT NOT NULL DEFAULT '',
   tax_loc TEXT NOT NULL DEFAULT '',
   source_type TEXT NOT NULL DEFAULT '',
-  source_id TEXT NOT NULL DEFAULT ''
+  source_id TEXT NOT NULL DEFAULT '',
+  source_line_id INTEGER NOT NULL DEFAULT 0,
+  line_note TEXT NOT NULL DEFAULT ''
 );
 
+CREATE TABLE IF NOT EXISTS ticket_lines (
+  line_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+  category TEXT NOT NULL DEFAULT 'Other',
+  item TEXT DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  qty REAL NOT NULL DEFAULT 1,
+  uom TEXT NOT NULL DEFAULT 'Each',
+  rate REAL NOT NULL DEFAULT 0,
+  amount REAL NOT NULL DEFAULT 0,
+  taxed INTEGER NOT NULL DEFAULT 1,
+  line_note TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_lines_ticket ON ticket_lines(ticket_id);
+
+-- The two money ledgers share ONE surrogate-key space (company.next_pay_key):
+-- a payment event is one key whether its row lives here or in
+-- doc_collections, and a carried mirror row reuses its source row's key.
+-- pay_id stays the operator-facing payment number (UNIQUE display column).
 CREATE TABLE IF NOT EXISTS collections (
-  pay_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY,
+  pay_id TEXT NOT NULL UNIQUE,
   pay_date TEXT NOT NULL,
-  invoice_no TEXT NOT NULL REFERENCES invoices(invoice_no),
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
   method TEXT NOT NULL,
-  amount REAL NOT NULL CHECK (amount > 0),
+  amount REAL NOT NULL CHECK (amount != 0),
   ref_no TEXT,
   notes TEXT,
   kind TEXT NOT NULL DEFAULT 'payment' CHECK (kind IN ('payment','credit')),
-  cm_no TEXT,
+  cm_id INTEGER REFERENCES credit_memos(id),
   clerk TEXT,
   applied_amount REAL,
-  unapplied_amount REAL NOT NULL DEFAULT 0
+  unapplied_amount REAL NOT NULL DEFAULT 0,
+  batch_id TEXT,
+  cash_entry_id INTEGER REFERENCES cash_entries(entry_id),
+  carried_from TEXT
 );
 
 -- Invoice paperwork (2026-09-27): the PO scan and the tax-exempt certificate
@@ -239,8 +338,8 @@ CREATE TABLE IF NOT EXISTS collections (
 -- shared docs/ folder next to the book, like data-book documents.
 CREATE TABLE IF NOT EXISTS invoice_docs (
   doc_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  invoice_no TEXT NOT NULL REFERENCES invoices(invoice_no),
-  kind TEXT NOT NULL CHECK (kind IN ('po','tax_exempt')),
+  invoice_id INTEGER NOT NULL REFERENCES invoices(id),
+  kind TEXT NOT NULL CHECK (kind IN ('po','tax_exempt','shipping','custom')),
   title TEXT NOT NULL,
   filename TEXT NOT NULL,
   stored TEXT NOT NULL,
@@ -248,25 +347,47 @@ CREATE TABLE IF NOT EXISTS invoice_docs (
   mime TEXT NOT NULL DEFAULT '',
   uploaded_at TEXT NOT NULL DEFAULT (datetime('now')),
   clerk TEXT,
-  UNIQUE(invoice_no, kind)
+  print_with INTEGER NOT NULL DEFAULT 1,
+  UNIQUE(invoice_id, kind)
 );
-CREATE INDEX IF NOT EXISTS idx_invdocs_invoice ON invoice_docs(invoice_no);
+CREATE INDEX IF NOT EXISTS idx_invdocs_invoice ON invoice_docs(invoice_id);
 
 CREATE TABLE IF NOT EXISTS credit_memos (
-  cm_no TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cm_no TEXT NOT NULL UNIQUE,
   cm_date TEXT NOT NULL,
-  customer_id TEXT NOT NULL REFERENCES customers(customer_id),
-  face_amount REAL NOT NULL CHECK (face_amount > 0),
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  face_amount REAL NOT NULL CHECK (face_amount != 0),
   reason TEXT NOT NULL,
   notes TEXT,
   clerk TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  category TEXT DEFAULT 'Other',
+  uom TEXT DEFAULT 'Each',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  cash_entry_id INTEGER REFERENCES cash_entries(entry_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_cm_cust ON credit_memos(customer_id);
 
+CREATE TABLE IF NOT EXISTS credit_memo_lines (
+  line_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  cm_id INTEGER NOT NULL REFERENCES credit_memos(id),
+  category TEXT NOT NULL DEFAULT 'Other',
+  item TEXT DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  qty REAL NOT NULL DEFAULT 1,
+  uom TEXT NOT NULL DEFAULT 'Each',
+  rate REAL NOT NULL DEFAULT 0,
+  amount REAL NOT NULL DEFAULT 0,
+  tax_exempt INTEGER NOT NULL DEFAULT 0,
+  source_invoice_id INTEGER REFERENCES invoices(id),
+  source_line_id INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_cmlines_cm ON credit_memo_lines(cm_id);
+
 CREATE TABLE IF NOT EXISTS petty_cash (
-  pc_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pc_id TEXT NOT NULL UNIQUE,
   txn_date TEXT NOT NULL,
   direction TEXT NOT NULL CHECK (direction IN ('in','out')),
   amount REAL NOT NULL CHECK (amount > 0),
@@ -280,18 +401,48 @@ CREATE TABLE IF NOT EXISTS petty_cash (
 
 CREATE INDEX IF NOT EXISTS idx_pc_date ON petty_cash(txn_date);
 
+-- Cash tab entries (Batch 3 #12): tenders recorded against exactly
+-- one attachment — an invoice, a work order, a rental ticket, a sale,
+-- a quote, or (build 'v') a change order. No unattached entries. The
+-- method list is the full tender list (engine CASH_METHODS; pack 'm'
+-- added Bitcoin and Traveler's Check and unified the Cash door with
+-- the payment list). Record-only, never processed; collections
+-- (payments) and petty_cash stay their own stores and surface on the
+-- Cash tab read-only.
+CREATE TABLE IF NOT EXISTS cash_entries (
+  entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entry_date TEXT NOT NULL,
+  direction TEXT NOT NULL CHECK (direction IN ('in','out')),
+  method TEXT NOT NULL CHECK (method IN ('ACH','Check','Wire','Card','Cash','Venmo','Bitcoin','Traveler''s Check','Other')),
+  amount REAL NOT NULL CHECK (amount > 0),
+  customer_id INTEGER REFERENCES customers(id),
+  invoice_id INTEGER REFERENCES invoices(id),
+  wo_id INTEGER REFERENCES work_orders(id),
+  ticket_id INTEGER REFERENCES tickets(id),
+  sale_id INTEGER,
+  quote_id INTEGER REFERENCES quotes(id),
+  co_id INTEGER REFERENCES change_orders(id),
+  asset_id INTEGER REFERENCES assets(id),
+  notes TEXT,
+  clerk TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_cash_date ON cash_entries(entry_date);
+
 CREATE TABLE IF NOT EXISTS lookups (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
   value TEXT NOT NULL,
   sort_order INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (kind, value)
+  UNIQUE (kind, value)
 );
 
 CREATE TABLE IF NOT EXISTS work_orders (
-  wo_id TEXT PRIMARY KEY,
-  asset_id TEXT NOT NULL REFERENCES assets(asset_id),
-  ticket_id TEXT REFERENCES tickets(ticket_id),
-  customer_id TEXT REFERENCES customers(customer_id),
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wo_id TEXT NOT NULL UNIQUE,
+  asset_id INTEGER NOT NULL REFERENCES assets(id),
+  ticket_id INTEGER REFERENCES tickets(id),
+  customer_id INTEGER REFERENCES customers(id),
   charge_to TEXT NOT NULL CHECK (charge_to IN ('internal','customer')),
   work_type TEXT NOT NULL,
   description TEXT NOT NULL,
@@ -306,15 +457,22 @@ CREATE TABLE IF NOT EXISTS work_orders (
   warranty INTEGER NOT NULL DEFAULT 0,
   yard_or_site TEXT,
   notes TEXT,
-  invoice_no TEXT,
-  quote_no TEXT
+  invoice_id INTEGER REFERENCES invoices(id),
+  quote_id INTEGER REFERENCES quotes(id),
+  po TEXT,
+  ref_ticket TEXT,
+  wo_date TEXT,
+  item TEXT,
+  qty REAL DEFAULT 1,
+  cost REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS quotes (
-  quote_no TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  quote_no TEXT NOT NULL UNIQUE,
   quote_date TEXT NOT NULL,
-  customer_id TEXT NOT NULL REFERENCES customers(customer_id),
-  site_id TEXT REFERENCES sites(site_id),
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
+  site_id INTEGER REFERENCES sites(id),
   job_name TEXT,
   afe TEXT,
   po TEXT,
@@ -327,40 +485,77 @@ CREATE TABLE IF NOT EXISTS quotes (
 
 CREATE TABLE IF NOT EXISTS quote_lines (
   line_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  quote_no TEXT NOT NULL REFERENCES quotes(quote_no),
-  kind TEXT NOT NULL CHECK (kind IN ('item','unit','labor','freight','other','rental','service','transport')),
-  asset_id TEXT REFERENCES assets(asset_id),
+  quote_id INTEGER NOT NULL REFERENCES quotes(id),
+  kind TEXT NOT NULL CHECK (kind IN ('Rental','Labor','Item','Mileage','Freight','Fuel','Consumable','Mobilization','Demobilization','Other')),
+  asset_id INTEGER REFERENCES assets(id),
+  item TEXT DEFAULT '',
   description TEXT NOT NULL,
   qty REAL NOT NULL DEFAULT 1,
   rate REAL NOT NULL DEFAULT 0,
   rate_unit TEXT,
-  amount REAL NOT NULL DEFAULT 0
+  uom TEXT DEFAULT 'Each',
+  amount REAL NOT NULL DEFAULT 0,
+  line_note TEXT NOT NULL DEFAULT ''
 );
 
+-- Change orders (build 'v', Jason 2026-10-25): a standalone money
+-- document. Nothing requires anything — no quote parent, no required
+-- association. It may name ONE associated money document (assoc_kind +
+-- assoc_id, on the engine keys) as a stated fact; the association
+-- changes no totals anywhere. Its own customer carries its money.
 CREATE TABLE IF NOT EXISTS change_orders (
-  co_no TEXT PRIMARY KEY,
-  quote_no TEXT NOT NULL REFERENCES quotes(quote_no),
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  co_no TEXT NOT NULL UNIQUE,
+  customer_id INTEGER REFERENCES customers(id),
+  assoc_kind TEXT,
+  assoc_id INTEGER,
   co_date TEXT NOT NULL,
   reason TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('Issued','Void')),
   notes TEXT,
   clerk TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  po TEXT
 );
 
 CREATE TABLE IF NOT EXISTS change_order_lines (
   line_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  co_no TEXT NOT NULL REFERENCES change_orders(co_no),
+  co_id INTEGER NOT NULL REFERENCES change_orders(id),
+  item TEXT DEFAULT '',
   direction TEXT NOT NULL CHECK (direction IN ('add','subtract')),
-  kind TEXT NOT NULL CHECK (kind IN ('item','unit','labor','freight','other','rental','service','transport')),
+  kind TEXT NOT NULL CHECK (kind IN ('Rental','Labor','Item','Mileage','Freight','Fuel','Consumable','Mobilization','Demobilization','Other')),
   description TEXT NOT NULL,
   qty REAL NOT NULL DEFAULT 1,
   rate REAL NOT NULL DEFAULT 0,
-  amount REAL NOT NULL DEFAULT 0
+  uom TEXT DEFAULT 'Each',
+  amount REAL NOT NULL DEFAULT 0,
+  line_note TEXT
 );
 
 CREATE TABLE IF NOT EXISTS crew (
-  name TEXT PRIMARY KEY
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  position TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS sales (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sale_id TEXT NOT NULL UNIQUE,
+  asset_id INTEGER NOT NULL REFERENCES assets(id),
+  customer_id INTEGER REFERENCES customers(id),
+  sale_date TEXT NOT NULL,
+  qty INTEGER DEFAULT 1,
+  amount REAL NOT NULL,
+  condition TEXT,
+  invoice_id INTEGER REFERENCES invoices(id),
+  notes TEXT,
+  clerk TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  ref_no TEXT,
+  item_desc TEXT,
+  seq INTEGER,
+  group_id INTEGER,
+  line_note TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_wo_asset ON work_orders(asset_id);
@@ -368,9 +563,82 @@ CREATE INDEX IF NOT EXISTS idx_wo_status ON work_orders(status);
 
 CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
 CREATE INDEX IF NOT EXISTS idx_tickets_asset ON tickets(asset_id);
-CREATE INDEX IF NOT EXISTS idx_tickets_invoice ON tickets(invoice_no);
-CREATE INDEX IF NOT EXISTS idx_col_inv ON collections(invoice_no);
-CREATE INDEX IF NOT EXISTS idx_col_cm ON collections(cm_no);
+CREATE INDEX IF NOT EXISTS idx_tickets_invoice ON tickets(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_col_inv ON collections(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_col_cm ON collections(cm_id);
+CREATE INDEX IF NOT EXISTS idx_col_batch ON collections(batch_id);
+
+-- Payment line allocations (Jason 2026-10-23; generalized the same
+-- day — "the universality needs to be complete"): money in may
+-- OPTIONALLY be distributed line by line against ANY money document's
+-- lines — invoice, work order, rental ticket, sale, or change order —
+-- for audit and record keeping. One row per allocated portion:
+-- line_id NULL is the blanket (document-level) remainder of a
+-- broken-down amount. doc_kind names the document kind; doc_id is the
+-- document's engine key; line_id is the line's key in that document's
+-- line table (for a sale, the sales row's own key). source 'payment'
+-- rows hang off a collections key (invoice) or a doc_collections key
+-- (other documents) — pay_id is that shared ledger key; source
+-- 'credit' rows are a credit memo applied against lines; source
+-- 'cash' rows hang off a cash_entries entry — a Cash In settles and
+-- consumes, a Cash Out is a record and consumes nothing. carried=1
+-- marks a mirror row written onto an invoice when its source document
+-- was invoiced: it counts in the invoice line's covered state but is
+-- not new money in any total. A payment with no rows here is a plain
+-- blanket payment.
+CREATE TABLE IF NOT EXISTS payment_allocations (
+  alloc_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL DEFAULT 'payment' CHECK (source IN ('payment','cash','credit')),
+  pay_id INTEGER,
+  cash_entry_id INTEGER REFERENCES cash_entries(entry_id),
+  batch_id TEXT,
+  doc_kind TEXT NOT NULL DEFAULT 'invoice',
+  doc_id INTEGER NOT NULL DEFAULT 0,
+  line_id INTEGER,
+  carried INTEGER NOT NULL DEFAULT 0,
+  amount REAL NOT NULL CHECK (amount != 0),
+  pay_date TEXT NOT NULL DEFAULT '',
+  clerk TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_payalloc_pay ON payment_allocations(pay_id);
+CREATE INDEX IF NOT EXISTS idx_payalloc_batch ON payment_allocations(batch_id);
+CREATE INDEX IF NOT EXISTS idx_payalloc_doc ON payment_allocations(doc_kind, doc_id);
+CREATE INDEX IF NOT EXISTS idx_payalloc_line ON payment_allocations(line_id);
+CREATE INDEX IF NOT EXISTS idx_payalloc_cash ON payment_allocations(cash_entry_id);
+
+-- Money received against a work order, a rental ticket, a sale, a
+-- quote, or a change order (Jason 2026-10-23, universality; build 'v'
+-- adds the change order): the same ledger shape as collections, which
+-- stays the invoice ledger. kind 'payment' is money in; kind 'credit'
+-- is a credit memo applied against the document. Cash In settlements
+-- through the Cash tab carry cash_entry_id, exactly as on collections
+-- — one money event, two views. When the document is invoiced, its
+-- rows are mirrored into collections with carried_from set, so the
+-- invoice nets them out exactly once and no ledger counts the money
+-- twice. id shares the one pay-key space with collections (see there).
+CREATE TABLE IF NOT EXISTS doc_collections (
+  id INTEGER PRIMARY KEY,
+  pay_id TEXT NOT NULL UNIQUE,
+  batch_id TEXT,
+  pay_date TEXT NOT NULL,
+  doc_kind TEXT NOT NULL CHECK (doc_kind IN ('wo','ticket','sale','quote','change')),
+  doc_id INTEGER NOT NULL,
+  customer_id INTEGER,
+  method TEXT NOT NULL,
+  amount REAL NOT NULL CHECK (amount != 0),
+  ref_no TEXT,
+  notes TEXT,
+  kind TEXT NOT NULL DEFAULT 'payment' CHECK (kind IN ('payment','credit')),
+  cm_id INTEGER,
+  clerk TEXT,
+  applied_amount REAL,
+  unapplied_amount REAL NOT NULL DEFAULT 0,
+  cash_entry_id INTEGER REFERENCES cash_entries(entry_id)
+);
+CREATE INDEX IF NOT EXISTS idx_dcol_doc ON doc_collections(doc_kind, doc_id);
+CREATE INDEX IF NOT EXISTS idx_dcol_cm ON doc_collections(cm_id);
+CREATE INDEX IF NOT EXISTS idx_dcol_batch ON doc_collections(batch_id);
 
 -- Migration: saved export presets (Setup > Export > "Save preset").
 -- Added because engine.py's list_saved_exports/save_export/delete_saved_export
@@ -403,19 +671,35 @@ CREATE TABLE IF NOT EXISTS custom_reports (
   created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
 );
 
+CREATE TABLE IF NOT EXISTS mixed_presets (
+  preset_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE,
+  kinds TEXT NOT NULL DEFAULT '',
+  time_mode TEXT NOT NULL DEFAULT 'once',
+  date_from TEXT NOT NULL DEFAULT '',
+  date_to TEXT NOT NULL DEFAULT '',
+  month TEXT NOT NULL DEFAULT '',
+  customer_id INTEGER,
+  filter_text TEXT NOT NULL DEFAULT '',
+  sort_col INTEGER NOT NULL DEFAULT 0,
+  sort_dir TEXT NOT NULL DEFAULT 'desc',
+  created_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now'))
+);
+
 -- Compliance packs (pre-built templates) and per-unit checklists.
 -- trigger: per_job | per_shift | calendar | event | manufacturer
 -- basis: standard | manufacturer | company  (company = shop-policy default
 -- where the standard is silent; never presented as a regulatory requirement)
 CREATE TABLE IF NOT EXISTS compliance_packs (
-  pack_id TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pack_id TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
   blurb TEXT
 );
 
 CREATE TABLE IF NOT EXISTS compliance_requirements (
   req_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pack_id TEXT NOT NULL REFERENCES compliance_packs(pack_id),
+  pack_id INTEGER NOT NULL REFERENCES compliance_packs(id),
   name TEXT NOT NULL,
   trigger TEXT NOT NULL,
   interval_months REAL,
@@ -431,8 +715,8 @@ CREATE TABLE IF NOT EXISTS compliance_requirements (
 
 CREATE TABLE IF NOT EXISTS equipment_compliance (
   eqc_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  asset_id TEXT NOT NULL REFERENCES assets(asset_id),
-  pack_id TEXT REFERENCES compliance_packs(pack_id),
+  asset_id INTEGER NOT NULL REFERENCES assets(id),
+  pack_id INTEGER REFERENCES compliance_packs(id),
   req_id INTEGER REFERENCES compliance_requirements(req_id),
   custom_name TEXT,
   trigger TEXT NOT NULL,
@@ -440,7 +724,8 @@ CREATE TABLE IF NOT EXISTS equipment_compliance (
   deployed_backstop_months REAL,
   last_done TEXT,
   next_due TEXT,
-  notes TEXT
+  notes TEXT,
+  performer_id INTEGER REFERENCES vendors(vendor_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_eqc_asset ON equipment_compliance(asset_id);
@@ -463,7 +748,8 @@ CREATE INDEX IF NOT EXISTS idx_cev_eqc ON compliance_events(eqc_id);
 -- created lazily by engine code on first use; they belong in the schema so a
 -- fresh build from this file alone is complete.
 CREATE TABLE IF NOT EXISTS device_auths (
-  token TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT NOT NULL UNIQUE,
   label TEXT NOT NULL,
   scope TEXT NOT NULL DEFAULT 'yard',
   created_at TEXT NOT NULL,
@@ -475,7 +761,8 @@ CREATE TABLE IF NOT EXISTS device_auths (
 );
 
 CREATE TABLE IF NOT EXISTS options (
-  key TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  key TEXT NOT NULL UNIQUE,
   value TEXT NOT NULL DEFAULT ''
 );
 
@@ -484,7 +771,7 @@ CREATE TABLE IF NOT EXISTS options (
 -- inside every backup archive, like ticket photos.
 CREATE TABLE IF NOT EXISTS unit_docs (
   doc_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  asset_id TEXT NOT NULL,
+  asset_id INTEGER NOT NULL REFERENCES assets(id),
   title TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'other',
   filename TEXT NOT NULL,
@@ -506,12 +793,13 @@ CREATE TABLE IF NOT EXISTS vendors (
   phone TEXT NOT NULL DEFAULT '',
   email TEXT NOT NULL DEFAULT '',
   specialties TEXT NOT NULL DEFAULT '',
+  contact TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS asset_certs (
   cert_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  asset_id TEXT NOT NULL REFERENCES assets(asset_id),
+  asset_id INTEGER NOT NULL REFERENCES assets(id),
   kind TEXT NOT NULL DEFAULT 'certification',
   title TEXT NOT NULL,
   cert_number TEXT NOT NULL DEFAULT '',
@@ -527,21 +815,39 @@ CREATE TABLE IF NOT EXISTS asset_certs (
 CREATE INDEX IF NOT EXISTS idx_certs_asset ON asset_certs(asset_id);
 
 CREATE TABLE IF NOT EXISTS alert_ack (
-  alert_key TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  alert_key TEXT NOT NULL UNIQUE,
   until_ts INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS purchase_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   po_no TEXT NOT NULL,
-  customer_id TEXT NOT NULL,
+  customer_id INTEGER NOT NULL REFERENCES customers(id),
   expire TEXT,
   cost_code TEXT,
   notes TEXT,
-  asset_id TEXT,
+  asset_id INTEGER REFERENCES assets(id),
   ack_at TEXT,
   ack_by TEXT,
-  PRIMARY KEY (customer_id, po_no)
+  total REAL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'Open',
+  UNIQUE (customer_id, po_no)
 );
+
+CREATE TABLE IF NOT EXISTS wo_lines (
+  line_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  wo_id INTEGER NOT NULL REFERENCES work_orders(id),
+  item TEXT DEFAULT '',
+  description TEXT DEFAULT '',
+  category TEXT DEFAULT 'Other',
+  qty REAL DEFAULT 1,
+  rate REAL DEFAULT 0,
+  uom TEXT DEFAULT 'Each',
+  amount REAL DEFAULT 0,
+  line_note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_wo_lines_wo ON wo_lines(wo_id);
 
 CREATE TABLE IF NOT EXISTS today_tasks (
   task_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -561,7 +867,8 @@ CREATE TABLE IF NOT EXISTS done_manual (
   done_by TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS today_money_done (
-  slot_key TEXT PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  slot_key TEXT NOT NULL UNIQUE,
   done_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS today_stickies (
@@ -577,7 +884,7 @@ CREATE TABLE IF NOT EXISTS today_stickies (
 );
 CREATE TABLE IF NOT EXISTS pending_bookings (
   pending_id INTEGER PRIMARY KEY AUTOINCREMENT,
-  soft_ticket_id TEXT NOT NULL,
+  soft_ticket_id INTEGER NOT NULL,
   data_json TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );

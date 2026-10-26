@@ -17,9 +17,25 @@ def ttl_cached(ttl_seconds: float = 2.0):
     def deco(fn):
         def wrapper(*args, **kwargs):
             now = time.monotonic()
-            # Key on function + id() of args (connections are per-request).
-            key = (fn.__name__, tuple(id(a) for a in args),
-                   tuple(sorted((k, id(v)) for k, v in kwargs.items())))
+            # Key on function + identity of args (connections are
+            # per-request). A connection keys on its database FILE,
+            # not id() alone (build 'x'): a closed connection's id()
+            # is recycled by the next connection, and within the TTL
+            # the cache then served one book's aggregates to another
+            # book in the same process — the compliance watch reached
+            # the Today ticker one book behind in the test harness.
+            # Same file + id() keeps the intended same-book sharing;
+            # a different file never collides.
+            def _key_of(a):
+                if isinstance(a, sqlite3.Connection):
+                    try:
+                        row = a.execute("PRAGMA database_list").fetchone()
+                        return ("db", row[2] if row else "", id(a))
+                    except Exception:
+                        return ("con", id(a))
+                return ("id", id(a))
+            key = (fn.__name__, tuple(_key_of(a) for a in args),
+                   tuple(sorted((k, _key_of(v)) for k, v in kwargs.items())))
             hit = _ttl_cache.get(key)
             if hit and now - hit[0] < ttl_seconds:
                 return hit[1]
@@ -45,9 +61,9 @@ import zipfile
 
 """FleetSheet engine core: money/date/row helpers, shared domain constants, options, desk PIN, yard-device auth, crew, lookups. No imports from sibling engine modules."""
 
-__all__ = ['_money', '_mf', '_ms', 'parse_date', '_parse', 'terms_days', '_row_get', 'require_clerk', 'list_crew', 'add_crew', 'drop_crew', '_reserve_counter', '_next_doc', '_set_quote_link', 'lookups', 'period_bounds', '_ensure_device_tables', 'get_option', 'set_option', '_pbkdf2', 'pin_is_set', 'get_pin_secret', 'set_pin', 'verify_pin', 'clear_pin', 'PIN_SECURITY_QUESTIONS',
+__all__ = ['_money', '_mf', '_ms', 'parse_date', '_parse', 'terms_days', '_row_get', 'require_clerk', 'list_crew', 'add_crew', 'drop_crew', '_reserve_counter', '_next_doc', 'peek_next_doc', '_set_quote_link', 'lookups', 'LOOKUP_ADDABLE_KINDS', 'add_lookup', 'CURATED_LOOKUP_KINDS', 'deleted_lookups', 'clear_deleted_lookup', 'delete_lookup', 'period_bounds', '_ensure_device_tables', 'get_option', 'set_option', 'MODULE_NAMES', 'COND_NOT_RECORDED', 'module_on', 'set_module', 'module_seen', 'stamp_module_seen', '_pbkdf2', 'pin_is_set', 'get_pin_secret', 'set_pin', 'verify_pin', 'clear_pin', 'PIN_SECURITY_QUESTIONS', 'format_phone_number',
     'set_pin_security', 'validate_pin_security', 'pin_security_is_set', 'pin_security_questions',
-    'verify_pin_security', '_new_device_token', 'issue_device', 'list_devices', 'get_device', 'device_check', 'touch_device', 'revoke_device', 'rotate_device', '_shift_months', '_pos_or_none', 'CENT', 'SCHEMA', 'SEED_PACKS', '_LOCAL', '_TMP', 'OPEN_STATUSES', 'BLOCKING', 'ALLOWED_NEXT', 'COND_RANK', 'CASH_METHODS', 'QUOTE_NEXT', 'PC_IN_CATS', 'PC_OUT_CATS', 'EXPORT_WHENS', 'EXPORT_HOWS', 'DEVICE_GRACE_HOURS', 'TRIGGER_LABELS', 'BASIS_LABELS', 'DUE_SOON_DAYS', 'BACKUP_KEEP', 'backup_folder', 'set_backup_dir', 'backup_status', 'get_backup_schedule', 'set_backup_schedule', 'list_backups', 'prune_backups', 'run_backup', 'validate_backup_file', 'validate_backup_archive', 'restore_backup', 'restore_backup_archive', 'read_backup_file', 'sweep_orphan_photos', 'PHOTO_MAX_BYTES', 'PHOTO_EXTS', 'photo_dir', 'photo_ext_for', 'validate_photo_blob', 'safe_photo_name', 'DOC_MAX_BYTES', 'DOC_KINDS', 'doc_dir', 'doc_ext_for', 'validate_doc_blob', 'safe_doc_name', 'save_unit_doc', 'list_unit_docs', 'get_unit_doc', 'read_unit_doc', 'delete_unit_doc', 'sweep_orphan_docs', 'list_company_phones', 'main_company_phone', 'add_company_phone', 'del_company_phone', 'set_main_company_phone']
+    'verify_pin_security', '_new_device_token', 'issue_device', 'list_devices', 'get_device', 'device_check', 'touch_device', 'revoke_device', 'rotate_device', '_shift_months', '_pos_or_none', 'CENT', 'SCHEMA', 'SEED_PACKS', '_LOCAL', '_TMP', 'OPEN_STATUSES', 'BLOCKING', 'ALLOWED_NEXT', 'COND_RANK', 'CASH_METHODS', 'QUOTE_NEXT', 'PC_IN_CATS', 'PC_OUT_CATS', 'EXPORT_WHENS', 'EXPORT_HOWS', 'DEVICE_GRACE_HOURS', 'TRIGGER_LABELS', 'BASIS_LABELS', 'DUE_SOON_DAYS', 'BACKUP_KEEP', 'backup_folder', 'set_backup_dir', 'backup_status', 'get_backup_schedule', 'set_backup_schedule', 'list_backups', 'prune_backups', 'run_backup', 'validate_backup_file', 'validate_backup_archive', 'restore_backup', 'restore_backup_archive', 'read_backup_file', 'sweep_orphan_photos', 'PHOTO_MAX_BYTES', 'PHOTO_EXTS', 'photo_dir', 'photo_ext_for', 'validate_photo_blob', 'safe_photo_name', 'DOC_MAX_BYTES', 'DOC_KINDS', 'doc_dir', 'doc_ext_for', 'validate_doc_blob', 'safe_doc_name', 'save_unit_doc', 'list_unit_docs', 'get_unit_doc', 'read_unit_doc', 'delete_unit_doc', 'sweep_orphan_docs', 'list_company_phones', 'main_company_phone', 'add_company_phone', 'del_company_phone', 'set_main_company_phone', 'validate_new_doc_no', 'peek_next_invoice_no', 'peek_next_ticket_no', 'key_of', 'num_of', 'doc_key', 'doc_num', 'DOC_TABLES', 'cust_key', 'cust_code', 'asset_key', 'asset_code', 'site_key', 'site_code', 'loc_key', 'loc_code', '_next_pay_key', 'pay_key_of', 'pay_id_of']
 
 def _money(v):
     try: return Decimal(str(v or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
@@ -87,13 +103,80 @@ def _parse(d: str | None) -> date | None:
         except ValueError:
             continue
     return None
+_PHONE_EXT_RE = re.compile(
+    r"^(.*?)[\s.\-]*(?:x|ext\.?|extension)\s*(\d{1,6})\s*$", re.IGNORECASE)
+
+
+def format_phone_number(value):
+    """The ONE phone formatter (Jason 2026-10-21, look-see batch 2):
+    every phone field app-wide stores and shows through here.
+
+    Pattern: +X (XXX) XXX-XXXX, with Jason's rules:
+    - 10 digits, no country prefix entered -> (XXX) XXX-XXXX
+      (no prefix is invented).
+    - 11 digits leading 1, or an explicit +1 -> +1 (XXX) XXX-XXXX.
+    - An explicit +country number: best-effort — the leading digits
+      are the country code and the last ten digits group as
+      (XXX) XXX-XXXX (e.g. +63 917 123 4567 -> +63 (917) 123-4567).
+    - An extension marked with x / ext / ext. / extension and digits
+      rides along as " x12345".
+    - Anything that does not parse to the pattern — international
+      free-form, letters, odd digit counts — returns EXACTLY as
+      typed, never mangled. The typist always wins: this only ever
+      runs at save/display time on the value as a whole, and it is
+      idempotent (a formatted number formats to itself).
+    """
+    raw = "" if value is None else str(value)
+    s = raw.strip()
+    if not s:
+        return raw
+    ext = ""
+    m = _PHONE_EXT_RE.match(s)
+    if m and m.group(1).strip():
+        s, ext = m.group(1).strip(), m.group(2)
+    has_plus = s.startswith("+")
+    digits = "".join(ch for ch in s if ch.isdigit())
+    # Letters anywhere in the main part (vanity numbers, notes like
+    # "call office") mean free-form: hands off.
+    if any(ch.isalpha() for ch in s):
+        return raw
+    out = None
+    if has_plus:
+        if len(digits) == 11 and digits.startswith("1"):
+            out = f"+1 ({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
+        elif 12 <= len(digits) <= 13:
+            cc, rest = digits[:-10], digits[-10:]
+            out = f"+{cc} ({rest[:3]}) {rest[3:6]}-{rest[6:]}"
+    else:
+        if len(digits) == 10:
+            out = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+        elif len(digits) == 11 and digits.startswith("1"):
+            out = f"+1 ({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
+    if out is None:
+        return raw
+    return out + (f" x{ext}" if ext else "")
+
+
 def terms_days(terms: str) -> int:
-    t = (terms or "").lower()
-    if "receipt" in t:
+    """Days until due for a payment-terms string (ITEM F). 'Net N' is
+    parsed by regex — Net 7/21/90 and the discount forms ('1/10 Net 30',
+    '2/10 Net 30' -> 30) compute from the Net number, never a substring
+    scan (the old scan read '1/10 Net 30' as 10). Immediate terms
+    (Due on Receipt, Cash in Advance, Payment in Advance, COD, Cash
+    with Order, Cash before Shipment) are 0. Anything else — EOM, MFI,
+    '50% Upfront', one-off custom strings with no Net number — falls
+    back to 30 days: EOM/MFI aging is approximated at 30, while the
+    printed terms text itself is always the verbatim stored string."""
+    t = (terms or "").strip().lower()
+    if not t:
+        return 30
+    if ("receipt" in t or "cash in advance" in t or "payment in advance" in t
+            or t == "cod" or "cash with order" in t
+            or "cash before shipment" in t):
         return 0
-    for n in (10, 15, 30, 45, 60):
-        if str(n) in t:
-            return n
+    m = re.search(r"net\s*(\d+)", t)
+    if m:
+        return int(m.group(1))
     return 30
 def _row_get(row, key, default=None):
     try:
@@ -117,25 +200,6 @@ def add_crew(con, name: str, position: str = "") -> None:
 def drop_crew(con, name: str) -> None:
     con.execute("DELETE FROM crew WHERE name=?", ((name or "").strip(),))
     con.commit()
-# --- Yards ------------------------------------------------------------------
-# Multiple yard locations (Jason 2026-10-06): name/street/city/county/state/zip.
-# Replaces the single yard_loc_id picker + "same as company address" toggle.
-def list_yards(con) -> list:
-    return [dict(r) for r in con.execute(
-        "SELECT yard_id, name, street, city, county, state, zip FROM yards ORDER BY yard_id")]
-def add_yard(con, name: str, street: str = "", city: str = "", county: str = "",
-             state: str = "", zip: str = "") -> None:
-    n = (name or "").strip()
-    if not n:
-        raise ValueError("Yard name is required.")
-    con.execute(
-        "INSERT INTO yards(name, street, city, county, state, zip) VALUES (?,?,?,?,?,?)",
-        (n[:60], (street or "").strip()[:80], (city or "").strip()[:40],
-         (county or "").strip()[:40], (state or "").strip()[:20], (zip or "").strip()[:12]))
-    con.commit()
-def drop_yard(con, yard_id: int) -> None:
-    con.execute("DELETE FROM yards WHERE yard_id=?", (int(yard_id or 0),))
-    con.commit()
 # --- Company phone list ---------------------------------------------------
 # One company, many numbers. The legacy company.phone column stays for old
 # reads (letterhead); the list below is what the Setup page shows and edits.
@@ -156,13 +220,13 @@ def main_company_phone(con):
     ).fetchone()
 def add_company_phone(con, label: str, number: str, make_main: bool = False) -> None:
     label = ((label or "").strip() or "Main")[:40]
-    number = ((number or "").strip())[:40]
+    number = format_phone_number((number or "").strip())[:40]
     if not number:
         raise ValueError("Phone number is required")
+    # Main is an explicit operator pick only (Batch 3 #5): adding a
+    # phone never promotes it — not by label, not by being first.
     if make_main:
         con.execute("UPDATE company_phones SET is_main=0")
-    elif con.execute("SELECT COUNT(*) FROM company_phones").fetchone()[0] == 0:
-        make_main = True  # first number added becomes the main one
     mx = con.execute("SELECT COALESCE(MAX(sort), -1) FROM company_phones").fetchone()[0]
     con.execute(
         "INSERT INTO company_phones (label, number, is_main, sort) VALUES (?, ?, ?, ?)",
@@ -176,14 +240,9 @@ def del_company_phone(con, phone_id: int) -> None:
     if not row:
         return
     con.execute("DELETE FROM company_phones WHERE phone_id=?", (phone_id,))
-    if row["is_main"]:
-        nxt = con.execute(
-            "SELECT phone_id FROM company_phones ORDER BY sort, phone_id LIMIT 1"
-        ).fetchone()
-        if nxt:
-            con.execute(
-                "UPDATE company_phones SET is_main=1 WHERE phone_id=?", (nxt["phone_id"],)
-            )
+    # No delete-promotes-next (Batch 3 #5): deleting the main number
+    # leaves no main picked until the operator picks one; reads fall
+    # back to the first listed number (main_company_phone).
     con.commit()
 def set_main_company_phone(con, phone_id: int) -> None:
     if not con.execute(
@@ -214,19 +273,382 @@ def _next_doc(con, col: str, prefix: str, table: str, idcol: str) -> str:
         did = f"{prefix}-{n:04d}"
         if not con.execute(f"SELECT 1 FROM {table} WHERE {idcol}=?", (did,)).fetchone():
             return did
+def peek_next_doc(con, col: str, prefix: str, table: str, idcol: str) -> str:
+    """What _next_doc would return, WITHOUT reserving: read the counter and
+    skip numbers already in the table, but write nothing. GET previews use
+    this so rendering a form never burns a sequence number; the real
+    reservation happens at save time via _next_doc. The counter column holds
+    the next number to hand out (see _reserve_counter)."""
+    row = con.execute(f"SELECT COALESCE({col}, 1001) FROM company WHERE id=1").fetchone()
+    n = int(row[0]) if row else 1001
+    while True:
+        did = f"{prefix}-{n:04d}"
+        if not con.execute(f"SELECT 1 FROM {table} WHERE {idcol}=?", (did,)).fetchone():
+            return did
+        n += 1
+def validate_new_doc_no(con, table: str, idcol: str, value, noun: str) -> str:
+    """Creation-time document number (Batch 3 #14): the operator's own
+    number, free text, used exactly as typed. It must be non-empty and
+    not already in use for that document type — a duplicate (or a blank)
+    refuses the save and writes nothing. Returns the number, stripped."""
+    v = (value or "").strip()
+    if not v:
+        raise ValueError(f"Type the {noun} number")
+    if con.execute(f"SELECT 1 FROM {table} WHERE {idcol}=?", (v,)).fetchone():
+        raise ValueError(f"{v} is already in use")
+    return v
+
+
+# ---------------------------------------------------------------------------
+# Number <-> key resolution (build 'v', Jason 2026-10-25: "No form number
+# is ever a key ID. Key ID's must exist for every table, always be unique,
+# and assigned by the engine"). Storage references run on the surrogate
+# keys; operators keep addressing everything by its display number or
+# code — URLs, forms, print. These helpers are the translation seam.
+# Permissive on the way in: an int key or a display value both resolve
+# to the key. Exact on the way out: a key resolves to its display value.
+# Blank or unknown resolves to None.
+
+_KEY_TABLES = {
+    "customers": "customer_id",
+    "assets": "asset_id",
+    "sites": "site_id",
+    "jurisdictions": "loc_id",
+    "compliance_packs": "pack_id",
+    "invoices": "invoice_no",
+    "tickets": "ticket_id",
+    "work_orders": "wo_id",
+    "quotes": "quote_no",
+    "credit_memos": "cm_no",
+    "change_orders": "co_no",
+    "sales": "sale_id",
+    "collections": "pay_id",
+    "doc_collections": "pay_id",
+    "petty_cash": "pc_id",
+}
+
+# Document kinds (the money layer's vocabulary) -> their tables. A sale
+# is addressed by its head row's number, so the row key IS the group key.
+DOC_TABLES = {
+    "invoice": "invoices",
+    "ticket": "tickets",
+    "wo": "work_orders",
+    "quote": "quotes",
+    "sale": "sales",
+    "credit": "credit_memos",
+    "change": "change_orders",
+}
+
+
+def key_of(con, table: str, value):
+    """Display value (or an existing surrogate key) -> surrogate key."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    col = _KEY_TABLES[table]
+    if isinstance(value, int):
+        r = con.execute(f"SELECT id FROM {table} WHERE id=?", (value,)).fetchone()
+        if r:
+            return int(r[0])
+    r = con.execute(f"SELECT id FROM {table} WHERE {col}=?", (value,)).fetchone()
+    return int(r[0]) if r else None
+
+
+def num_of(con, table: str, key):
+    """Surrogate key -> display value (number / code), or None."""
+    if key is None:
+        return None
+    col = _KEY_TABLES[table]
+    r = con.execute(f"SELECT {col} FROM {table} WHERE id=?", (key,)).fetchone()
+    return r[0] if r else None
+
+
+def doc_key(con, kind: str, ref):
+    """A money document's display reference -> its engine key."""
+    return key_of(con, DOC_TABLES[kind], ref)
+
+
+def doc_num(con, kind: str, key):
+    """A money document's engine key -> its display reference."""
+    return num_of(con, DOC_TABLES[kind], key)
+
+
+def cust_key(con, value):
+    return key_of(con, "customers", value)
+
+
+def cust_code(con, key):
+    return num_of(con, "customers", key)
+
+
+def asset_key(con, value):
+    return key_of(con, "assets", value)
+
+
+def asset_code(con, key):
+    return num_of(con, "assets", key)
+
+
+def site_key(con, value):
+    return key_of(con, "sites", value)
+
+
+def site_code(con, key):
+    return num_of(con, "sites", key)
+
+
+def loc_key(con, value):
+    return key_of(con, "jurisdictions", value)
+
+
+def loc_code(con, key):
+    return num_of(con, "jurisdictions", key)
+
+
+def _next_pay_key(con) -> int:
+    """Reserve the next key in the ONE pay-key space shared by the two
+    money ledgers (collections + doc_collections): one payment event is
+    one key wherever its rows live. The company counter holds the next
+    key to hand out (see _reserve_counter)."""
+    return _reserve_counter(con, "next_pay_key", 1)
+
+
+def pay_key_of(con, pay_no):
+    """A payment number -> its shared ledger key (either ledger)."""
+    if pay_no is None:
+        return None
+    if isinstance(pay_no, str):
+        pay_no = pay_no.strip()
+        if not pay_no:
+            return None
+    if isinstance(pay_no, int):
+        for tbl in ("collections", "doc_collections"):
+            r = con.execute(f"SELECT id FROM {tbl} WHERE id=?", (pay_no,)).fetchone()
+            if r:
+                return int(r[0])
+    for tbl in ("collections", "doc_collections"):
+        r = con.execute(f"SELECT id FROM {tbl} WHERE pay_id=?", (pay_no,)).fetchone()
+        if r:
+            return int(r[0])
+    return None
+
+
+def pay_id_of(con, pay_key):
+    """A shared ledger key -> its payment number (either ledger)."""
+    if pay_key is None:
+        return None
+    for tbl in ("collections", "doc_collections"):
+        r = con.execute(f"SELECT pay_id FROM {tbl} WHERE id=?", (pay_key,)).fetchone()
+        if r:
+            return r[0]
+    return None
+
+
+def peek_next_invoice_no(con) -> str:
+    """What next_invoice_id would hand out, WITHOUT reserving: read the
+    counter and skip numbers already in the table, but write nothing.
+    GET previews use this so rendering a form never burns a number."""
+    row = con.execute(
+        "SELECT invoice_prefix, COALESCE(next_invoice, 1001) FROM company WHERE id=1"
+    ).fetchone()
+    prefix = row[0] if row else "INV"
+    n = int(row[1]) if row else 1001
+    while True:
+        did = f"{prefix}-{n}"
+        if not con.execute("SELECT 1 FROM invoices WHERE invoice_no=?",
+                           (did,)).fetchone():
+            return did
+        n += 1
+
+
+def peek_next_ticket_no(con) -> str:
+    """What next_ticket_id would hand out, WITHOUT reserving (see
+    peek_next_invoice_no)."""
+    row = con.execute(
+        "SELECT COALESCE(next_ticket, 1001) FROM company WHERE id=1").fetchone()
+    n = int(row[0]) if row else 1001
+    while True:
+        did = f"T-{n}"
+        if not con.execute("SELECT 1 FROM tickets WHERE ticket_id=?",
+                           (did,)).fetchone():
+            return did
+        n += 1
+
+
 def _set_quote_link(con, table: str, idcol: str, row_id: str, quote_no: str, customer_id: str) -> None:
-    q = con.execute("SELECT customer_id, status FROM quotes WHERE quote_no=?", (quote_no,)).fetchone()
+    q = con.execute("SELECT id, customer_id, status FROM quotes WHERE quote_no=?", (quote_no,)).fetchone()
     if not q:
         raise ValueError("Unknown quote")
     if q["status"] == "Void":
         raise ValueError("Quote is void")
-    if q["customer_id"] != customer_id:
+    if q["customer_id"] != cust_key(con, customer_id):
         raise ValueError("Quote belongs to another customer")
-    con.execute(f"UPDATE {table} SET quote_no=? WHERE {idcol}=?", (quote_no, row_id))
+    # The child must belong to the same customer too (2026-10-15): the
+    # quote-side Against picker passes the quote's customer, so without
+    # this check one customer's WO could be linked to another's quote.
+    child = con.execute(f"SELECT customer_id FROM {table} WHERE {idcol}=?", (row_id,)).fetchone()
+    if not child:
+        raise ValueError("Unknown work order" if table == "work_orders" else "Unknown rental ticket")
+    if (child["customer_id"] or 0) != (cust_key(con, customer_id) or 0):
+        raise ValueError("Work order belongs to another customer"
+                         if table == "work_orders" else
+                         "Rental ticket belongs to another customer")
+    con.execute(f"UPDATE {table} SET quote_id=? WHERE {idcol}=?", (q["id"], row_id))
 def lookups(con, kind):
     return [r["value"] for r in con.execute(
         "SELECT value FROM lookups WHERE kind=? ORDER BY sort_order, value", (kind,)
     )]
+
+
+# Lookup kinds the global Other/-Add- dropdown rule (Issue 4) may extend.
+# Fixed-semantic lists stay out: rate_type (values drive billing math —
+# a custom rate type would silently bill as Day), status enums with CHECK
+# constraints (ticket_status, wo_status), and combo-backed lists.
+LOOKUP_ADDABLE_KINDS = ("cert_kind", "inv_cat", "inv_uom", "inv_item", "terms", "condition", "comp_doc", "designation")
+
+
+# The three Spec 7 curated kinds (Setup -> Billing panels): the only
+# kinds an operator can delete from the master list or restore to
+# factory (polish round Item 6, 2026-10-20).
+CURATED_LOOKUP_KINDS = ("terms", "inv_uom", "inv_item", "comp_doc")
+
+# Deletion tombstones (Item 6): seed_lookups runs on every init_db —
+# i.e. every request — and INSERT OR IGNOREs the factory packs, so a
+# plain DELETE would be silently resurrected by the next page load.
+# A deleted value is therefore also recorded in the book option
+# "lookups_deleted" (JSON {kind: [values]}); seed_lookups skips
+# tombstoned values. This is also what distinguishes "never
+# initialized" (no tombstones; seeds fill the list) from "emptied by
+# deletion" (tombstones present; seeds stay out). Re-adding a value
+# (add_lookup) or restoring its kind clears its tombstone.
+_DELETED_LOOKUPS_KEY = "lookups_deleted"
+
+
+def deleted_lookups(con, kind=None):
+    """Tombstoned (deleted-by-operator) lookup values. With `kind`,
+    returns that kind's list; without, the whole {kind: [values]} dict.
+    Absent/unreadable option -> empty."""
+    try:
+        raw = get_option(con, _DELETED_LOOKUPS_KEY, "") or ""
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    out = {}
+    for k, vals in data.items():
+        if isinstance(vals, list):
+            out[str(k)] = [str(v) for v in vals]
+    return out.get(kind, []) if kind else out
+
+
+def _save_deleted_lookups(con, data):
+    cleaned = {k: vals for k, vals in data.items() if vals}
+    set_option(con, _DELETED_LOOKUPS_KEY,
+               json.dumps(cleaned) if cleaned else "")
+
+
+def clear_deleted_lookup(con, kind, value=None):
+    """Clear tombstones: one value's, or (value=None) the kind's whole
+    set — the Restore factory lists path. Commits via set_option."""
+    data = deleted_lookups(con)
+    if kind not in data:
+        return
+    if value is None:
+        del data[kind]
+    else:
+        data[kind] = [v for v in data[kind] if v != value]
+    _save_deleted_lookups(con, data)
+
+
+def delete_lookup(con, kind, value):
+    """Delete one entry from a curated master list (Item 6). Removes
+    ONLY the lookups row and records a tombstone so the factory seed
+    never resurrects it; no record/document row is touched — stored
+    documents, invoices and customers keep their strings verbatim.
+    Returns True when a row was removed. Raises ValueError for kinds
+    outside the curated three or an empty value."""
+    value = (value or "").strip()
+    if kind not in CURATED_LOOKUP_KINDS:
+        raise ValueError("List cannot be deleted here")
+    if not value:
+        raise ValueError("Nothing to delete")
+    cur = con.execute(
+        "DELETE FROM lookups WHERE kind=? AND value=?", (kind, value))
+    data = deleted_lookups(con)
+    vals = data.get(kind, [])
+    if value not in vals:
+        vals.append(value)
+    data[kind] = vals
+    _save_deleted_lookups(con, data)
+    con.commit()
+    return cur.rowcount == 1
+
+
+def add_lookup(con, kind, value):
+    """Insert one option into a lookups list (the -Add- path). Returns True
+    when the option is new; False when it already existed. Raises ValueError
+    for kinds outside LOOKUP_ADDABLE_KINDS or empty values."""
+    value = (value or "").strip()
+    if kind not in LOOKUP_ADDABLE_KINDS:
+        raise ValueError("List cannot be extended here")
+    if not value:
+        raise ValueError("Type the new option first")
+    if len(value) > 60:
+        raise ValueError("New option exceeds 60 characters")
+    # Re-adding a previously deleted value is an explicit undelete:
+    # clear its tombstone or the next seed pass would keep it out and
+    # the row below would be the only copy fighting the tombstone.
+    if value in deleted_lookups(con, kind):
+        clear_deleted_lookup(con, kind, value)
+    nxt = con.execute(
+        "SELECT COALESCE(MAX(sort_order), -1) + 1 FROM lookups WHERE kind=?", (kind,)
+    ).fetchone()[0]
+    cur = con.execute(
+        "INSERT OR IGNORE INTO lookups(kind,value,sort_order) VALUES (?,?,?)",
+        (kind, value, nxt))
+    con.commit()
+    return cur.rowcount == 1
+
+# Global line-item row (2026-10-15): every line row carries a Type from
+# inv_cat and a Unit from inv_uom. Old lowercase quote kinds map over.
+# Global dropdown rule (Issue 4, 2026-10-15): any non-empty string is a
+# valid Type/Unit — picking Other and typing over it saves on that record.
+# A blank still falls back to the neutral Other/Each rather than bouncing
+# the save — the operator can fix it on the detail page.
+_LEGACY_LINE_KIND = {"item": "Item", "unit": "Rental", "labor": "Labor",
+                     "freight": "Freight", "other": "Other", "rental": "Rental",
+                     "service": "Labor", "transport": "Freight"}
+
+
+def clean_line_type(con, v) -> str:
+    v = (v or "").strip()
+    v = _LEGACY_LINE_KIND.get(v, v)
+    # The -Add- sentinel is never a value: without JS it can arrive as a
+    # bare form value; degrade to the neutral default, never store it.
+    if v == "__add__":
+        v = ""
+    return v if v else "Other"
+
+
+def clean_line_uom(con, v) -> str:
+    v = (v or "").strip()
+    if v == "__add__":
+        v = ""
+    return v if v else "Each"
+
+
+# A Rental line's Unit (inv_uom) drives the ticket's rate type: the
+# rental form and quote conversion share this map — one source.
+_UOM_TO_RATE_TYPE = {"Days": "Day", "Weeks": "Week",
+                     "Months": "Monthly", "Hours": "Hour"}
+
+
+def uom_to_rate_type(uom) -> str:
+    return _UOM_TO_RATE_TYPE.get((uom or "").strip(), "")
 def period_bounds(kind: str, today: date | None = None) -> tuple[date, date, str]:
     today = today or date.today()
     kind = (kind or "mtd").lower()
@@ -263,6 +685,44 @@ def set_option(con: sqlite3.Connection, key: str, value: str) -> None:
         (key, value or ""),
     )
     con.commit()
+
+# --- Shop-flow switches (Jason 2026-10-21) --------------------------------
+# "What your shop does" (Setup -> Administration): one option key per
+# module, read through module_on(). Never set = ON — the same defaulting
+# rule as the ticker categories — so no existing book changes until the
+# owner flips a switch. Switches hide surfaces only: never records,
+# never routes, never money math.
+MODULE_NAMES = ("rentals", "work_orders", "compliance", "quotes", "condition",
+                "billing")
+# The value written into a ticket's condition field when a gate is
+# bypassed (Proceed anyway, or the condition switch is off): the record
+# shows the decision, never a silent blank. Not a COND_RANK member, so
+# it can never be saved as a real condition.
+COND_NOT_RECORDED = "Not recorded"
+
+def module_on(con: sqlite3.Connection, name: str) -> bool:
+    """True unless the shop explicitly turned this module off."""
+    return get_option(con, f"module_{name}", "") != "0"
+
+def set_module(con: sqlite3.Connection, name: str, on: bool) -> None:
+    if name not in MODULE_NAMES:
+        raise ValueError(f"Unknown module {name}")
+    set_option(con, f"module_{name}", "1" if on else "0")
+
+def module_seen(con: sqlite3.Connection, name: str) -> str:
+    """ISO date the module's home page was last opened, or '' if never
+    (under this build — the discovery nudge baselines on first check)."""
+    return get_option(con, f"module_seen_{name}", "")
+
+def stamp_module_seen(con: sqlite3.Connection, name: str) -> None:
+    """Record today's date as the module's last-opened day. Writes at
+    most once per module per day."""
+    today = date.today().isoformat()
+    if module_seen(con, name) != today:
+        try:
+            set_option(con, f"module_seen_{name}", today)
+        except Exception:
+            pass
 def _pbkdf2(secret: str, salt: str) -> str:
     return hashlib.pbkdf2_hmac("sha256", secret.encode("utf-8"),
                                salt.encode("utf-8"), 200_000).hex()
@@ -280,7 +740,7 @@ def set_pin(con: sqlite3.Connection, pin: str) -> None:
     security questions are the recovery path."""
     pin = (pin or "").strip()
     if not (pin.isdigit() and 4 <= len(pin) <= 8):
-        raise ValueError("PIN must be 4-8 digits")
+        raise ValueError("The PIN must be 4 to 8 digits.")
     salt = secrets.token_hex(16)
     set_option(con, "pin_hash", f"{salt}${_pbkdf2(pin, salt)}")
 def verify_pin(con: sqlite3.Connection, pin: str) -> bool:
@@ -515,7 +975,11 @@ COND_RANK = {
     "Repair — major": 2,
     "Unusable": 4,
 }
-CASH_METHODS = ("ACH", "Check", "Wire", "Card", "Cash", "Petty cash")
+# Payment tenders. "Petty cash" is NOT a tender (Jason 2026-10-23,
+# petty-cash seal): the petty box is its own universe — no payment
+# may claim it as its source, and no route draws on it. Rows already
+# recorded with that method keep displaying their stored string.
+CASH_METHODS = ("ACH", "Check", "Wire", "Card", "Cash", "Venmo", "Bitcoin", "Traveler's Check", "Other")
 QUOTE_NEXT = {
     "Draft": ("Sent", "Void"),
     "Sent": ("Accepted", "Declined", "Expired", "Void"),
@@ -742,7 +1206,7 @@ def run_backup(con, clerk: str = "") -> Path:
     try:
         folder.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        raise ValueError(f"Cannot create backup folder {folder}: {e}") from e
+        raise ValueError(f"Cannot create backup folder: {folder}") from e
     if not folder.is_dir():
         raise ValueError(f"{folder} is not a folder")
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
@@ -1180,8 +1644,6 @@ _DOC_NAME_RE = re.compile(
     r"^doc-[0-9]{14,26}-[0-9a-f]{8}\.(pdf|png|jpe?g|webp|txt|csv)$")
 
 
-
-
 def doc_dir() -> Path:
     """Folder holding data-book documents; sits next to the live book file."""
     d = _live_db_path().parent / "docs"
@@ -1224,7 +1686,7 @@ def validate_doc_blob(blob: bytes, filename: str = "") -> tuple:
     ext = doc_ext_for(blob)
     if not ext:
         raise ValueError("Document must be a PDF, an image (JPG/PNG/WebP), "
-                         "or plain text — executables and archives are not accepted")
+                         "or plain text")
     # Prefer the upload's own extension for .csv (sniffed as text).
     up = (filename or "").lower()
     if ext == ".txt" and up.endswith(".csv"):
@@ -1257,12 +1719,19 @@ def save_unit_doc(con: sqlite3.Connection, asset_id: str, title: str,
     title = (title or "").strip()
     if not title:
         raise ValueError("Give the document a title")
-    if kind not in DOC_KINDS:
-        kind = "other"
+    # Global dropdown rule (Issue 4): any non-empty kind string is kept
+    # as-is — the Upload Certificate form submits cert kinds (e.g. "VAUT")
+    # through this path. Empty still defaults to "other". The -Add-
+    # sentinel is never a value.
+    kind = (kind or "").strip()
+    if kind == "__add__":
+        kind = ""
+    kind = kind or "other"
     unit = con.execute("SELECT asset_id FROM assets WHERE asset_id=?",
                        (asset_id,)).fetchone()
     if not unit:
         raise ValueError("Unknown unit")
+    akey = asset_key(con, asset_id)
     ext, mime = validate_doc_blob(blob, filename)
     stored = _new_doc_name(ext)
     d = doc_dir()
@@ -1277,7 +1746,7 @@ def save_unit_doc(con: sqlite3.Connection, asset_id: str, title: str,
         """INSERT INTO unit_docs
            (asset_id, title, kind, filename, stored, bytes, mime, clerk)
            VALUES (?,?,?,?,?,?,?,?)""",
-        (asset_id, title, kind, (filename or stored)[:120], stored,
+        (akey, title, kind, (filename or stored)[:120], stored,
          len(blob), mime, clerk or ""),
     )
     con.commit()
@@ -1286,7 +1755,16 @@ def save_unit_doc(con: sqlite3.Connection, asset_id: str, title: str,
 
 def save_job_attachment(con: sqlite3.Connection, ref_type: str, ref_id: str,
                           filename: str, blob: bytes, clerk: str = "") -> str:
-    """Save a catch-all job info attachment. Returns stored filename."""
+    """Save a catch-all job info attachment. Returns stored filename.
+
+    The stored name carries the document's DISPLAY number
+    (``<ref>_<number>_<timestamp>_<filename>``): numbers are permanent,
+    so the name keeps resolving after the build-'v' re-key — the
+    listers (print pack, Job Info popups) scan the docs folder by that
+    number prefix. The attachment event lands in the app's real Done
+    record (done_manual, via engine_today.add_done_manual) — the old
+    insert targeted a done_log table that never existed and its
+    failure was swallowed, so attachments used to leave no record."""
     from datetime import datetime
     import re
     safe = re.sub(r'[^a-zA-Z0-9._-]', '_', filename or "upload")[:80]
@@ -1300,12 +1778,21 @@ def save_job_attachment(con: sqlite3.Connection, ref_type: str, ref_id: str,
         stored = target.name
         n += 1
     target.write_bytes(blob)
-    # Log it
+    # Log it — in the real Done record.
     try:
-        con.execute(
-            "INSERT INTO done_log (done_at, what, ref_type, ref_id, clerk) VALUES (datetime('now'), ?, ?, ?, ?)",
-            (f"Attached {safe}", ref_type, ref_id, clerk or ""))
-        con.commit()
+        from engine_today import add_done_manual
+        _links = {
+            "ticket": f"/ticket/{ref_id}",
+            "wo": f"/summary/wo/{ref_id}",
+            "invoice": f"/invoice/{ref_id}",
+            "sale": f"/sale/{ref_id}",
+            "quote": f"/summary/quote/{ref_id}",
+            "change": f"/summary/change/{ref_id}",
+            "credit": f"/summary/credit/{ref_id}",
+            "pay": f"/summary/payment/{ref_id}",
+        }
+        add_done_manual(con, f"Attached {safe}",
+                        _links.get(ref_type, ""), clerk or "")
     except Exception:
         pass
     return stored
@@ -1316,8 +1803,13 @@ def list_unit_docs(con: sqlite3.Connection, asset_id: str) -> list:
         """SELECT doc_id, asset_id, title, kind, filename, stored, bytes,
                   mime, uploaded_at, clerk
            FROM unit_docs WHERE asset_id=? ORDER BY uploaded_at, doc_id""",
-        (asset_id,)).fetchall()
-    return [dict(r) for r in rows]
+        (asset_key(con, asset_id),)).fetchall()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["asset_id"] = asset_code(con, d["asset_id"])
+        out.append(d)
+    return out
 
 
 def get_unit_doc(con: sqlite3.Connection, doc_id: int) -> dict | None:
@@ -1325,7 +1817,11 @@ def get_unit_doc(con: sqlite3.Connection, doc_id: int) -> dict | None:
         """SELECT doc_id, asset_id, title, kind, filename, stored, bytes,
                   mime, uploaded_at, clerk
            FROM unit_docs WHERE doc_id=?""", (doc_id,)).fetchone()
-    return dict(r) if r else None
+    if not r:
+        return None
+    d = dict(r)
+    d["asset_id"] = asset_code(con, d["asset_id"])
+    return d
 
 
 def read_unit_doc(con: sqlite3.Connection, doc_id: int):
@@ -1387,3 +1883,5 @@ def sweep_orphan_docs(con: sqlite3.Connection) -> int:
         except OSError:
             pass
     return n
+
+

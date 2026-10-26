@@ -11,106 +11,15 @@ import html
 import json
 import logging
 import os
-import socket
 import subprocess
 import threading
 import time
-import hmac
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, quote_plus, unquote, urlparse
 
 import engine
 import printpack
-import exportpack
-
-CSS = """
-:root { --frame:#2B3542; --gold:#E8B923; --ink:#1a1a1a; --mute:#5C6B7A; --bg:#f8f9fa; --ok:#0f7a43; --bad:#b42318; }
-*{box-sizing:border-box} body{margin:0;font:15px/1.4 Calibri,Segoe UI,sans-serif;background:var(--bg);color:var(--ink)}
-header{background:var(--frame);color:#fff;padding:8px 16px;display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px}
-header .brand{font-size:14px;margin-right:4px}
-header nav.main{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center}
-header nav.main a{padding:4px 8px;border-radius:4px}
-header nav.main a.on{background:rgba(255,255,255,.16);font-weight:700}
-header nav.aside{margin-left:auto;display:flex;gap:6px;align-items:center}
-header a{color:#fff;text-decoration:none;font-size:13px;white-space:nowrap;position:relative}
-header .navhome,header .navback{border:1px solid rgba(255,255,255,.35);padding:2px 6px;border-radius:3px;font-size:11px;opacity:.8}
-header a[data-tip]::after,.tabs a[data-tip]::after{content:attr(data-tip);position:absolute;left:0;top:calc(100% + 8px);background:#1a1a1a;color:#fff;font-size:11px;line-height:1.35;font-weight:400;letter-spacing:0;padding:8px 10px;border-radius:4px;width:220px;white-space:normal;opacity:0;pointer-events:none;z-index:40;box-shadow:0 4px 12px rgba(0,0,0,.25);transition:opacity .12s linear}
-header a[data-tip]:hover::after,.tabs a[data-tip]:hover::after,
-button[data-tip]:hover::after,a.btn[data-tip]:hover::after{opacity:1;transition-delay:.7s}
-button[data-tip],a.btn[data-tip]{position:relative}
-button[data-tip]::after,a.btn[data-tip]::after{content:attr(data-tip);position:absolute;left:0;top:calc(100% + 8px);background:#1a1a1a;color:#fff;font-size:11px;line-height:1.35;font-weight:400;letter-spacing:0;padding:8px 10px;border-radius:4px;width:220px;white-space:normal;opacity:0;pointer-events:none;z-index:40;box-shadow:0 4px 12px rgba(0,0,0,.25);transition:opacity .12s linear}
-body.notips [data-tip]::after{display:none !important}
-main{max-width:1180px;margin:14px auto;padding:0 14px 40px}
-.actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:12px 0}
-.mark{position:fixed;bottom:8px;right:12px;font-size:11px;letter-spacing:.08em;color:#1B2A4A;opacity:.28;pointer-events:none;z-index:1}
-.tabs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px;padding-bottom:8px;border-bottom:1px solid #d0d5dd}
-.tabs a{display:inline-block;padding:5px 9px;border-radius:4px;background:#fff;border:1px solid #d0d5dd;color:var(--frame);text-decoration:none;font-size:13px;position:relative}
-.tabs a.on{background:var(--frame);color:#fff;border-color:var(--frame)}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:9px}
-.card{background:#fff;border:1px solid #d0d5dd;border-radius:6px;padding:11px}
-.card b{display:block;font-size:22px;color:var(--frame)}
-.card span{color:var(--mute);font-size:12px;text-transform:uppercase}
-form,table{background:#fff;border:1px solid #d0d5dd;border-radius:6px;padding:11px;width:100%}
-label{display:block;font-size:12px;color:var(--mute);margin:7px 0 3px}
-label:has(input[type=checkbox]){display:flex;align-items:center;gap:6px;font-size:14px;color:var(--ink,#222)}
-input,select{width:100%;padding:7px;border:1px solid #c5cdd6;border-radius:4px;font:inherit}
-input[type=checkbox]{width:auto;flex:0 0 auto}
-.row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
-button,.btn{background:var(--frame);color:#fff;border:0;padding:8px 13px;border-radius:4px;cursor:pointer;font:inherit;display:inline-block;text-decoration:none}
-.btn-gold{background:var(--gold);color:#2B3542;font-weight:700;border:0;padding:9px 16px;border-radius:6px;cursor:pointer;font:inherit;display:inline-block;text-decoration:none}
-.btn-gold:hover{background:#d4a51f}
-button.secondary{background:#fff;color:var(--frame);border:1px solid var(--frame)}
-button.danger{background:var(--bad)}
-.err{background:#fdecec;color:var(--bad);padding:10px;border-radius:6px;margin:12px 0}
-.ok{background:#e7f3ec;color:var(--ok);padding:10px;border-radius:6px;margin:12px 0}
-.backup-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:8px 12px;margin:0 0 16px;width:auto}
-.backup-bar .backup-msg{flex:1 1 260px;font-size:13px}
-.backup-bar input{width:140px;padding:6px 8px}
-.backup-bar button{padding:6px 12px;font-size:13px}
-table{border-collapse:collapse;padding:0}
-th,td{padding:8px 10px;border-bottom:1px solid #eee;text-align:left;font-size:13px}
-th{background:#e8eef4;color:var(--frame)}
-.fail{color:#8a5a00;font-weight:700} /* routine negative: amber, not red (2026-10-06) */
-.critical{color:var(--bad);font-weight:700} /* do-or-die only (2026-10-06) */
-.pass{color:var(--ok)}
-fieldset{border:1px solid #d0d5dd;border-radius:6px;background:#fff;padding:8px 11px 11px;margin:10px 0}fieldset legend{padding:0 6px;font-weight:700;color:var(--frame)}details{border:1px solid #d0d5dd;border-radius:8px;background:#fff;padding:10px 14px;margin:12px 0}details summary{cursor:pointer;color:var(--frame);padding:2px 0}h1{font-size:19px;color:var(--frame);margin:6px 0 10px}
-.hint{color:var(--mute);font-size:13px}
-.eyebrow{display:block;font-size:11px;letter-spacing:.08em;font-weight:700;color:var(--mute);margin-bottom:3px}
-.onboarding{border-left:4px solid var(--gold);margin-bottom:16px;display:grid;grid-template-columns:minmax(260px,1fr) minmax(260px,1fr);gap:18px;align-items:start}
-.onboarding h2{margin:0;color:var(--frame);font-size:20px}
-.setupsteps{display:grid;gap:7px}
-.setupstep{display:flex;gap:9px;align-items:center;padding:8px 10px;background:#f7f9fb;border-radius:6px}
-.setupstep a{color:var(--frame);font-weight:600;text-decoration:none}
-.setupstep.done{color:var(--ok)}
-.setupstep.done span:last-child{color:var(--mute);text-decoration:line-through}
-@media (max-width:700px){.onboarding{grid-template-columns:1fr}}
-@media (max-width:640px){
-  .row{grid-template-columns:1fr}
-  table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;white-space:nowrap}
-  .backup-bar input{width:100%}
-  header{gap:6px 10px;padding:8px 10px}
-  header nav.main{flex-wrap:nowrap;overflow-x:auto;max-width:100%;padding-bottom:4px}
-  header nav.aside{margin-left:0}
-  .mark{display:none}
-}
-/* Yard device UI: big touch targets, minimal chrome. */
-.yd{background:#f4f6f9;color:#1a1a1a;margin:0;font:17px/1.45 Calibri,Segoe UI,sans-serif}
-.yd header{background:#1B2A4A;color:#fff;padding:12px 16px;font-size:18px;font-weight:700}
-.yd main{max-width:640px;margin:0 auto;padding:12px 12px 48px}
-.yd .trow{display:block;background:#fff;border:1px solid #d0d5dd;border-radius:10px;
-  padding:16px;margin:10px 0;color:#1B2A4A;text-decoration:none;font-size:18px}
-.yd .trow small{display:block;color:#5C6B7A;font-size:14px}
-.yd button.big,.yd .bigbtn{display:block;width:100%;text-align:center;padding:18px;
-  font-size:20px;margin:10px 0;border-radius:10px}
-.yd form{background:#fff;border:1px solid #d0d5dd;border-radius:10px;padding:16px;margin:12px 0}
-.yd label{font-size:14px}
-.yd input,.yd select{font-size:18px;padding:12px}
-.yd .stat{background:#fff;border:1px solid #d0d5dd;border-radius:10px;padding:12px;margin:8px 0}
-.yd .qrbox{background:#fff;border:1px solid #d0d5dd;border-radius:10px;padding:20px;
-  text-align:center;margin:16px 0;word-break:break-all}
-.yd .code{font-family:monospace;font-size:14px;background:#eef1f5;padding:10px;border-radius:6px}
-"""
 
 import views_core
 import views_accounting
@@ -121,6 +30,12 @@ import post_core
 import post_assets
 import post_accounting
 import post_compliance
+try:
+    import updater_winsparkle
+except Exception:
+    # Older/partial installs without the updater module: the app runs
+    # exactly as before, update checks just aren't available.
+    updater_winsparkle = None
 from views_core import lan_urls, page
 
 GET_ROUTES = {
@@ -129,26 +44,33 @@ GET_ROUTES = {
     "/money": ("Billing", lambda self, con, q: self.view_money(con, q)),
     "/money/audit": ("All money — audit", lambda self, con, q: self.view_money_audit(con)),
     "/money/invoices/audit": ("Invoices audit", lambda self, con, q: self.view_money_invoices_audit(con)),
-    "/money/payments/audit": ("Payments audit", lambda self, con, q: self.view_money_payments_audit(con)),
+    "/money/payments/audit": ("Payments audit", lambda self, con, q: self.view_money_payments_audit(con, q or {})),
     "/money/credits/audit": ("Credit memos audit", lambda self, con, q: self.view_money_credits_audit(con)),
-    "/money/petty/audit": ("Petty cash audit", lambda self, con, q: self.view_money_petty_audit(con)),
-    "/tickets": ("Tickets", lambda self, con, q: self.view_tickets(con, q.get("flag"))),
+    "/petty/audit": ("Petty cash audit", lambda self, con, q: self.view_money_petty_audit(con)),
+    "/money/petty/audit": ("Petty cash audit", lambda self, con, q: self._redirect("/petty/audit")),
+    "/money/cash/audit": ("Cash audit", lambda self, con, q: self.view_money_cash_audit(con)),
+    "/tickets": ("Rental Tickets", lambda self, con, q: self.view_tickets(con, q.get("flag"))),
     "/ticket/new": ("Rentals", lambda self, con, q: self.view_new_ticket(con, q)),
     "/quotes": ("Quotes", lambda self, con, q: self._redirect("/ticket/new?kind=quote")),
     "/quote/new": ("New quote", lambda self, con, q: self._redirect("/ticket/new?kind=quote")),
     "/changes": ("Change orders", lambda self, con, q: self._redirect("/ticket/new?kind=change")),
-    "/invoice/new": ("New invoice", lambda self, con, q: self.view_money(con, {"tab": "invoice"})),
+    "/changes/all": ("Change orders — audit", lambda self, con, q: self.view_changes_all(con)),
+    "/wos/all": ("Work orders — audit", lambda self, con, q: self.view_wos_all(con)),
+    "/quotes/all": ("Quotes — audit", lambda self, con, q: self.view_quotes_all(con)),
+    "/sales/all": ("Sales — audit", lambda self, con, q: self.view_sales_all(con)),
+    "/invoice/new": ("New invoice", lambda self, con, q: self.view_invoice_new(con, q)),
     "/pay": ("Record payment", lambda self, con, q: self.view_money(con, {"tab": "pay"})),
     "/credit": ("Credit memo", lambda self, con, q: self.view_money(con, dict(q or {}, tab="credit"))),
-    "/petty": ("Petty cash", lambda self, con, q: self.view_money(con, {"tab": "petty"})),
-    "/setup": ("Setup", lambda self, con, q: self.view_setup(con, q)),
+    "/petty": ("Petty cash", lambda self, con, q: self.view_petty(con, q)),
+    "/cash": ("Cash", lambda self, con, q: self.view_money(con, {"tab": "cash"})),
+    "/setup": ("Company", lambda self, con, q: self.view_setup(con, q)),
     "/setup/vendors": ("Vendors", lambda self, con, q: self.view_setup_vendors(con, q)),
     "/setup/vendors/all": ("All vendors", lambda self, con, q: self.view_vendors_all(con)),
     "/setup/admin": ("Administration", lambda self, con, q: self.view_setup_admin(con, q)),
+    "/setup/folders": ("Choose folder", lambda self, con, q: self.view_folder_picker(con, q)),
     "/setup/billing": ("Billing setup", lambda self, con, q: self.view_setup_billing(con, q)),
     "/setup/health": ("Data Health", lambda self, con, q: self.view_health(con)),
     "/setup/devices": ("Devices", lambda self, con, q: self.view_devices(con, q)),
-    "/setup/complete": ("Setup Complete", lambda self, con, q: self.view_setup_complete(con)),
     "/setup/devices/show": ("Device QR", lambda self, con, q: self.view_device_show(
         con, q.get("token", ""), engine.get_option(con, "device_base_url", ""))),
     "/customers": ("Customers", lambda self, con, q: self.view_customers(con)),
@@ -158,6 +80,7 @@ GET_ROUTES = {
     "/assets": ("Assets", lambda self, con, q: self.view_assets(con)),
     "/assets/all": ("All assets", lambda self, con, q: self.view_assets_all(con)),
     "/unit/new": ("New unit", lambda self, con, q: self.view_unit_form(con, None)),
+    "/unit/paperwork": ("Paperwork", lambda self, con, q: self.view_unit_paperwork(con, q)),
     "/sites": ("Sites", lambda self, con, q: self.view_sites(con)),
     "/sites/all": ("Job sites — all", lambda self, con, q: self.view_sites_all(con)),
     "/site/new": ("New site", lambda self, con, q: self.view_site_form(con, None, q)),
@@ -165,11 +88,12 @@ GET_ROUTES = {
     "/wo/new": ("New work order", lambda self, con, q: self._redirect("/ticket/new?kind=workorder")),
     "/invoices": ("Invoices", lambda self, con, q: self.view_invoices(con)),
     "/export": ("Data", lambda self, con, q: self.view_export(con, q)),
+    "/reports/mixed": ("Mixed report", lambda self, con, q: self.view_report_mixed(con, q)),
     "/reports/weekly/money": ("Weekly money", lambda self, con, q: self.view_report_weekly_money(con)),
     "/reports/weekly/fleet": ("Fleet utilization", lambda self, con, q: self.view_report_weekly_fleet(con, q)),
     "/reports/weekly/flow": ("This week's flow", lambda self, con, q: self.view_report_weekly_flow(con, q)),
     "/backup": ("Backups", lambda self, con, q: self.view_backups(con)),
-    "/health": ("System Health", lambda self, con, q: self.view_health(con)),
+    "/health": ("System Health", lambda self, con, q: self.view_system_health(con)),
     "/billing": ("Billing", lambda self, con, q: self._redirect("/money")),
     "/rentals": ("Rentals", lambda self, con, q: self._redirect("/ticket/new")),
     "/sale": ("Sale", lambda self, con, q: self.view_sale(con, q)),
@@ -182,14 +106,16 @@ GET_ROUTES = {
     ),
     "/pin": ("Desk PIN", lambda self, con, q: self.view_pin(con, q)),
     "/done": ("Done log", lambda self, con, q: self.view_done(con, q)),
-    "/today/done/other": ("Other done", lambda self, con, q: self.view_done_other(con, q)),
+    "/today/done/other": ("Add Done", lambda self, con, q: self.view_done_other(con, q)),
+    "/ticker/panel": ("Filter", lambda self, con, q: self.view_ticker_panel(con, q)),
     "/setup/security": ("Security", lambda self, con, q: self.view_security(con, q)),
-    "/compliance": ("Compliance", lambda self, con, q: self.view_compliance(con)),
+    "/compliance": ("Compliance", lambda self, con, q: self.view_compliance(con, q)),
     "/compliance/all": ("All compliance", lambda self, con, q: self.view_compliance_all(con)),
 }
 
 # Prefix routes for /kind/<id>: prefix -> handler(self, con, item_id) -> (title, body_html)
 GET_PREFIX_ROUTES = [
+    ("/summary/", lambda self, con, rest: self.view_summary_route(con, rest)),
     ("/ticket/", lambda self, con, tid: (tid, self.view_ticket(con, tid))),
     ("/quote/", lambda self, con, qn: (qn, self.view_quote_form(con, qn))),
     ("/invoice/", lambda self, con, ino: (ino, self.view_invoice_lines(con, ino))),
@@ -197,6 +123,7 @@ GET_PREFIX_ROUTES = [
     ("/unit/", lambda self, con, aid: (aid, self.view_unit_form(con, aid))),
     ("/site/", lambda self, con, sid: self.view_site_route(con, sid)),
     ("/wo/", lambda self, con, wid: (wid, self.view_wo_form(con, wid))),
+    ("/sale/", lambda self, con, grp: (grp, self.view_sale_detail(con, grp))),
     ("/compack/", lambda self, con, pid: (pid, self.view_pack(con, pid))),
     ("/ucompliance/", lambda self, con, aid, q=None: (aid, self.view_unit_compliance(con, aid, (q or {}).get("focus")))),
 ]
@@ -210,21 +137,15 @@ GET_PREFIX_ROUTES = [
 # always exempt.
 _HTTPD = None
 
-# --- idle lifecycle -------------------------------------------------------
+# --- window-close lifecycle -----------------------------------------------
 # Any open FleetSheet page (desk, yard, PIN-lock, EULA) POSTs /heartbeat once
-# a minute. When every browser tab is closed the heartbeats stop, and the
-# watchdog below checkpoints the WAL and shuts the server down instead of
-# leaving it parked on the port. Closing the browser IS closing FleetSheet.
-LAST_SEEN = time.time()
-try:
-    IDLE_TIMEOUT = int(os.environ.get("FLEETSHEET_IDLE_SECS", "300"))
-except (TypeError, ValueError):
-    IDLE_TIMEOUT = 300
-
-
+# a minute. The server stops when the app window closes (see the app-window
+# watcher and close-grace paths below), when this console window is closed,
+# or on Ctrl+C. There is no server idle timeout: Jason removed it
+# 2026-10-20 as redundant with the desk idle lock, which stays.
 def _stop_server(server, reason):
     """Checkpoint the WAL, drop the pidfile, and shut the HTTP server down.
-    Shared by the idle watchdog and the app-window watcher."""
+    Shared by the app-window watcher and the close-grace paths."""
     try:
         _c = engine.connect()
         try:
@@ -242,15 +163,6 @@ def _stop_server(server, reason):
         server.shutdown()
     except Exception:
         pass
-
-
-def _idle_watchdog(server):
-    """Background: shut down after IDLE_TIMEOUT seconds with zero traffic."""
-    while True:
-        time.sleep(30)
-        if time.time() - LAST_SEEN > IDLE_TIMEOUT:
-            _stop_server(server, "idle — no open pages")
-            return
 
 
 # --- close-grace lifecycle ------------------------------------------------
@@ -321,14 +233,14 @@ views_core.yard_status_hook = _yard_active_count
 # exit counts as "the window was closed". A client that dies inside this
 # window never owned a window at all — it handed off to a pre-existing
 # browser on our profile, or the launch itself failed — so waiting on it
-# would be an instant false shutdown. The heartbeat backstop covers those.
+# would be an instant false shutdown.
 _WINDOW_GRACE_SECS = 3
 
 
 def _watch_browser_proc(server, proc):
     """Background: the app-mode window IS the session. When its browser
-    process exits, stop the server at once instead of waiting out the idle
-    timeout. Daemon thread; never blocks interpreter exit."""
+    process exits, stop the server at once. Daemon thread; never blocks
+    interpreter exit."""
     try:
         proc.wait(timeout=_WINDOW_GRACE_SECS)
         return  # died too fast to have owned a window — not a real close
@@ -358,7 +270,7 @@ def _watch_macos_profile(server):
         else:
             time.sleep(1)
     if target is None:
-        return  # never found it; the heartbeat backstop covers this
+        return  # never found it; nothing to watch
     while True:
         time.sleep(5)
         try:
@@ -367,7 +279,7 @@ def _watch_macos_profile(server):
         except Exception:
             return
     _begin_close_grace(server)
-# --- end idle lifecycle ---------------------------------------------------
+# --- end window-close lifecycle -------------------------------------------
 
 
 def _eula_required():
@@ -392,7 +304,6 @@ def _eula_text():
 
 
 # --- end consumer license ---------------------------------------------------
-
 
 
 # --- build version -----------------------------------------------------------
@@ -428,7 +339,7 @@ class Handler(views_accounting.AccountingViews,
         return (
             "<div class='card' style='max-width:720px;margin:24px auto'>"
             "<h2 style='margin-top:0'>License agreement</h2>"
-            "<p class='mute'>Please read and accept to use FleetSheet.</p>"
+            "<p class='mute'>Read the agreement below. Accepting it is required to use FleetSheet.</p>"
             f"<pre style='white-space:pre-wrap;max-height:50vh;overflow:auto;"
             f"background:#f4f6f9;padding:12px;border:1px solid #d5dbe3'>{t}</pre>"
             "<form method='post' action='/eula'>"
@@ -452,7 +363,7 @@ class Handler(views_accounting.AccountingViews,
             finally:
                 con.close()
             dest = "/welcome" if needs_pin else "/"
-            self._redirect(dest + "?msg=" + quote_plus("License accepted — welcome to FleetSheet"))
+            self._redirect(dest + "?msg=" + quote_plus("License accepted."))
         else:
             self._send(page(
                 "License agreement",
@@ -467,18 +378,334 @@ class Handler(views_accounting.AccountingViews,
     def _safe_failure(self, action, path):
         """Log the technical failure while giving the customer a stable recovery message."""
         logging.exception("FleetSheet %s failure at %s", action, path)
-        return "FleetSheet could not complete that action. Nothing was intentionally changed. Please try again; if it continues, check the server log."
+        return "FleetSheet could not complete that action. Nothing was changed."
+
+    # Main GET route table: first match wins, in original chain order.
+    _GET_DISPATCH = [
+        ("exact", '/eula', "_get_eula"),
+        ("exact", '/welcome', "_get_welcome"),
+        ("exact", '/pin/forgot', "_get_pin_forgot"),
+        ("exact", '/pin/lock', "_get_pin_lock"),
+        ("exact", '/setup/options', "_get_setup_options"),
+        ("exact", '/money/all', "_get_money_all"),
+        ("get_routes", None, "_get_tab_route"),
+        ("exact", '/d', "_get_yard_home"),
+        ("prefix", '/d/ticket/', "_get_yard_ticket"),
+        ("exact", '/d/forget', "_get_yard_forget"),
+        ("prefix", '/d/', "_get_yard_device"),
+        ("prefix", '/photo/', "_get_photo"),
+        ("prefix", '/doc/', "_get_doc"),
+        ("prefix", '/invoicedoc/', "_get_invoicedoc"),
+        ("any_prefix", None, "_get_prefix_route"),
+        ("exact", '/phone.html', "_get_phone_html"),
+        ("exact", '/phone.url', "_get_phone_url"),
+        ("exact", '/logo.jpg', "_get_logo_jpg"),
+        ("prefix", '/print/', "_get_print"),
+        ("exact", '/done/dump', "_get_done_dump"),
+        ("exact", '/export/run', "_get_export_run"),
+        ("exact", '/backup/download', "_get_backup_download"),
+        ("exact", '/export/custom/run', "_get_export_custom_run"),
+        ("prefix", '/export/custom/', "_get_export_custom"),
+        ("prefix", '/export/report/', "_get_export_report"),
+        ("prefix", '/export/saved/', "_get_export_saved"),
+        ("prefix", '/export/', "_get_export"),
+        ("fallback", None, "_get_missing"),
+    ]
+
+
+    def _dispatch_get(self, con, q, flash, name, path):
+        for kind, pattern, meth in self._GET_DISPATCH:
+            if kind == "exact" and path != pattern:
+                continue
+            if kind == "prefix" and not path.startswith(pattern):
+                continue
+            if kind == "get_routes" and path not in GET_ROUTES:
+                continue
+            if kind == "any_prefix" and not any(
+                    path.startswith(p) for p, _ in GET_PREFIX_ROUTES):
+                continue
+            getattr(self, meth)(con, q, flash, name, path)
+            return
+
+    def _get_eula(self, con, q, flash, name, path):
+        self._send(page("License agreement", self._render_eula(), name, path))
+
+    def _get_welcome(self, con, q, flash, name, path):
+        if not engine.pin_is_set(con):
+            self._send(page("Welcome", self.view_welcome(con, q), name, path))
+        else:
+            self._redirect("/")
+        return
+
+    def _get_pin_forgot(self, con, q, flash, name, path):
+        self._send(page("Reset PIN", flash + self.view_pin_forgot(con, q), name, path))
+
+    def _get_pin_lock(self, con, q, flash, name, path):
+        # Idle lock (Jason 2026-10-15): clear the PIN session and send
+        # the browser to /pin. Reuses the PIN gate — no second auth.
+        # The desk JS only navigates here after inactivity, and never
+        # from auth/onboarding pages.
+        nxt = q.get("next") or "/invoices"
+        if not nxt.startswith("/") or nxt.startswith("//"):
+            nxt = "/invoices"
+        self._redirect("/pin?next=" + quote_plus(nxt),
+                       cookie=f"{self.PIN_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+
+    def _get_setup_options(self, con, q, flash, name, path):
+        self._redirect("/setup/devices")
+        return
+
+    def _get_money_all(self, con, q, flash, name, path):
+        self._redirect("/money")
+        return
+
+    def _get_tab_route(self, con, q, flash, name, path):
+        title, view_fn = GET_ROUTES[path]
+        # The one ticker stands on Today only (Jason 2026-10-26,
+        # build 'x'): no other page is fed a strip. Today is the
+        # special page — the one to work from — and its pool
+        # captures every alert family in the build. (Build 'w' had
+        # already taken the strip off the Invoices tab; 'x' retires
+        # the Billing and Reports feeds and the Assets page's own
+        # ticker outright: some pages having a ticker and some not
+        # broke the universality rules.)
+        alerts = None
+        alert_total = None
+        if path == "/":
+            try:
+                alerts, alert_total = engine.alerts_for(con, "dash")
+            except Exception:
+                # Never break the page over the news strip — but say so
+                # in the server log instead of swallowing it silently.
+                logging.getLogger("fleetsheet.alerts").exception(
+                    "alert engine failed for %s", path)
+                alerts = None
+        top_items = None
+        if path == "/":
+            try:
+                top_items = engine.top_of_day(con, 1)
+                # The strip's Snooze steppers use the standard snooze
+                # (2026-10-17, Jason): one default everywhere —
+                # the same ack_snooze_minutes the steppers open
+                # at and teach. No bespoke defaults. Laptop-pass fix
+                # round (2026-10-20): every shown alert carries a
+                # stepper now, so the standard is stamped onto the
+                # alert pool too, not just the hero.
+                try:
+                    std_minutes = int(engine.get_option(
+                        con, "ack_snooze_minutes", "30") or 30)
+                except (TypeError, ValueError):
+                    std_minutes = 30
+                for it in (top_items or []):
+                    it["snooze_minutes"] = std_minutes
+            except Exception:
+                logging.getLogger("fleetsheet.alerts").exception(
+                    "top-of-day failed for dashboard strip")
+                top_items = None
+        if alerts:
+            # Same standard for the alert pool on the Today strip
+            # (laptop-pass fix round): every row carries a stepper.
+            try:
+                _std = int(engine.get_option(
+                    con, "ack_snooze_minutes", "30") or 30)
+            except (TypeError, ValueError):
+                _std = 30
+            for it in alerts:
+                if isinstance(it, dict):
+                    it.setdefault("snooze_minutes", _std)
+        try:
+            ticker_cats = engine.get_ticker_cats(con)
+        except Exception:
+            ticker_cats = None
+        try:
+            mods = {n: engine.module_on(con, n) for n in engine.MODULE_NAMES}
+        except Exception:
+            mods = None
+        body = view_fn(self, con, q)
+        if body is None:
+            # The view already sent its response (e.g. a redirect-only
+            # route like /quotes -> /ticket/new?kind=quote). Sending
+            # anything more would put a second response on the same
+            # keep-alive connection and poison it — and the old code
+            # crashed here with TypeError: str + NoneType, which the
+            # do_GET handler then answered with a second redirect.
+            return
+        if (q or {}).get("frag") == "1":
+            # Batch 3 #7: the in-page View box fetches the list WITHOUT
+            # the page shell — no app header/nav, no news strip, no
+            # footer, no nested audit popup. base target=_top makes
+            # rows/forms inside the fragment navigate the main window,
+            # never spawn a window or drill down inside the box.
+            doc = ("<!doctype html><html><head><meta charset=utf-8>"
+                   f"<title>{html.escape(title)}</title>"
+                   f"<style>{views_core.CSS}</style>"
+                   f"{views_core._text_size_style()}"
+                   # Popup print (Jason 2026-10-24): inside a fragment,
+                   # only the filter box is chrome — drawer form fields
+                   # print, filled or blank, so the page is writable.
+                   "<style>@media print{#auditq{display:none!important}}</style>"
+                   "<base target=\"_top\"></head>"
+                   f"<body class=\"{views_core._body_classes()}\">"
+                   f"<main style=\"padding:12px\">{views_core.print_head(name, title)}{body}</main>"
+                   "</body></html>")
+            self._send(doc)
+            return
+        self._send(page(title, flash + body, name, path,
+                        alerts=alerts, top_items=top_items,
+                        alert_total=alert_total, cats=ticker_cats, mods=mods))
+
+    def _get_yard_home(self, con, q, flash, name, path):
+        dev, reason = self._device(con)
+        if dev:
+            self._send(self.view_device_home(con, dev))
+        else:
+            self._send(self._device_denied(reason), 403)
+
+    def _get_yard_ticket(self, con, q, flash, name, path):
+        dev, reason = self._device(con)
+        if dev:
+            tid = path[len("/d/ticket/"):]
+            self._send(self.view_device_ticket(con, dev, tid, flash))
+        else:
+            self._send(self._device_denied(reason), 403)
+
+    def _get_yard_forget(self, con, q, flash, name, path):
+        self._redirect("/?msg=" + quote_plus("Yard device signed out"),
+                       cookie=f"{self.DEVICE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+
+    def _get_yard_device(self, con, q, flash, name, path):
+        token = path[len("/d/"):].strip()
+        ok, reason, dev = engine.device_check(con, token)
+        if ok:
+            engine.touch_device(con, token)
+            self._redirect("/d", cookie=f"{self.DEVICE_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000")
+        else:
+            self._send(self._device_denied(reason), 403)
+
+    def _get_photo(self, con, q, flash, name, path):
+        parts = path.split("/")
+        got = None
+        if len(parts) == 4:
+            got = engine.read_ticket_photo(con, unquote(parts[2]), parts[3])
+        if got:
+            blob, ctype = got
+            self._send_bytes(blob, ctype)
+        else:
+            self._redirect("/?err=" + quote_plus("Photo not found"))
+
+    def _get_doc(self, con, q, flash, name, path):
+        parts = path.split("/")
+        got = None
+        if len(parts) == 3:
+            try:
+                got = engine.read_unit_doc(con, int(parts[2]))
+            except (TypeError, ValueError):
+                got = None
+        if got:
+            row, blob = got
+            self._send_bytes(blob, row["mime"] or "application/octet-stream")
+        else:
+            self._redirect("/?err=" + quote_plus("Document not found"))
+
+    def _get_invoicedoc(self, con, q, flash, name, path):
+        parts = path.split("/")
+        got = None
+        if len(parts) == 4:
+            try:
+                got = engine.read_invoice_doc(con, unquote(parts[2]), parts[3])
+            except (TypeError, ValueError):
+                got = None
+        if got:
+            row, blob = got
+            self._send_bytes(blob, row["mime"] or "application/octet-stream")
+        else:
+            self._redirect("/?err=" + quote_plus("Paperwork not found"))
+
+    def _get_prefix_route(self, con, q, flash, name, path):
+        prefix, handler = next(pair for pair in GET_PREFIX_ROUTES if path.startswith(pair[0]))
+        item_id = path[len(prefix):]
+        try:
+            title, body = handler(self, con, item_id, q)
+        except TypeError:
+            title, body = handler(self, con, item_id)
+        self._send(page(title, flash + body, name, path))
+
+    def _get_phone_html(self, con, q, flash, name, path):
+        urls = lan_urls()
+        target = urls[0] if urls else "http://127.0.0.1:8765"
+        doc = (
+            "<!doctype html><html><head><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width,initial-scale=1'>"
+            "<title>Open FleetSheet</title>"
+            "<style>body{font:18px/1.4 Calibri,Segoe UI,sans-serif;margin:0;padding:32px 20px;"
+            "background:#f4f6f9;color:#1a1a1a;text-align:center}"
+            "a.big{display:block;background:#1B2A4A;color:#fff;text-decoration:none;"
+            "padding:18px 16px;border-radius:8px;font-size:20px;margin:24px 0}"
+            "p{color:#5C6B7A;font-size:14px}</style></head><body>"
+            "<p>Yard book on the shop Wi-Fi</p>"
+            f"<a class=big href='{html.escape(target)}'>Open FleetSheet</a>"
+            "<p>Same Wi-Fi as the desk PC.</p>"
+            "</body></html>"
+        )
+        # An open launcher page counts as "FleetSheet is open" too.
+        doc = doc.replace("</body></html>",
+                          f"<script>window.FS_IDLE_MINS={views_core.IDLE_MINS};window.FS_LOCK_MINS={views_core.LOCK_MINS};</script>"
+                          + views_core.HEARTBEAT_JS + "</body></html>", 1)
+        self._send_bytes(doc.encode("utf-8"), "text/html; charset=utf-8", "FleetSheet-phone.html")
+
+    def _get_phone_url(self, con, q, flash, name, path):
+        urls = lan_urls()
+        target = urls[0] if urls else "http://127.0.0.1:8765"
+        body = f"[InternetShortcut]\r\nURL={target}\r\n"
+        self._send_bytes(body.encode("ascii"), "application/internet-shortcut", "FleetSheet.url")
+
+    def _get_logo_jpg(self, con, q, flash, name, path):
+        self._send_bytes(printpack.LOGO_BYTES, "image/jpeg")
+
+    def _get_print(self, con, q, flash, name, path):
+        self._handle_print(con, path, q)
+
+    def _get_done_dump(self, con, q, flash, name, path):
+        self._handle_done_dump(con, q)
+
+    def _get_export_run(self, con, q, flash, name, path):
+        self._handle_export_run(con, q)
+
+    def _get_backup_download(self, con, q, flash, name, path):
+        blob = engine.read_backup_file(con, q.get("f") or "")
+        ctype = ("application/zip" if str(q.get("f") or "").lower().endswith(".zip")
+                 else "application/x-sqlite3")
+        self._send_bytes(blob, ctype, q.get("f"))
+
+    def _get_export_custom_run(self, con, q, flash, name, path):
+        self._handle_custom_run(con, None, q)
+
+    def _get_export_custom(self, con, q, flash, name, path):
+        self._handle_custom_run(con, path.rsplit("/", 1)[-1], q)
+
+    def _get_export_report(self, con, q, flash, name, path):
+        self._handle_report_file(con, path.rsplit("/", 1)[-1], q)
+
+    def _get_export_saved(self, con, q, flash, name, path):
+        self._handle_export_saved_run(con, path.rsplit("/", 1)[-1])
+
+    def _get_export(self, con, q, flash, name, path):
+        self._handle_export(con, path)
+
+    def _get_missing(self, con, q, flash, name, path):
+        self._send(page("Missing", "<p>No such page.</p>", name, path), 404)
 
     def do_GET(self):
-        # Any traffic means somebody's there — heartbeat or not.
-        global LAST_SEEN
-        LAST_SEEN = time.time()
         u = urlparse(self.path)
         path, q = u.path, {k: v[0] for k, v in parse_qs(u.query).items()}
         if path == "/favicon.ico":
             # Brand the app-mode window's taskbar/dock icon with the
             # FleetSheet mark instead of the browser's globe. Exempt from
             # every gate: it's just the logo, no DB needed.
+            # Termination rule (spinner fix 2026-10-13): every response
+            # sends Content-Length and returns exactly once. This block
+            # once fell through and sent a second Missing-page response
+            # on the same keep-alive connection, poisoning it.
             try:
                 import base64
                 import logo_data
@@ -528,7 +755,15 @@ class Handler(views_accounting.AccountingViews,
             return
         if path == "/company-logo":
             # Company logo for the header brand — uploaded on Setup.
-            # 404 when unset; the header img hides itself via onerror.
+            # No user logo set: serve the FleetSheet logo (logo_data)
+            # so the header img always resolves and the mark gets seen
+            # when the user hasn't uploaded their own. The old
+            # 404-without-Content-Length hung the img request forever
+            # and kept the tab spinner going on every page.
+            # Setup's "Current logo" display is gated on a user-set
+            # logo, so the FleetSheet default never shows there.
+            # A terminated 404 is returned only if even the logo
+            # module fails to load.
             try:
                 import base64
                 c2 = engine.connect()
@@ -537,13 +772,20 @@ class Handler(views_accounting.AccountingViews,
                     mime = engine.get_option(c2, "company_logo_mime", "image/png")
                 finally:
                     c2.close()
-                if not raw_b64:
-                    raise ValueError("no logo set")
-                self._send_bytes(base64.b64decode(raw_b64), mime or "image/png")
+                if raw_b64:
+                    self._send_bytes(base64.b64decode(raw_b64), mime or "image/png")
+                else:
+                    import logo_data
+                    self._send_bytes(
+                        base64.b64decode("".join(logo_data.LOGO_JPEG)),
+                        "image/jpeg")
             except Exception:
-                self.send_response(404)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
+                try:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                except Exception:
+                    pass
             return
         con = engine.connect()
         try:
@@ -556,6 +798,9 @@ class Handler(views_accounting.AccountingViews,
                 views_core.TIPS_ON = True
             _ts = engine.get_option(con, "ui_text_size", "standard")
             views_core.TEXT_SIZE = _ts if _ts in ("standard", "large", "xlarge") else "standard"
+            # Desk idle lock: 0 when no PIN is set (nothing to lock).
+            views_core.LOCK_MINS = (0 if not engine.pin_is_set(con)
+                                    else views_core.desk_lock_mins(con))
             msg = q.get("msg", "")
             err = q.get("err", "")
             flash = (f'<div class="ok">{html.escape(msg)}</div>' if msg else "") + (
@@ -590,193 +835,7 @@ class Handler(views_accounting.AccountingViews,
             # Desk PIN gate for the money pages (yard routes are never gated).
             if not self._pin_gate(con, path):
                 return
-            if path == "/eula":
-                self._send(page("License agreement", self._render_eula(), name, path))
-            elif path == "/welcome":
-                # First-run onboarding: PIN setup right after the EULA.
-                # Yard routes and the PIN setup POST are exempt from the gate below.
-                if not engine.pin_is_set(con):
-                    self._send(page("Welcome", self.view_welcome(con, q), name, path))
-                else:
-                    self._redirect("/")
-                return
-            elif path == "/pin/forgot":
-                self._send(page("Reset PIN", flash + self.view_pin_forgot(con, q), name, path))
-            elif path == "/setup/options":
-                # Options merged into Devices — old links land there.
-                self._redirect("/setup/devices")
-                return
-            elif path == "/money/all":
-                # Old money hub folds into the new four-tab Money page.
-                self._redirect("/money")
-                return
-            elif path in GET_ROUTES:
-                title, view_fn = GET_ROUTES[path]
-                # Per-tab news strip on the tab landing pages.
-                strip_paths = {"/": "dash", "/money": "acct", "/reports": "reports"}
-                alerts = None
-                alert_total = None
-                if path in strip_paths:
-                    try:
-                        alerts, alert_total = engine.alerts_for(con, strip_paths[path])
-                    except Exception:
-                        # Never break the page over the news strip — but say so
-                        # in the server log instead of swallowing it silently.
-                        logging.getLogger("fleetsheet.alerts").exception(
-                            "alert engine failed for %s", strip_paths[path])
-                        alerts = None
-                top_items = None
-                if path == "/":
-                    try:
-                        top_items = engine.top_of_day(con, 3)
-                    except Exception:
-                        logging.getLogger("fleetsheet.alerts").exception(
-                            "top-of-day failed for dashboard strip")
-                        top_items = None
-                try:
-                    ticker_cats = engine.get_ticker_cats(con)
-                except Exception:
-                    ticker_cats = None
-                body = view_fn(self, con, q)
-                if body is None:
-                    # Redirect-alias routes (/quotes, /changes, /units, ...)
-                    # answer the request themselves via _redirect and return
-                    # None — there is no page to build. Without this guard the
-                    # concatenation below raised a TypeError that the error
-                    # handler logged as a page failure on every alias hit,
-                    # crying wolf in the logs. (2026-10-08)
-                    return
-                self._send(page(title, flash + body, name, path,
-                                alerts=alerts, top_items=top_items,
-                                alert_total=alert_total, cats=ticker_cats))
-            elif path == "/d":
-                # Yard device home — needs the device cookie from a QR scan.
-                dev, reason = self._device(con)
-                if dev:
-                    self._send(self.view_device_home(con, dev))
-                else:
-                    self._send(self._device_denied(reason), 403)
-            elif path.startswith("/d/ticket/"):
-                dev, reason = self._device(con)
-                if dev:
-                    tid = path[len("/d/ticket/"):]
-                    self._send(self.view_device_ticket(con, dev, tid, flash))
-                else:
-                    self._send(self._device_denied(reason), 403)
-            elif path == "/d/forget":
-                # Drop the device cookie (e.g. desk user who opened a QR link).
-                self._redirect("/?msg=" + quote_plus("Yard device signed out"),
-                               cookie=f"{self.DEVICE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
-            elif path.startswith("/d/"):
-                # Claim a device code: /d/<token> from the QR, then a cookie.
-                token = path[len("/d/"):].strip()
-                ok, reason, dev = engine.device_check(con, token)
-                if ok:
-                    engine.touch_device(con, token)
-                    self._redirect("/d", cookie=f"{self.DEVICE_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000")
-                else:
-                    self._send(self._device_denied(reason), 403)
-            elif path.startswith("/photo/"):
-                # Serve a ticket condition photo: /photo/<ticket_id>/out|in
-                parts = path.split("/")
-                got = None
-                if len(parts) == 4:
-                    got = engine.read_ticket_photo(con, unquote(parts[2]), parts[3])
-                if got:
-                    blob, ctype = got
-                    self._send_bytes(blob, ctype)
-                else:
-                    self._redirect("/?err=" + quote_plus("Photo not found"))
-            elif path.startswith("/doc/"):
-                # Serve a data-book document: /doc/<doc_id>
-                parts = path.split("/")
-                got = None
-                if len(parts) == 3:
-                    try:
-                        got = engine.read_unit_doc(con, int(parts[2]))
-                    except (TypeError, ValueError):
-                        got = None
-                if got:
-                    row, blob = got
-                    self._send_bytes(blob, row["mime"] or "application/octet-stream")
-                else:
-                    self._redirect("/?err=" + quote_plus("Document not found"))
-            elif path.startswith("/invoicedoc/"):
-                # Serve attached invoice paperwork: /invoicedoc/<invoice_no>/<kind>
-                parts = path.split("/")
-                got = None
-                if len(parts) == 4:
-                    try:
-                        got = engine.read_invoice_doc(con, unquote(parts[2]), parts[3])
-                    except (TypeError, ValueError):
-                        got = None
-                if got:
-                    row, blob = got
-                    self._send_bytes(blob, row["mime"] or "application/octet-stream")
-                else:
-                    self._redirect("/?err=" + quote_plus("Paperwork not found"))
-            elif any(path.startswith(prefix) for prefix, _ in GET_PREFIX_ROUTES):
-                prefix, handler = next(pair for pair in GET_PREFIX_ROUTES if path.startswith(pair[0]))
-                item_id = path[len(prefix):]
-                try:
-                    title, body = handler(self, con, item_id, q)
-                except TypeError:
-                    title, body = handler(self, con, item_id)
-                self._send(page(title, flash + body, name, path))
-            elif path == "/phone.html":
-                urls = lan_urls()
-                target = urls[0] if urls else "http://127.0.0.1:8765"
-                doc = (
-                    "<!doctype html><html><head><meta charset=utf-8>"
-                    "<meta name=viewport content='width=device-width,initial-scale=1'>"
-                    "<title>Open FleetSheet</title>"
-                    "<style>body{font:18px/1.4 Calibri,Segoe UI,sans-serif;margin:0;padding:32px 20px;"
-                    "background:#f4f6f9;color:#1a1a1a;text-align:center}"
-                    "a.big{display:block;background:#1B2A4A;color:#fff;text-decoration:none;"
-                    "padding:18px 16px;border-radius:8px;font-size:20px;margin:24px 0}"
-                    "p{color:#5C6B7A;font-size:14px}</style></head><body>"
-                    "<p>Yard book on the shop Wi-Fi</p>"
-                    f"<a class=big href='{html.escape(target)}'>Open FleetSheet</a>"
-                    "<p>Same Wi-Fi as the desk PC. After it opens: browser menu → Add to Home Screen.</p>"
-                    "</body></html>"
-                )
-                # An open launcher page counts as "FleetSheet is open" too.
-                doc = doc.replace("</body></html>",
-                                  views_core.HEARTBEAT_JS + "</body></html>", 1)
-                self._send_bytes(doc.encode("utf-8"), "text/html; charset=utf-8", "FleetSheet-phone.html")
-            elif path == "/phone.url":
-                urls = lan_urls()
-                target = urls[0] if urls else "http://127.0.0.1:8765"
-                body = f"[InternetShortcut]\r\nURL={target}\r\n"
-                self._send_bytes(body.encode("ascii"), "application/internet-shortcut", "FleetSheet.url")
-            elif path == "/logo.jpg":
-                self._send_bytes(printpack.LOGO_BYTES, "image/jpeg")
-            elif path.startswith("/print/"):
-                self._handle_print(con, path, q)
-            elif path == "/done/dump":
-                self._handle_done_dump(con, q)
-            elif path == "/export/run":
-                self._handle_export_run(con, q)
-            elif path == "/backup/download":
-                blob = engine.read_backup_file(con, q.get("f") or "")
-                ctype = ("application/zip" if str(q.get("f") or "").lower().endswith(".zip")
-                         else "application/x-sqlite3")
-                self._send_bytes(blob, ctype, q.get("f"))
-            elif path == "/export/custom/run":
-                # Ad-hoc custom build: field/filter params straight from the builder form.
-                self._handle_custom_run(con, None, q)
-            elif path.startswith("/export/custom/"):
-                # Saved custom build re-run (Run uses the saved format; ?how= overrides).
-                self._handle_custom_run(con, path.rsplit("/", 1)[-1], q)
-            elif path.startswith("/export/report/"):
-                # CSV/XLSX of a prebuilt weekly report (e.g. /export/report/aging.csv).
-                self._handle_report_file(con, path.rsplit("/", 1)[-1], q)
-            elif path.startswith("/export/saved/"):
-                self._handle_export_saved_run(con, path.rsplit("/", 1)[-1])
-            elif path.startswith("/export/"):
-                self._handle_export(con, path)
-            else:
-                self._send(page("Missing", "<p>No such page.</p>", name, path), 404)
+            self._dispatch_get(con, q, flash, name, path)
         except Exception:
             msg = quote_plus(self._safe_failure("page", path))
             self._redirect(self._action_parent(path) + "?err=" + msg)
@@ -784,9 +843,6 @@ class Handler(views_accounting.AccountingViews,
             con.close()
 
     def do_POST(self):
-        # Any traffic means somebody's there — heartbeat or not.
-        global LAST_SEEN
-        LAST_SEEN = time.time()
         u = urlparse(self.path)
         if u.path == "/heartbeat":
             # "I'm still here" from every open FleetSheet page. Exempt from
@@ -850,33 +906,37 @@ class Handler(views_accounting.AccountingViews,
             if u.path == "/pin/nagoff":
                 self._redirect("/", "pin_nag=off; Path=/")
                 return
-            if u.path == "/update-check":
-                # WinSparkle shows its own dialog on this machine. Where
-                # the updater isn't live (no DLL / no key yet / not
-                # Windows) the button reports that instead of pretending.
-                _live = False
-                try:
-                    import updater_winsparkle
-                    _live = updater_winsparkle.check_now()
-                except Exception:
-                    pass
-                if _live:
-                    self._redirect("/setup/admin?msg=" + quote_plus(
-                        "Update check started — watch for the update window"))
-                else:
-                    self._redirect("/setup/admin?msg=" + quote_plus(
-                        "Updates are not active in this build yet"))
-                return
             # Desk PIN gate for money POSTs (yard routes and PIN pages exempt).
             if u.path not in ("/pin", "/pin/logout", "/pin/forgot", "/pin/nagoff", "/setup/security/pin"):
                 if not self._pin_gate(con, u.path, is_post=True):
                     return
+            if u.path == "/updater/check":
+                # Admin → "Check for Updates…" — menu-only (decision B).
+                # Availability is checked synchronously (no DLL load);
+                # the check itself runs on a worker thread so the page
+                # returns at once while WinSparkle shows its dialog.
+                if updater_winsparkle is not None and updater_winsparkle.available():
+                    threading.Thread(target=updater_winsparkle.check_now,
+                                     daemon=True).start()
+                    self._redirect("/setup/admin?msg=" + quote_plus(
+                        "Checking for updates…"))
+                else:
+                    self._redirect("/setup/admin?msg=" + quote_plus(
+                        "Update checks are not available in this install."))
+                return
             handled = (post_core.handle_post(self, con, data, u)
                        or post_assets.handle_post(self, con, data, u)
                        or post_accounting.handle_post(self, con, data, u)
                        or post_compliance.handle_post(self, con, data, u))
             if not handled:
                 self._redirect("/?err=Unknown+action")
+        except ValueError as e:
+            # Validation failures (Issue 1, 2026-10-15): show the real
+            # reason — the message the validator raised — instead of the
+            # generic banner. Validators only raise user-facing text.
+            target = self._action_parent(u.path.split("?")[0])
+            msg = quote_plus(str(e) or "That didn't save — check the fields and try again.")
+            self._redirect(target + "?err=" + msg)
         except Exception:
             # B6: a failed nested action (e.g. POST /credit/apply) must land
             # back on a real page, not on the action URL itself (which has no
@@ -939,10 +999,8 @@ def main():
     print(f"FleetSheet desk  -> http://127.0.0.1:{port}")
     for u in lan_urls(port):
         print(f"Phone / tablet  -> {u}")
-    _idle_msg = (f"{IDLE_TIMEOUT // 60} idle minutes" if IDLE_TIMEOUT >= 60
-                 else f"{IDLE_TIMEOUT} idle seconds")
     print("Stop: Close FleetSheet — close this window, Ctrl+C, or just close the FleetSheet window;")
-    print(f"      the server stops with it (idle backstop: {_idle_msg}).")
+    print("      the server stops with it.")
 
     def _open():
         # FleetSheet opens in its own app-mode window (Chrome/Edge --app with
@@ -952,7 +1010,7 @@ def main():
         # watcher stops the server (at once, or after the close-grace
         # window when yard devices are still connected). (Default-browser
         # fallback and pre-existing-profile launches have no process to
-        # watch — the idle backstop covers those.)
+        # watch.)
         try:
             import appmode
             mode, handle = appmode.open_app_window_proc(
@@ -972,20 +1030,28 @@ def main():
         threading.Timer(0.8, _open).start()
     global _HTTPD
     _HTTPD = ThreadingHTTPServer((host, port), Handler)
-    # Idle watchdog: no open pages for IDLE_TIMEOUT seconds → checkpoint the
-    # WAL and shut down. Daemon thread, so it never blocks interpreter exit.
-    threading.Thread(target=_idle_watchdog, args=(_HTTPD,), daemon=True).start()
-    # WinSparkle self-update (packaging/WINSPARKLE.md): live only on
-    # Windows installs carrying WinSparkle.dll and a baked-in public key;
-    # a no-op everywhere else. Never allowed to block or break startup.
-    # Accepting an update calls _HTTPD.shutdown() from the updater's
-    # thread so the new installer can replace files cleanly.
-    try:
-        import updater_winsparkle
-        if updater_winsparkle.init(APP_VERSION, _HTTPD.shutdown):
-            print("Update checks: on (WinSparkle)")
-    except Exception:
-        pass
+    # Updater (WinSparkle, Windows-only, menu-only): configure after the
+    # server binds. Never breaks startup — every failure is a silent
+    # no-op inside the wrapper (DLL absent, not Windows, placeholder key).
+    if updater_winsparkle is not None:
+        try:
+            def _updater_shutdown():
+                # WinSparkle calls this when the operator accepts an
+                # update: stop the HTTP server so the new installer can
+                # replace the app. Worker thread + small delay lets
+                # WinSparkle proceed; shutdown() must not run on the
+                # serve_forever thread.
+                def _stop():
+                    time.sleep(0.5)
+                    try:
+                        _HTTPD.shutdown()
+                    except Exception:
+                        pass
+                threading.Thread(target=_stop, daemon=True).start()
+            updater_winsparkle.init(APP_VERSION,
+                                    on_shutdown_request=_updater_shutdown)
+        except Exception:
+            pass
     _HTTPD.serve_forever()
 
 

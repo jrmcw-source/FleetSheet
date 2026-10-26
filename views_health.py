@@ -4,7 +4,7 @@ from __future__ import annotations
 import html
 
 import engine
-from views_core import tabs_setup
+from views_core import tabs_admin
 
 
 class HealthViews:
@@ -23,8 +23,8 @@ class HealthViews:
                 f"<td><b>{html.escape(i['code'])}</b><br>{html.escape(i['message'])}</td>"
                 f"<td>{i['count']}</td><td>{ex or '—'}</td></tr>"
             )
-        body = "".join(rows) or "<tr><td colspan=4>No findings. The book is internally consistent against the current health rules.</td></tr>"
-        return tabs_setup("/setup/health") + f"""
+        body = "".join(rows) or "<tr><td colspan=4>No findings.</td></tr>"
+        return tabs_admin("/setup/health") + f"""
         {summary}
         <div class='actions'>
           <a class='btn secondary' href='/setup/health'>Run again</a>
