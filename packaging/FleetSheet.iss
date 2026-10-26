@@ -23,9 +23,14 @@
 ;   fleetsheet-launch.log into stage\ — a shipped stub DB blocks first-run
 ;   seeding and breaks clean installs.
 ;
-; COMPILE (on Windows, Inno Setup 6.x with ISPP):
+; COMPILE (on Windows, Inno Setup 6.x with ISPP — the compiler
+; installed for the V1.1 build. Inno Setup 7.x compiles this
+; script too and built v1.0; keep one compiler per release):
 ;   iscc FleetSheet.iss
 ;   Output: packaging\output\FleetSheet-Setup-<VERSION>.exe
+;   (No SetupArchitecture is set: the installer is a 32-bit
+;   installer with 64-bit install mode, which comes from
+;   ArchitecturesInstallIn64BitMode below.)
 ;
 ; SIGNING (see SIGNING.md — do this BEFORE distributing):
 ;   iscc /S"certsign=signtool sign /fd SHA256 /sha1 <THUMBPRINT> /tr http://timestamp.digicert.com /td SHA256 $p" FleetSheet.iss
@@ -78,9 +83,8 @@ SolidCompression=yes
 OutputDir=.\output
 OutputBaseFilename=FleetSheet-Setup-{#MyAppVersion}
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
-; Uncomment and point at a real .ico when the project has one:
-; SetupIconFile=stage\fleetsheet.ico
-; UninstallDisplayIcon={app}\fleetsheet.ico
+SetupIconFile=stage\fleetsheet.ico
+UninstallDisplayIcon={app}\fleetsheet.ico
 
 ; --- Code signing (see SIGNING.md). Define the SignTool on the iscc
 ; --- command line; the uninstaller is signed too.
@@ -99,7 +103,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Everything staged (code, bundled python, launchers, docs). The database
 ; is created at first run and is never part of the installer payload.
-Source: "stage\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "stage\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.orig,*.bak,*.log,__pycache__\*,*.pyc,test_*.py,test-docs\*,CHECKPOINT_*.md,PACK-NOTES-*.txt,docs\doc-*,photos\*,*.db-wal,*.db-shm,.pytest_cache\*"
 
 [Icons]
 ; Start Menu + optional desktop shortcut. The .bat starts the server

@@ -3,7 +3,7 @@
 Do these on your Windows laptop, in order. Each step says what to check.
 
 ## 1. Install tools
-- [ ] Install **Inno Setup 6.x** (with ISPP — it's included in the standard installer)
+- [ ] Install **Inno Setup 6.x** (with ISPP — it's included in the standard installer) — the compiler installed for the V1.1 build. Inno Setup 7.x also compiles this script (it built v1.0); keep one compiler for the whole release.
 - [ ] Download **Python embeddable zip** (64-bit, matching the version in `app/packages/` — check the wheel filenames) from python.org → extract to `packaging\stage\`
 
 ## 2. Assemble `packaging\stage\`
