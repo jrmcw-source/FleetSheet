@@ -1,0 +1,503 @@
+FleetSheet v1.1 — pack 'm' round notes (built 2026-10-24, web side, from pack 'l')
+================================================================================
+Jason's authorization (2026-10-24, in his words): "fix everything and build
+my fixes in." Source list: FleetSheet-v1.1-looksee-l-fixes-2026-10-24.md
+(his look at pack 'l'). Governance: build-playbook (Rule Zero review done
+before building) + checks/checks.md gates. Phase 1 findings
+(PHASE1-FINDINGS.md) set the dependency order.
+
+Discipline: all runs from /tmp scratch copies; the tree itself was never
+run. Tree demo.db / blank.db md5 at round start (identical to pack 'l'):
+demo.db 75314589f42c88d509841714bb97f4da, blank.db dd84973679b425e6ac0629d74bdb63d5.
+
+WORKSTREAM 0 — THE DEFECT (Phase 1 §D, ship-blocking; built FIRST)
+------------------------------------------------------------------
+migrate_legacy_schema's invoice-line backfill fabricated a
+"Legacy zero-value invoice placeholder" line (source 'extra' /
+'legacy-zero') on every invoice with no source tickets/work orders, on
+every request. That defeated record_payment's lineless-invoice guard in
+the live path: a split payment whose second leg targeted a lineless
+invoice POSTED instead of rolling back whole, and issued a real
+overpayment credit memo against an invoice with no real lines.
+
+History, established before fixing: the backfill's legitimate purpose
+is snapshot lines for pre-line-era invoices, synthesized from their
+real source tickets (ticket_money) and work orders (bill_amount) —
+that part is honest and is PRESERVED unchanged. The placeholder
+fallback served no source document; it exists identically in all three
+trees on this VM (phone 'l', merged ancestor, web fixround) — inherited
+code, not a phone-side invention. Nothing else in the codebase reads
+the 'legacy-zero' signature: no display filter, no report exclusion —
+once inserted it rendered and printed as a real line.
+
+Fix (engine_migrations.py):
+- The zero-placeholder fallback insert is REMOVED. An invoice with no
+  source tickets/work orders stays lineless: not payable, totals $0.00,
+  prints no lines, until real lines exist (its own editor writes
+  'quick' lines directly; ticket/WO billing writes source lines).
+- The same migration RETRACTS previously fabricated lines by their
+  exact migration-only signature (source_type='extra' AND
+  source_id='legacy-zero'). Operator "extra" lines carry
+  source_id 'extra-<line_id>' and can never match.
+
+Verification:
+- test_pay_split_failure_rolls_back_whole_batch (v101, both files
+  carry it): FAILED at 'l' baseline in both runs; PASSES now.
+- Direct demonstration (scratch book): inserted one genuinely lineless
+  invoice and one pre-poisoned invoice (fabricated line present);
+  after 3 init_db migrations: legacy-zero rows anywhere = 0, lineless
+  invoice still has 0 lines, invoice_has_lines = False,
+  record_payment refuses with "Invoice has no invoice lines — cannot
+  take payment".
+- v101 merged-file totals moved 27F/5E/3S ('l' baseline) -> 26F/3E/2S;
+  the delta is exactly this test fixed plus the two stale PO-line
+  tests flipping ERROR->skip on their own precondition (shared-DB
+  state; they flipped the same way between Phase 1's own runs).
+  No new failure names.
+
+WORKSTREAM 1 — FIX 1: tenders (Jason: "no venmo? no bitcoin? no
+traveler's checks?")
+------------------------------------------------------------------
+Engine CASH_METHODS carried 7 tenders; the Cash door's own list
+(CASH_ENTRY_METHODS) carried only Cash/Venmo/Other, enforced in the
+form, in record_cash_entry, and in the cash_entries DB CHECK.
+
+- CASH_METHODS (engine_core.py): + "Bitcoin", + "Traveler's Check"
+  (Jason named both in the look) -> 9 tenders, Other stays last.
+- CASH_ENTRY_METHODS is now an alias of CASH_METHODS — the Cash door
+  offers the full list, per money universality (one list, no narrower
+  cash-only subset).
+- schema.sql cash_entries CHECK widened to the 9; _ensure_cash_table
+  DDL likewise; a migration in engine_migrations rebuilds an existing
+  book's cash_entries table when it still carries the old 3-method
+  CHECK (rows preserved, index recreated, idempotent).
+- The three hardcoded "Pick ..." error strings now generate from the
+  list itself, so the message can never drift from the list again.
+- pay_method lookup seed (engine.py) carries the same 9.
+Sweep notes: Record Payment / credit / payments-audit surfaces already
+render from CASH_METHODS and pick the 9 up automatically; reports pass
+method strings through (no enumeration to change); demo_data's METHODS
+is generator weighting for seed data, not a user surface — untouched.
+
+Verification: scratch "old book" built from the PRISTINE 'l' schema
+with one Venmo entry -> ran the new init_db: CHECK widened in place,
+old entry preserved, Bitcoin / Traveler's Check / ACH cash entries all
+record, an invalid method is refused with the full 9-item message.
+Correction to Workstream 1 (same round): the first cut of the
+cash_entries rebuild used PRAGMA defer_foreign_keys and failed the
+mid-migration commit on the demo book. Rebuilt in the codebase's own
+established shape (the sites rebuild): commit first, foreign_keys
+OFF, rebuild, commit, foreign_keys ON. Re-verified end to end.
+
+WORKSTREAM 3+4 — FIX 4 (Setup tab order) and FIX 3 (Petty Cash, one
+door), built together: both live in tabs_admin.
+------------------------------------------------------------------
+FIX 4: Setup row-2 order is now Company, Customers, Vendors, Job
+Sites (Jason's order of importance). The two code comments that
+enumerate the Admin section's contents were updated to match. The
+initial-setup CHAIN order (Company -> Admin -> Customers -> ...)
+is a separate, separately-ruled sequence and was not touched.
+
+FIX 3: the shared Admin tab row carried a right-justified "Petty
+Cash" link on every Admin page, and the Administration page carried
+its own popup button — two doors. The tab-row link is REMOVED. The
+one door is the button on the Administration page, right-justified,
+opening the drawer in the standard popup. The /petty page and its
+audit remain reachable from the drawer itself and now light
+Administration. Petty stays sealed: no other surface carried a door
+(swept nav, Today, dashboard, reports — remaining /petty references
+are routing, gating, and tab-lighting internals, not doors).
+
+WORKSTREAM 2 — FIX 2: Assets, three classes (Jason: "everything is
+an Asset ... Plant, Stock, Fleet. Everything's under Assets.")
+------------------------------------------------------------------
+FOUND (before state): designation existed as data only — stored on
+the asset, shown in a list column, editable — and read by NO flow.
+Every picker drew from all active assets: a Plant item could be put
+on a rental ticket, a Fleet unit could be sold from the Sale page.
+
+CHANGED:
+(a) Door: Assets page "+ New Unit" -> "+ Add Asset". The editor's
+    class choice is the existing Designation field (Fleet default,
+    operator's own terms still addable). "Save Unit" -> "Save
+    Asset"; "Unknown unit." -> "Unknown asset."; the editor's
+    number label "Unit Number" -> "Asset #" and the all-assets
+    listing header likewise (asset-generic surfaces; "Unit #" stays
+    on the rental surfaces where a unit is genuinely meant);
+    "Active — rentable" -> "Active" (rentable is a Fleet property).
+(b) Listing: View (all assets) now groups by class — Fleet, Stock,
+    Plant, then the operator's own designations — one table each,
+    rows in entry order within a class.
+(d) MECHANICS, at the draw points (the forms the flows draw from;
+    no new hard engine block — a block here would contradict the
+    no-un-overidable-blocks doctrine, and the record of an
+    out-of-band posting stays the operator's):
+    - Rental / new-ticket picker: excludes Plant and Stock.
+    - Sale page picker: excludes Plant and Fleet.
+    - Assets-page idle list and the sole-available-unit ticker
+      nudge: rentable class only (same exclusion as rental).
+    - Other and operator-custom designations keep today's behavior
+      exactly (rentable and sellable) — nothing already designated
+      is stranded by the classes becoming real.
+    - Compliance is untouched: all classes keep certs/checklists
+      (Plant is record + compliance by Jason's own ruling).
+    Untouched by design: work-order picker (service applies to any
+    class), quote picker (a quote may propose either motion — flagged
+    in the round report as an open reading), Cash attachment picker
+    (a reference, not a draw).
+
+Verification: seeded one asset per class (Fleet/Stock/Plant/Other/
+custom "Crane") into a scratch demo book and ran the pickers' own
+queries: rental drew Fleet+Other+Crane; sale drew Stock+Other+
+Crane; Plant drew in neither.
+
+WORKSTREAM 5 — FIX 5: Admin -> Billing page (Jason: "too wordy,
+too spacey, too long")
+------------------------------------------------------------------
+Before (Phase 1, rendered on the demo book): 1,732px tall against
+a 900px viewport; 694 characters of explanation before the first
+control; the master-list hint repeated 4x, once per panel.
+
+- The defaults explanation paragraph is OFF the page; its content
+  now stands in the manual (Section 11.4), with the full tax
+  jurisdiction statement the page previously carried in prose.
+- The jurisdiction card remains on the page as a notice, in
+  military style: what is chosen where, that FleetSheet never
+  picks one, and that the selection is the operator's
+  responsibility — three short clauses.
+- The curation hint is stated ONCE above the panels; the four
+  per-panel repetitions are gone. Panel legends are noun phrases
+  (Payment Terms, Line Units, Line Items, Compliance Documents).
+- The Job Info hint is one line. "New entry" replaces the
+  sentence-long placeholder in the Add inputs.
+- The Job Info fieldset and the four curation panels flow in two
+  columns with their lists scrollable, as the Administration page
+  already does. Every control, name, and route is unchanged —
+  all 155 entries curate exactly as before.
+After height: measured in the round's verification pass and
+recorded in the round report.
+
+WORKSTREAM 6 — FIX 6: manual and documents current (Jason: "look
+at manual and documents")
+------------------------------------------------------------------
+USER_MANUAL.txt (1,617 -> 1,680 lines):
+- Section 6.3 and the two other tender enumerations now carry the
+  full list of nine (Bitcoin and Traveler's Check added); Section
+  6.4 states the Cash book offers the same list in full.
+- Section 6.6: petty cash stands under Administration (was
+  "under Billing"), with its one door stated.
+- Chapter 8 reframed on the asset: Add Asset, the class choice
+  on the asset form, the list grouped by class, and Section 8.2
+  now states the draw mechanics of Section (d) above in full.
+- Section 10.1: the Mixed report is documented (kinds, monthly
+  roll, savable presets) — it previously appeared nowhere.
+- Chapter 11 is "Administration and Setup": Administration is
+  the parent section, Setup a function within it; the Setup
+  order Company, Customers, Vendors, Job Sites is stated; the
+  relocated Billing defaults and tax statements stand in
+  Section 11.4.
+- Root CHECK-NOTES.txt: the 'g'-era content is replaced with a
+  superseded placeholder (its praise of instant renumbering —
+  machinery retired 2026-10-22 — does not ship again). The
+  manual itself states the standing doctrine: a posted document
+  is never renumbered. The v1.0.2 pack notes retain their
+  past-tense round history as written; whether they ship in the
+  'm' pack is a pack-time decision, flagged in the round report.
+The in-app manual PDF is NOT regenerated in this round: its
+source draft is stale (pre-'g') and the governing handoff
+forbids regenerating from it. USER_MANUAL.txt is the current
+manual source; the PDF pass remains an open item.
+
+VERIFICATION (this round; all runs from /tmp scratch copies —
+the tree's demo.db and blank.db end byte-identical to pack 'l')
+------------------------------------------------------------------
+- v101 merged file: 26F/5E/3S against a Phase 1 baseline of
+  27F/5E/3S. Name diff: ZERO new failures; the one disappearance
+  is test_pay_split_failure_rolls_back_whole_batch, now passing
+  (Workstream 0). The two ERRORs are the known stale PO-import
+  pair flipping skip->error on shared-state, as they did between
+  Phase 1's own runs (no such table: po_lines — the subsystem
+  retired 2026-10-22; the tests retire in the test-update phase).
+- v101 reconciled file: 17F/4E/3S vs baseline 18F/4E/3S; same
+  single disappearance, no new names.
+- In-process suites: business_rules, schema, sequences, health,
+  ticker_filter, e2e, migration_ledger, updater — all exit 0.
+  security: 2 failures, the known stale pair, failure set
+  identical to baseline. ux: failure set identical to baseline.
+- Live gates: density PASS (69 pages, no violations, governance
+  script with the disclosed chromium adaptation); tabecho PASS
+  (27 routes, no H1 echoes).
+- Compliance: 59 passed / 4 failed — H1, H12, H21, H30, the
+  Phase 1 reference set exactly.
+- Fix 5 rendered heights (1280x900, demo book, same method both
+  sides): Billing page 1,732px before -> 1,137px after.
+- Demonstrations run this round: the split-payment rollback on a
+  poisoned book (Workstream 0); the cash CHECK rebuild on an
+  old-schema book with entries preserved (Workstream 1); the
+  class pickers on a seeded book (Workstream 2); live-page reads
+  of the Cash method list (nine), the sale/rental draws, the
+  grouped asset list, the one Petty Cash door, and the Add Asset
+  form (screenshots in the round's working folder).
+- Open question from Phase 1 closed: duplicate document numbers
+  are impossible at the DB layer — invoice_no, quote_no, cm_no,
+  ticket_id, and wo_id are their tables' primary keys.
+
+PHASE 3/4 — HEALTH CHECK, HEALTH-CARE PASS, NEW SUITES, AND
+JASON'S FIVE DIRECTIVE RULINGS (2026-10-24, after the round above)
+====================================================================
+
+PHASE 3 — Health Check update (engine_health.py ONLY; the view
+needed no change). Performed checks on a current book: 22 -> 33.
+- Doctrine-aware: BILLED_WITHOUT_INVOICE and
+  CLOSED_WITHOUT_INVOICE run and count ONLY when the Billing
+  switch is ON. With billing OFF, a returned ticket closing with
+  no invoice is by design (the charity case), not a critical.
+- Payment-allocation coherence (4): ALLOC_DOC_MISSING,
+  ALLOC_LINE_MISSING (line must belong to the allocation's own
+  document; kinds are invoice/wo/ticket/sale/quote — the code
+  writes 'wo', not 'work_order'), ALLOC_PAYMENT_MISSING,
+  ALLOC_OVER_ALLOCATED (grouped by (pay_id, doc_kind, doc_ref);
+  tolerance 0.01).
+- Credit-memo lines (2): ORPHAN_CREDIT_MEMO_LINES (critical),
+  CREDIT_MEMO_LINE_TOTAL (warning; line-less legacy memos never
+  flagged).
+- Mixed presets (4): kind unknown, customer missing, time_mode
+  invalid (warnings), money kinds under billing OFF (info).
+- Invoice paperwork (1): MISSING_INVOICE_DOCUMENT_FILE.
+- Duplicate document numbers: NO check added — impossible. Every
+  document number is its table's PRIMARY KEY (Phase 2 close,
+  re-verified line by line in schema.sql). A check for the
+  impossible would be dead weight.
+- Coordinator fix found in the same function: the pre-existing
+  unit-doc check queried unit_docs.rel_path, a column no current
+  schema carries, so it silently no-oped on every current book.
+  Query now uses unit_docs.stored; the check fires again.
+- Demo book: 33 checks, 0 critical, 0 warning. Fresh book: 33/0.
+  Extended health suite 19/19. Printed-invoice byte-lock verified
+  identical between pristine 'l' code and this tree (INV-1001
+  48deff8716950069b2cee9749430d96b, INV-1002
+  e6b42e475b1ca6e8322d3c029ace0507, INV-1003
+  3e08e55a6efdd0e9fe9833eda1aec7c3).
+
+PHASE 3 — health-care walk (scratch server, demo copy). Every
+section walked (Today, Assets, tickets, Money tabs, Reports +
+Mixed, Compliance, Customers, Admin incl. Data Health, Setup,
+Billing, Backups, Security, Devices, Petty page): 20/21 clean —
+the one flag was the walk script's own artifact. Exercises
+posted on the scratch book (petty in, a Bitcoin cash entry, an
+unattached cash-in refused by design); Data Health still passed
+33 after. ONE REAL DEFECT FOUND AND FIXED: Petty Cash Out from
+the popup could never post — the popup fragment omitted
+COMBO_JS, so the category combo's hidden field stayed empty and
+record_petty refused. The Cash Out category is a combo in the
+drawer's ONE sanctioned door; the full page worked, Cash In
+worked (plain select). Fix: the fragment now carries COMBO_JS,
+with a comment stating the durable rule (any fragment carrying
+data-combo inputs must carry COMBO_JS). Verified end to end in
+the browser after the fix; all suites re-run green.
+
+PHASE 4 — Moose's own suites, saved to the governance checks
+folder and to fleetsheet-l-build/suites/:
+- Suite A VISUALS 7/7: popup law over 69 rendered pages; Admin
+  two-row nav and Setup row in Jason's order; Billing page
+  1,137px (Phase 2 method); asset grouping Fleet/Stock/Plant/
+  custom; exactly one Petty door.
+- Suite B LANGUAGE TIERS 5/5: zero "We..." labels; six switch
+  labels exact; overflow exactly "+ N more"; manual section
+  11.4 carries the relocated Billing text; tenders cross-checked
+  on every surface. (Two hand-reviewed B2 allowances, recorded
+  in the suite source: /backup classified Setup-register;
+  a verbatim compliance-pack provenance note.)
+- Suite C MECHANICS (see directive round for the final count):
+  split-payment rollback regression, lineless guard, tender
+  integrity, designation draws, petty seal, document numbers,
+  billing-OFF sweep.
+- Manual defect found by Suite C and fixed in Phase 4: section
+  6.4 enumerated only 4 of 9 tenders while claiming the full
+  list. Restored to the full nine.
+- v101 re-baseline written to the governance checks folder
+  (baseline-post-m-2026-10-24.md): every remaining failure in
+  both v101 variants + ux + security classified stale-test /
+  sandbox-artifact / real-backlog. No test was mass-edited to
+  force green; the two individually corrected legacy tests are
+  named in the baseline (security's PIN-scope pair, corrected
+  copy 9/9; ux "delivery merged", corrected).
+
+JASON'S FIVE DIRECTIVES (ruled 2026-10-24 evening, built same
+round; they supersede the flagged-not-decided items 1, 3, 4, 5
+of the Phase 2 report where they overlap):
+1. QUOTE PICKING: the quote form's asset picker now draws by
+   the rentable-class mechanics, same as the rental picker —
+   Plant and Stock excluded; Fleet, Other, and custom
+   designations drawn. Same combo form and wording
+   ("Type to search units...") as before. Suite C covers it.
+2. PLANT SALES: Plant is no longer excluded from the sale
+   picker. Plant options are marked "— Plant" in the list.
+   Picking one raises a Confirm Plant sale checkbox on the
+   form; the save handler refuses a Plant sale without it
+   (plain explicit confirm — the sale flow carries no
+   override mechanism of its own to ride) and stamps "Plant
+   sale confirmed." on the sale record's notes. Fleet stays
+   excluded. Manual section 8.2 updated for both rulings.
+   Suite C class C8 covers refusal, confirmed posting, the
+   stamp, and that a Stock sale needs no confirm.
+3. PLAYBOOK WORDING: "Asset #" stands. The playbook's
+   verbiage guide was corrected to match the build: asset-
+   generic surfaces say "Asset #", rental-specific surfaces
+   keep "Unit #" (governance build-playbook/verbiage.md).
+4. OLD PACK NOTES DO NOT SHIP: PACK-NOTES-v1.0.2.txt (tree
+   root and stage copies — byte-identical, md5
+   a61272262f4f1e500f0d542e6dbf9c1b) and
+   PACK-NOTES-2026-10-24l.txt were moved out of the tree to
+   fleetsheet-l-build/archive-pack-notes/, preserved for a
+   home in the GitHub repo at push time. These notes
+   (PACK-NOTES-2026-10-24m.txt) are the only pack notes that
+   ship in 'm'.
+5. MANUAL PDF: NOT rebuilt in this phase, per Jason's
+   sequence (PDF regenerates after his final look, before the
+   push). manual.pdf is byte-identical to pack 'l' (md5
+   2255b085a41490d2461ab30b2a1c6771). USER_MANUAL.txt is
+   current, including the section 6.4 tender fix and the
+   section 8.2 draw rulings.
+
+DIRECTIVE-ROUND VERIFICATION: Suite C 24/24; Suite A 7/7
+re-run on the changed tree; density 69 pages OK; tabecho 27
+OK; v101 name sets a subset of the baseline in both variants
+(the two stale PO tests skipped instead of erroring — their
+documented oscillation), zero new names; compliance 59/4
+exact; corrected security 9/9. Suite B could not be re-run:
+Playwright's Chromium began dying at launch (SIGTRAP) after
+Suite A and density had succeeded on the same tree and
+server; every B item the directives touch was verified
+directly instead (record:
+phase34-test-output/final2-suiteB-manual-checks.txt).
+Tree demo.db / blank.db end byte-identical to pack 'l'
+(75314589f42c88d509841714bb97f4da /
+dd84973679b425e6ac0629d74bdb63d5).
+
+PHASE 5 — ENGINE-LEVEL CLASS ENFORCEMENT, IN-PLACE CLASS SWITCH,
+STATUS LIFECYCLE, AND THE FLEET-SALE AMENDMENT (Jason's rulings
+2026-10-24 17:26 + 17:53 + the 17:57 amendment). Built in the
+tree only; nothing packed or published in this phase. Full
+record: fleetsheet-l-build/PHASE5-REPORT.md.
+
+1. ENGINE FOUNDATION (engine_assets.py, engine_accounting.py):
+   the class rules moved from the picker draw points into the
+   engine. create_ticket refuses Plant/Stock and any
+   non-Active-status asset ("not rentable", reason stated);
+   save_quote's Rental lines stand under the same guard ("not
+   offered on a quote"); set_status refuses a move into Reserved
+   / Dispatched / On Rent on such an asset — a noted jump passage
+   composes the gate and the passage record names it ("unit is
+   Plant, not rentable"); check-in and later steps are never
+   refused on class. create_sale refuses a non-Active asset and
+   an already-sold asset. Work orders unchanged (service is
+   recorded against a unit in any class; Jason's Phase 2 ruling).
+2. FLEET SALE (the amendment; post_core.py, views_assets.py,
+   engine create_sale): Fleet sells THE SAME WAY as Plant — its
+   own confirm flag and stamp. The sale picker excludes NO class
+   among Fleet/Stock/Plant; Fleet options are marked " — Fleet";
+   picking one raises the "Confirm Fleet sale" checkbox row
+   (mirrors Plant's exactly). The save handler refuses a Fleet
+   sale without fleet_confirm=1 (crafted posts included) and
+   stamps "Fleet sale confirmed." on the sale record's notes;
+   the engine refuses without the fleet_confirm flag as well.
+   Stock and custom designations need no confirm. Jason's
+   reason: long-rent customers do buy the unit mid-rental.
+3. IN-PLACE CLASS SWITCH (engine save_asset, the asset form):
+   the editor's Designation control changes an existing asset's
+   class in place — no sell-and-re-add. A change is an audited
+   event in the Done record (who/when/from→to, e.g. "Asset
+   GEN-101: class Fleet → Stock"), clerk stamped from the desk
+   session by the handler, never a posted field. A save that
+   does not carry the field leaves the class standing.
+   ENTANGLEMENT RULE (Moose's conservative choice, FLAGGED for
+   Jason's look): while the asset is out on a live ticket
+   (Reserved / Dispatched / On Rent / Standby — the set the form
+   already locks the unit number against), class and status
+   changes are REFUSED with the reason stated ("… is out on
+   ticket T-#### — class and status cannot change until it
+   returns"). A Quoted ticket does not hold the switch (a
+   proposal, not possession; conversion re-checks at the
+   engine), and neither does an open work order.
+4. STATUS LIFECYCLE (schema.sql, engine_migrations.py, the
+   asset form): assets gain status — Active / Retired /
+   De-listed — a closed set on the same editor surface, switched
+   in place and audited the same way ("Asset …: status Active →
+   Retired"). Active = normal. Retired = on the books, in
+   reports and history, OUT of every picker and the
+   availability/idle lists. De-listed = additionally off the
+   working lists; it remains in the all-assets view (which now
+   shows a Status column) and in report history; never deleted;
+   reversible. Existing assets default Active. Schema evolution
+   by the tender-CHECK pattern: schema.sql carries the column
+   for fresh books; migrate_legacy_schema adds it to existing
+   books when they open, backfilling 'Active'; a lazy ensure
+   beside _ensure_designation covers direct engine callers.
+   THE TREE'S demo.db / blank.db FILES ARE UNCHANGED
+   (75314589f42c88d509841714bb97f4da /
+   dd84973679b425e6ac0629d74bdb63d5, verified at close).
+5. MANUAL: USER_MANUAL.txt §8.2 rewritten for the amended sale
+   draw (no class excluded; both confirms and stamps stated),
+   plus the engine-enforcement and in-place-switch passages;
+   new §8.3 "Status: Active, Retired, and De-listed"; former
+   §8.3/§8.4 renumbered 8.4/8.5 and their two cross-references
+   updated. manual.pdf NOT rebuilt (Jason's sequence; md5
+   unchanged 2255b085a41490d2461ab30b2a1c6771).
+6. SUITES: Suite C gains class C9Phase5EngineClass (14 tests:
+   engine refusals via non-UI paths, Fleet/Plant engine
+   confirms, the crafted-post Fleet double check, in-place
+   switch end-to-end + audit, the while-out refusal, lifecycle
+   effects on pickers/lists/availability, old-schema migration
+   with data intact) — Suite C now 38 tests; C4's sale-draw test
+   updated to the amended ruling (it asserted the superseded
+   Fleet exclusion). Suite A gains A8 (editor renders both
+   switches; sale form renders both confirm rows + class marks)
+   and A7's door record became an assertion (item A below) —
+   Suite A now 8 checks. Both suites updated in governance
+   checks/ and the runnable copies in fleetsheet-l-build/suites/
+   (byte-identical).
+7. ITEM A (verify only): the Assets door renders "+ Add Asset"
+   with no class suffix — CONFIRMED final by Jason; verified in
+   the rendered Assets view; no change made.
+
+PHASE 5 VERIFICATION — READ THIS BEFORE QUOTING NUMBERS: this
+round ran under the environment's copy guard (the same block
+that stopped the pack-'m' zip build): in the build session, no
+process may write bytes derived from workspace files, so
+scratch copies, live test servers, and Chromium gates cannot
+run there at all (cp / shutil / FIFO / overlay / Drive
+round-trip / in-place server all demonstrated blocked; the
+server dies when init_db's migration write hits the guard).
+The Phase 5 mechanics were therefore verified IN-PROCESS
+against the tree code (in-memory books; the same assertions the
+new suite tests encode): engine smoke 11/11 (fresh-book schema,
+Fleet ticket control, Plant/Stock rental refusals inserting
+nothing, quote guard, Plant/Fleet engine sale confirms, Stock
+free sale, already-sold refusal, class switch + Done-record
+audit with clerk, while-out refusal + release after Void,
+dispatch guard + noted-jump passage naming the gate, Retired
+refusals at sale and rental, availability exclusion, migration
+of a pre-Phase-5-schema book with data intact) and render/draw
+verification 8/8 (C4 rental/quote draws unchanged, C4 sale draw
+as amended, C8 Plant regression through the post handler, C9
+Fleet double check through the post handler, editor renders
+both switches, the "+ Add Asset" door, the all-assets Status
+column). The live gates (density 69, tabecho 27, compliance
+59/4, health extended, both v101 variants, corrected
+security/ux, Suites A/B live) MUST be re-run from a session
+without the guard before this tree is packed; the re-run
+protocol is in PHASE5-REPORT.md. One NEW v101 failure name is
+PREDICTED in both variants, from code reading, as a direct
+consequence of the amendment: SaleMultiLineTests.
+test_sale_multi_row_post_creates_two_sales seeds class-less
+assets (Fleet by the column default) and posts their sale
+without the fleet_confirm the amendment created; the refusal
+is the ruling working. It is flagged for Jason's ruling in
+PHASE5-REPORT.md — the product was not bent to pass it, and
+the ancestor harness was not edited. Every other ancestor-suite
+flow is transparent to the change by code reading (no ancestor
+test references designation; their seeded assets are Fleet /
+Active by default, the rentable, sellable-with-confirm state
+their flows assume — sales in those suites post through
+create_sale only in v101's SaleMultiLineTests).

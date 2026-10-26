@@ -1,0 +1,87 @@
+FleetSheet v1.1 — pack 'p' round notes (built 2026-10-24, web side, from pack 'o')
+================================================================================
+Jason's authorization: his direct order of 2026-10-24 22:54 — "fix
+those and shoot me the staged folder" — on the two items filed from
+his look at 'o' (2026-10-24 22:51 and 22:53), logged at
+~/workspace/fleetsheet-work/looksee-o-fixes-2026-10-24.md.
+Governance: build-playbook (reviewed before building) + checks.
+Full account: PHASEP-REPORT.md (~/workspace/fleetsheet-l-build/).
+
+Checkpoint discipline: packs 'm', 'n', and 'o' as delivered on Drive
+were NOT touched; nothing was uploaded this round. Build 'p' was
+edited in place in the local tree. Tree books close byte-identical:
+demo.db 75314589f42c88d509841714bb97f4da, blank.db
+dd84973679b425e6ac0629d74bdb63d5. manual.pdf untouched (md5
+2255b085a41490d2461ab30b2a1c6771) — the PDF rebuild still waits for
+Jason's look. Version stays v1.1; 'p' is a pack letter.
+
+WHAT CHANGED
+------------------------------------------------------------------
+1. Setup headers — YANKED (Jason: "Admin - Setup: yank the headers
+   above Company (Company setup) and Vendors (Vendors)"). The two
+   pages passed a heading argument to tabs_admin, which printed it
+   as an <h1> above the sub-tab rows — an echo of the tab row that
+   already names the page (tab-echo rule). The arguments are
+   dropped at the three call sites (Company summary, Company form,
+   Vendors); the pages now open on the tab rows, exactly as
+   Customers and Job Sites already did. A census of every
+   tabs_admin call site confirms no other Admin page passes a
+   heading. The "Company setup is saved" card text and the
+   "Company setup saved" flash are statements, not headers, and
+   stand untouched.
+2. Charges — INTO THE RENTAL LINE ITEMS (Jason: "what's the charges
+   card? below the rental sheet? why? any charges should be input
+   into the rental line items."). On the ticket page, the separate
+   Charges card below the sheet — its own form, its own "Save
+   charges" — is GONE. The ticket's stored charge lines are now
+   line items inside the ticket form itself (the Transport and
+   Possession form): the same .iline grid with the same fields
+   (Type | Item | Description | Qty | Unit | Rate | Tax flag),
+   saved by the form's one Save (the shared button row: Add Item,
+   Print, Save) through the ticket save path — the /transport
+   handler persists the posted lines via save_ticket_lines into
+   the same ticket_lines store, so ticket money and invoicing
+   from the ticket are unchanged. The computed rental lines
+   (rate × dates) are not input; they show read-only as a table
+   directly above the grid, inside the form (placement flagged
+   in the report: their only itemized home on the page — the
+   money panel settles stored lines only). The 2026-10-23
+   /ticket/<id>/charges route is RETIRED: no surface posts to it
+   (tree-wide census); a post there now meets the app's standard
+   "Unknown action" answer and saves nothing. On the NEW rental
+   form, the charges already rode the one booking form and its
+   one Save; its separate "Charges" fieldset card is removed so
+   the grid stands as the form's lines area, the same
+   presentation as the ticket page. Manual updated: charges are
+   entered as line items of the rental itself (§ "Charges grid"
+   references removed — the ticket section and the Money panel
+   passage).
+
+VERIFICATION (live this round — full account in PHASEP-REPORT.md)
+------------------------------------------------------------------
+Density 69 pages PASS; tabecho 27 routes OK; compliance 59/4
+exactly (H1, H12, H21, H30 — baseline-exact); health ancestors 3/3
++ extended 16/16, demo book 33/0/0; Suites A 11/11, B 5/5, C 45/45,
+D 3/3 (census 39, no drift, unregenerated); security 9/9; test_ux
+completes with only the known "pbox has lock toggle" red; v101
+name union = the 34 baseline names exactly (zero new, zero gone);
+in-process ancestors all OK. Real-server sweep: the ticket page
+carries no Charges card and no second form; a line added in the
+sheet's grid and saved with the ticket's Save persists and flows
+to ticket money and the money panel; Add Item adds one row in
+the merged form; the locked ticket renders the grid disabled
+with the lock stated; the retired route saves nothing; a new
+rental booked with a charge line carries it onto the ticket;
+Company, Vendors, Customers, and Job Sites pages render with no
+H1 above the sub-tabs. Screenshots in
+~/workspace/fleetsheet-l-build/shots-p/.
+
+FINDING (pre-existing, NOT a 'p' regression — reported in
+PHASEP-REPORT.md, not fixed in this round): a ticket booked with
+no site (site_id NULL — the booking handler's deliberate
+site-optional path) cannot render its ticket page: the page
+header prints the site id unconditionally and ticket_money's
+site join returns no row. The demo book holds no such ticket;
+the sweep found it by booking one. Root cause and traceback in
+the report; the fix is a design call for Jason (how a site-less
+ticket states its money), not a drive-by.

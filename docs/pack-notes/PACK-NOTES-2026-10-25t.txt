@@ -1,0 +1,81 @@
+FleetSheet v1.1 — pack 2026-10-25t (build 't')
+================================================
+
+Jason's 'r' look (2026-10-25), items 2–5. The governing law,
+stated the same day: "no form, no info below the line item
+row(s) and the totals. the forms are universal. and so is the
+pattern for things not on the form." A form's information has
+four homes — header zone, the one line grid, Job Info (popup),
+Notes — and anything that is not form content uses the one
+off-form pattern: a popup.
+
+1. INVOICES OPENS TO A BLANK INVOICE. Billing → Invoices
+   renders the blank invoice editor in place, the way Payments
+   and Credit Memos land on their blank forms. This SUPERSEDES
+   build 'n''s landing on the most recent invoice. Every "New
+   Invoice" door is removed — the money picture's card and the
+   invoice view page's link (the editor's edit-mode door went
+   in build 'r') — the tab is the door, and existing invoices
+   open through the View list. One link stands, and it is not
+   a door: the Payment form's "→ New Invoice" forward link on
+   its no-open-invoices branch.
+
+2. EVERY DOCUMENT FORM'S HEAD IS TWO ROWS. Row 1: Company
+   upper left; form # (larger and bold) + Date upper right.
+   Row 2, below the bar: Customer left; the Job Info box right
+   — navy border, "Job Info" heading, the form's own Job Info
+   values with a dash where unset, display only (the popup
+   edits). Invoice (new + edit), Credit Memo, and Work Order
+   were the named scope; Sale, Rental, Quote, and Change Order
+   take the identical pattern. Measured: head height 247px,
+   line band at a 255px offset from the head's top, on every
+   document form; the Job Info box carries a fixed height so
+   no form sits higher than another. The invoice form itself
+   changed where it differed from the enumeration: its
+   customer block stood in the middle column and it carried
+   no Job Info box — both are corrected, not matched around.
+   The Credit Memo form's stray "Invoice Ref pulls lines."
+   hint paragraph is removed from the form's flow.
+
+3. BELOW-THE-LINES CLEANUP, ALL DOCUMENT FORMS. Fields that
+   stood below (or above) the line rows now ride in the form's
+   Job Info popup, same names, saved with the form: Credit
+   Memo — Invoice Ref, Inv Date, Reason, Upload; Work Order —
+   Uploads; Sale — Condition; Quote — Valid Until, Against,
+   Site (restored: the field was built but never rendered,
+   and a quote's site was silently cleared on edit-save),
+   Input by (read-only), and the linked-documents block
+   (read-only); Rental booking — On-Rent, Off-Rent Est,
+   Transport, Deliver to, Upload. The rental booking's summary
+   strip moves below the line rows (the totals zone), hidden
+   while empty. Credit Total and quote Total stand with their
+   totals zones; Notes stand everywhere. The Credit Memo's
+   Inv Date is a reference display only (the referenced
+   invoice's date); it never persisted — the memo's date is
+   the head's Date.
+
+4. WORKING SECTIONS RIDE IN POPUPS. (a) The Plant Sale /
+   Fleet Sale confirm + signature come off the Sale form:
+   saving such a sale opens a Confirm sale popup holding the
+   same checkboxes and a Confirm & Save button. The audit
+   stamps ("Plant sale confirmed." / "Fleet sale confirmed.")
+   and the engine's refusal without confirmation are
+   unchanged, proven in both directions. (b) The Credit Memo
+   Apply Leftover form stands in a popup behind an Apply
+   Leftover button. (c) The Quote's status and convert forms
+   stand in their own popups behind Status and Convert doors.
+   The ticket page's working sections are untouched (Jason's
+   open look item).
+
+5. ONE DEFECT FIXED. The Credit Memo form crashed for any
+   picked customer (its Documents query selected a column
+   that does not exist); the surface — Apply Now, Documents,
+   Apply Leftover — was unreachable in build 's'. Fixed and
+   pinned by test. One defect FLAGGED, not fixed: the Change
+   Order form cannot save (its handler and engine disagree —
+   invoices vs quotations, and no Reason field); it awaits
+   Jason's ruling. See PHASET-REPORT.md, D-T1.
+
+Manual: USER_MANUAL.txt updated (§§5.2, 5.4, 6.1, 6.2, 6.5,
+and the sale confirmation passage). manual.pdf is NOT
+regenerated in this pack. Books unchanged.

@@ -1,0 +1,78 @@
+FleetSheet v1.1 — pack 2026-10-25u (build 'u')
+================================================
+
+Jason's ruling (2026-10-25): universal summary views. Every
+document gets a summary view titled "Summary of Rental#
+XXXX", "Summary of Sale# XXXX", "Summary of Work Order#
+XXXX", etc. — Billing documents too. "The work stays on the
+forms and in the forms' popups." The summary is the third
+universal pattern, after the form and the popup. This
+resolves build 'r''s JC-1 remainder.
+
+1. ONE SUMMARY PATTERN FOR EVERY DOCUMENT. Rental, Sale,
+   Work Order, Quote, Change Order, Invoice, Payment, and
+   Credit Memo each open on a summary titled exactly
+   "Summary of <Kind># <number>". The facts are stated the
+   same way on each: customer, date, status, the document's
+   lines, its totals, its notes, its Job Info values, and its
+   record stamps (who and when it was entered, overrides,
+   confirmations, out-of-flow marks). A fact that does not
+   apply, or carries no value, is not stated. The Work Order,
+   Quote, Change Order, Payment, and Credit Memo summaries
+   are new; the rental ticket page, the sale detail, and the
+   invoice view page became the pattern.
+
+2. THE WORK COMES OFF THE SUMMARIES. No working section
+   stands on a summary; each kind's work rides behind popup
+   doors in one door row, with Edit (where a form exists),
+   Print (the document's three-choice print), and the
+   universal View at the bottom left:
+   - Rental: the money panel is a Payment popup; Check-Out
+     and Check-In are popups (same fields, same routes, same
+     gates, Proceed-anyway unchanged); the status block
+     states Now and Next Step as facts, and the act lives in
+     a Status popup; Move with note is its own popup; the
+     Job Info popup stands as build 's' left it; the stored
+     charge lines stand on the summary as its lines, read
+     only, under their record caption. The Work Ticket and
+     Delivery Ticket print doors stand in the door row.
+   - Sale: the money panel is a Payment popup.
+   - Work Order / Quote: their money panels are Payment
+     popups — the standing panels PHASET named as JC-T4 are
+     gone from their forms. The Work Order's quote-expiry
+     panel states as a fact line on its summary.
+   - Invoice: the payment form is a Payment popup; the line
+     work (Add a Line, the per-line note and delete forms)
+     is an Edit Lines popup; the PO form is the Job Info
+     popup; the paperwork slots are a Paperwork popup. The
+     lines table on the summary itself is read only.
+   - Payment and Change Order carry no Edit door: neither
+     has an edit flow, and a posted record's fields never
+     change. A Credit Memo's Edit door opens the Credit Memo
+     form for the memo's customer, where its application
+     work lives.
+
+3. RECORD LINKS LAND ON SUMMARIES. Every link that opens an
+   existing document — the View lists, Today, the Done
+   record links, the ticker, the audit pages, and the
+   references one document makes to another (invoice to
+   ticket, quote to its documents, a payment to the documents
+   it settled) — opens the summary. Only Edit doors and
+   creation flows open forms. Post handlers that return the
+   operator to a document return to its summary.
+
+4. ONE DEFECT FOUND AND FIXED IN THE SCREENSHOT PASS. The
+   invoice's Payment popup stood open on page load: built by
+   hand to lead with a Close span, it was absorbed by the
+   shell's section wrapper into the Payments & Credits box,
+   whose expand restore cleared its hidden state. It is now
+   built with the standard popup wrap, as every other popup
+   is; the #record-payment anchor stands. Two smaller
+   finishes ride with it: summary fact rows with no value no
+   longer render as labeled blanks, and the summaries' door
+   row aligns its doors on one baseline. The Change Order
+   save defect (PHASET D-T1) is NOT touched; it awaits
+   Jason's ruling, as before.
+
+Manual: USER_MANUAL.txt updated (new §3.8, The Summary).
+manual.pdf is NOT regenerated in this pack. Books unchanged.

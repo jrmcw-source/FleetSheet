@@ -1,0 +1,53 @@
+FleetSheet v1.1 — pack 2026-10-24q (build 'q')
+================================================
+
+One defect, fixed as a class, under Jason's ruling of 2026-10-24
+23:18: "no job site isn't uncommon, even in the oilfield world,
+much less my grandma's. it shouldn't block anything, if it's blank
+there's just no tax location to calculate, at worst, and that's
+not our ballpark in the first place."
+
+THE DEFECT (found in 'p', pre-existing): a ticket booked with no
+site (site_id NULL — booking is deliberately site-optional) could
+not render its own page and its money came back empty.
+
+THE FIX — blank site is a normal state of a ticket:
+- engine ticket_money: the site join is a LEFT JOIN; a site-less
+  ticket's money computes in full, site-derived fields stand
+  empty, and tax comes only from the ticket's own explicit
+  jurisdiction (no jurisdiction = no tax, the operator's call).
+- Ticket page: the header states the site as "Site —" when blank.
+- Ticket print pack (Work Ticket / Delivery Ticket sheets) and
+  the invoice print fallback: LEFT JOINs; sheets render.
+- Stays report: LEFT JOIN; a site-less ticket appears with its
+  site stated blank instead of vanishing from the report.
+- Quote conversion: the "set a site before converting" gate is
+  removed — a site-less quotation converts, and the tickets it
+  books carry no site.
+- Manual §5.4 and §11.5 state the rule in terms.
+
+Checked and already safe (unchanged): the invoice Ship To block
+(no site = no Ship To prints, by design); the invoice job box
+(already a left join); the health check for a site assigned to a
+different customer (a site-less ticket has no site customer to
+mismatch); Today/ticker/reports money (no site joins — they ride
+ticket_money); booking itself (site-optional since 2026-10-07).
+
+Booking stays site-optional. No site was made required anywhere.
+
+New regression coverage: Suite C gains class C11SitelessTickets
+(5 tests) — Suite C is now 50 tests.
+
+VERIFICATION (live; full account in PHASEQ-REPORT.md): the owed
+walk ran end-to-end on a real server — a ticket booked with no
+site fields at all renders, takes a charge line in its sheet,
+dispatches, returns, invoices for exactly its ticket money with
+$0.00 tax, and prints. Density 69 pages PASS; tabecho 27 routes;
+compliance 59/4 (H1, H12, H21, H30 — baseline-exact); health
+33/0/0 on the demo book; Suites A 11/11, B 5/5, C 50/50, D 3/3;
+security 9/9; ux carries only the known "pbox has lock toggle";
+v101 name union = the 34 baseline names exactly.
+
+Tree books close byte-identical (demo.db 75314589…,
+blank.db dd849736…); manual.pdf untouched — the PDF rebuild
+still waits for Jason's look, before the push.

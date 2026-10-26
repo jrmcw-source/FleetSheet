@@ -1,0 +1,68 @@
+FleetSheet v1.1 — pack 2026-10-25v (build 'v')
+================================================
+
+Jason's rulings (2026-10-25): "No form number is ever a key
+ID. Key ID's must exist for every table, always be unique,
+and assigned by the engine." A Change Order is a standalone
+money document — "Nothing requires anything." And never the
+bare word "ticket" — qualified names only.
+
+1. EVERY TABLE IS KEYED BY THE ENGINE. Each table now
+   carries its own engine-assigned key ID as its primary
+   key. A document's number (Invoice#, Rental Ticket#,
+   Work Order#, Quote#, Change Order#, Credit Memo#), a
+   customer's C- number, a unit's A- number, a site's
+   S- number — these are display numbers: unique, permanent
+   once posted, and exactly what the operator types, sees,
+   and prints, everywhere as before. They are no longer the
+   tables' keys; the key and the number are separate things
+   for separate reasons. Books written by earlier builds
+   migrate on first open, with no operator action; every
+   document, line, allocation, total, and stamp carries
+   over unchanged (proven by a before/after dump comparison
+   on the demo book: counts and money totals identical, the
+   standing spot figures exact). Sale numbers are minted one
+   way now (S-<year>-<n>); numbers already issued never
+   change.
+
+2. THE CHANGE ORDER IS A STANDALONE MONEY DOCUMENT. It
+   needs no quote and no other document. It carries its own
+   number, customer, lines (adds and subtracts), reason, and
+   total. It may name ONE associated money document —
+   Invoice, Sale, Work Order, Rental, or another Change
+   Order — stated as a fact on both documents' summaries;
+   the association changes no totals anywhere. A quote no
+   longer absorbs change order amounts: a quote's numbers
+   are its own, and a changed quote is reissued as a new
+   quote ("Quote# XXXX rev 1"). A change order is settled
+   on itself, like any receivable: payments allocate
+   against it from its summary or the payment form, in any
+   tender, at any time. One payment may settle an invoice
+   and its associated change order in a single event, with
+   the amount stated per document (the amended-PO case).
+   Open change orders stand in the money picture alongside
+   the other receivables, and an open change order past its
+   date appears in Today's money like any other open
+   document. Once money has settled against a change order
+   its lines stand as issued; a correction is a new change
+   order.
+
+3. EQUIPMENT TAB ORDER. The form strip reads, left to
+   right: Sale, Rental, Quote, Work Order, Change Order,
+   Check In/Out. Change Order is the last of the money
+   forms. Assets stays far right, alone at the edge,
+   unchanged.
+
+4. NAMES SAY WHAT THEY MEAN. The bare word "ticket" is
+   gone from operator-facing text, in the app and in the
+   manual: the documents are Rental Tickets; the two papers
+   keep their names, Work Ticket and Delivery Ticket; the
+   reference field is Reference Ticket. Job Info attachments
+   now leave their event in the Done record (before this
+   build the record silently failed); attachments keep
+   resolving by their document number, which never changes.
+
+The manual (USER_MANUAL.txt) is updated for the change
+order chapter, the tab order, and the naming sweep. The
+printed manual (manual.pdf) is not regenerated in this
+pack. PIN unset on the demo book, as shipped.

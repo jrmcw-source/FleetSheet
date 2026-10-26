@@ -1,0 +1,92 @@
+FleetSheet v1.1 — pack 2026-10-25s (build 's')
+================================================
+
+One item. Jason's look at build 'r' (2026-10-25) flagged the
+box below the form on the rental ticket page — the Transport
+and Possession form carrying the ticket's charges line-item
+grid — and ruled: "it's unnecessary and breaks every rule we
+have. a line item entry on the invoice can be freight, can
+have a description, can be taxed or not, any tickets needing
+uploaded can go in the job info popup. please get rid of it."
+
+1. THE FORM IS GONE. The rental ticket page renders no
+   Transport and Possession section and no charges grid. The
+   page keeps its header/info, billed mark, summary cards,
+   money panel, condition forms, status form, Move-with-note
+   form, print links, and the View row. The booking form's
+   charges grid is gone with it: stored ticket charge lines
+   are typed nowhere.
+
+2. CHARGES ON TICKETS END AS A CAPABILITY. A ticket's total
+   is its computed lines (rental, damage waiver, environmental
+   charge). An invoice built from a ticket carries the
+   computed lines only; freight and extra charges are typed
+   on the invoice by the operator, each line with its own
+   description and Tax flag. Ticket money is blanket-only:
+   the per-line settlement paths for tickets are retired
+   (engine.doc_line_states returns no lines for a ticket), and
+   a settlement aimed at a stored line folds to blanket when
+   the ticket is invoiced.
+
+3. TRANSPORT LIVES IN THE TICKET'S JOB INFO POPUP. A Job Info
+   button stands where the form stood, opening the ticket's
+   Job Info popup (the document-form popup pattern): Transport
+   (haul_by), Deliver to, Tax Jurisdiction (same combo /
+   hidden-id mechanics), the possession/tax note and haul
+   consequence under the fields, and a file upload for ticket
+   paperwork (the existing job-attachment model; files land in
+   docs/ named ticket_<id>_...). The popup saves through the
+   repurposed /ticket/<id>/transport route. The delivery
+   ticket print reads the same fields as before. A locked
+   ticket (billed, closed, void) renders the popup read-only
+   with the lock reason stated, and the route refuses the
+   save — the old form's lock rules, unchanged.
+
+4. EXISTING STORED LINES — CENSUS AND DISPOSITION. Census
+   before any edit: demo.db holds 4 stored ticket_lines, all
+   on UNBILLED "On Rent" tickets — T-1001: Freight $150.00
+   untaxed + Fuel $45.00 taxed ($195.00); T-1002: Freight
+   $125.00 untaxed + Fuel $100.00 taxed ($225.00). T-1003
+   (billed) holds none; blank.db holds none. Under the record-
+   is-the-protection rule nothing was deleted and no total
+   silently changed: those lines stay counted in their
+   tickets' totals and are listed read-only in the Job Info
+   popup (listed, not editable, no Add/Delete). Per-ticket
+   totals on the demo book are byte-for-byte the same figures
+   before and after (T-1001 $778.62, T-1002 $1,287.54,
+   T-1003 $1,470.94). The ticket_lines table stays.
+
+Manual: USER_MANUAL.txt updated (§5.4 charges, tax, ticket
+page, and money paragraphs; §6.1 receipt bullet; §6.3 the
+other-documents paragraph; §7.4 the tax base). manual.pdf is
+NOT regenerated in this pack. Playbook: layout.md and
+buttons.md carry dated 2026-10-25 entries recording this
+ruling; it supersedes build 'p''s placement of the stored
+charge lines in the ticket's Transport and Possession form.
+
+VERIFICATION (live; full account in PHASES-REPORT.md):
+density 69 pages PASS; tabecho 27 routes; compliance 59/4
+(H1, H12, H21, H30 — baseline-exact); health ancestor 3/3 +
+extended 16/16, demo book 33/0/0 ok=True; Suites A 11/11,
+B 5/5, C 60/60 (55 standing + 5 new C13 build-'s' tests),
+D 3/3 (label census unchanged, 38 labels); security 9/9;
+ux carries only the known "pbox has lock toggle"; ancestors
+all OK, migration_ledger 3/3; compile scan 28 files clean.
+v101 name union = the 34 baseline names less
+test_every_line_form_has_delete_x_per_row plus
+test_rental_add_item_wired: the delete-x name's baseline
+failure entry reads "the ticket Charges grid is a second grid
+by design" — build 's' removed that grid, so the name is
+retired by the ruling itself; test_rental_add_item_wired
+still stands for Jason's ruling from build 'r'. No new v101
+names. Live proofs: ticket page without the form; the popup
+saving Transport/Deliver to/Tax Jurisdiction end-to-end and
+printing on the delivery ticket; a ticket upload stored from
+the popup; a locked ticket's popup read-only and its route
+refusing; an invoice from a ticket carrying computed lines
+only, with a blanket settlement folded on; a freight line
+typed on an invoice (Tax flag off) saving at $0.00 tax while
+a taxed fuel line took $4.16 at 9.25%.
+
+Tree books close byte-identical (demo.db 75314589…,
+blank.db dd849736…); manual.pdf untouched.

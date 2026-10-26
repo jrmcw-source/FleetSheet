@@ -1,0 +1,113 @@
+FleetSheet v1.1 — pack 'n' round notes (built 2026-10-24, web side, from pack 'm')
+================================================================================
+Jason's authorization (2026-10-24, in his words): "'m' is the checkpoint.
+We have M. We can't lose it. So try to fix it like I've ranted about. If it
+don't work we still have M." Source list: looksee-m-fixes-2026-10-24.md
+(his look at pack 'm', 11 items) + five owner addenda filed during the
+round (print-button census, naming rule + test, screenshot + door graph,
+manual §6.2 as spec, bidirectional divergence list). Governance:
+build-playbook (Rule Zero review done before building) + checks.
+
+Checkpoint discipline: pack 'm' as delivered on Drive (Sync pack root
+1bYZSgb892oYbfq7aD35_4OSKs6eNJRTe, gArchives pack root
+1d75ir7Pb9hiLexesk4GvCWa7WYEuTctv, Sync laptop-check root
+1i-m-TM5q5wj3nw_Y3kXuOn3mtYD87vih) was NOT touched; nothing was uploaded
+this round. Build 'n' was edited in place in the local tree. Tree books
+close byte-identical to 'm': demo.db 75314589f42c88d509841714bb97f4da,
+blank.db dd84973679b425e6ac0629d74bdb63d5. manual.pdf untouched (md5
+2255b085a41490d2461ab30b2a1c6771) — the PDF rebuild waits for Jason's
+look at 'n', per his sequence. Version stays v1.1; 'n' is a pack letter.
+
+Full account: PHASEN-REPORT.md (~/workspace/fleetsheet-l-build/).
+
+WHAT CHANGED
+------------------------------------------------------------------
+1. Ticker: the "Clear for Today" button is removed from the alert
+   strip (all pages — one strip builder), and the now-dead
+   action='clear' branch in the alert-ack post handler is removed
+   with it. Snooze is the strip's only defer control. (Item 1;
+   Jason never asked for the button.)
+2. Print menus: the three-choice menu now renders fully on-screen —
+   a max-height cap with internal scroll, and a flip-up rule: when a
+   Print button sits low on the page, PRINTMENU_JS adds an .up class
+   on open and the menu opens upward instead of below the crease.
+   One builder, so every print menu in the app is covered. (Item 2.)
+3. Invoice cluster, screen behavior rebuilt to match the simpler
+   forms (the printed invoice did not change except item 4):
+   a. Landing: the Invoices place lands ON an invoice — /money and
+      /money?tab=invoice redirect to the most recent invoice
+      (invoice_date, then number), or to the blank invoice editor
+      when none exist. The AR picture (Open balance / Overdue / Open
+      invoices + New Invoice button) moved to the top of the
+      invoices register page; the register's echo H1 is gone.
+   b. Door grammar, one rule app-wide: tabs are PLACES; creating is
+      an ACTION. The Billing row is now Invoices / Payments /
+      Credit Memos / Cash in both tab builders. The Quotes row is
+      Quotes / Change orders (the "New quote" tab is gone — the
+      Quotes place lands on the blank quote form, as before). New
+      Invoice is a button: on the invoice view page (beside Edit and
+      the Print menu), in the editor when editing a saved invoice,
+      and on the register picture. The pay form's empty-state button
+      now goes straight to /invoice/new.
+   c. Print buttons: exactly one Print per invoice surface, opening
+      the standard three-choice menu. The print sheets' action bar
+      (every document, via _doc_actions) no longer carries a
+      standalone PRINT button and a standalone Print to Location
+      button — it carries the same single Print menu + Back. The
+      mixed report's standalone window.print button is now the
+      standard page menu. Census in PHASEN-REPORT.md.
+   d. Add Item: the invoice editor already added one blank .iline
+      row per click — it still does. The paper-mimic signature
+      preview block is removed from the screen form (the printed
+      invoice keeps its own block). "Add from ready work" now
+      renders closed (a one-line disclosure) instead of an open
+      panel under the form; its contents and posts are unchanged.
+      The invoice view page's "Add a Line" stacked mini-form is now
+      one universal .iline row, same field names, same post route.
+4. PRINT AMENDMENT (Jason's own amendment to his locked template,
+   authorized 2026-10-24): on the printed invoice, the signature /
+   notes block moved below the totals at the full form width, in
+   both the HTML and PDF render paths. Line lengths, before -> after:
+   Print Name 3.70in -> 6.90in; Sign Name 2.55in -> 4.55in; Date
+   0.75in -> 1.95in; Notes 3.70in -> 6.90in. Every other template
+   element is identical. The signature block exists only on the
+   invoice (verified) — no other printed document carries it.
+   New print locks (PDF content md5, timestamps normalized — raw
+   reportlab bytes embed the build clock; method in PHASEN-REPORT):
+   INV-1001 9ab6b0d4fb6f0c963b9aeb8b855a3e99
+   INV-1002 4d3bd426bd36b2553deafa33f8eaf564
+   INV-1003 94b83ca34502c0374a066562f849a557
+5. Done Today exists only on the Today page. The Done card is
+   stripped from every other page; where the card carried a page's
+   list, a lone View door (same pop-up, same place) remains. The
+   /done route and the Done log are unchanged.
+6. Naming: any control renamed by the door sweep is recorded in the
+   label census. The naming-consistency rule is written into the
+   playbook (verbiage.md), and a naming gate (Suite D) now diffs
+   the label census (39 labels) at build time.
+
+MANUAL (USER_MANUAL.txt updated; manual.pdf NOT regenerated):
+ticker Clear passage removed; Done Today placement stated (Today
+only); the View-control passage aligned to pages that carry a
+list; the Print passage states the single button + on-screen menu
++ the same button on the print sheet; §6.2 gained the door /
+landing / Add Item passage in the owner's terms; the printed
+signature lines' full width is stated in §6.2.
+
+SUITES: Suite A + A9/A10/A11; Suite C C7 updated for the landing,
+C10 added (7 tests; suite now 45); Suite D (naming) new, 3/3 PASS
+on this tree at build time. checks.md baselines updated.
+
+VERIFICATION (in-process; the environment still blocks live servers
+and scratch copies): build 'n' harness 40/40 PASS (landing with 0
+and N invoices, door labels, one-Print counts, row counts, Done
+census across 17 rendered pages, ticker census, print-sheet census,
+billing-off landing, engine smoke: invoice lines, payments, petty).
+Invoice PDFs for INV-1001/1002/1003 still render one page each; a
+6.90in signature rule is measured in the output stream. Screenshots
+(rendered in-process, headless Chromium): shots-n/landing-invoice-
+view.png, shots-n/invoice-form.png, shots-n/print-sheet.png.
+Still owed to the gate battery (unchanged list): density 69,
+tabecho 27, compliance 59/4, v101 x2 with name-set comparison,
+Suites A (live) + B (live) + C (full), regression sweep, canonical
+zip from extraction.

@@ -1,0 +1,90 @@
+FleetSheet v1.1 — pack 2026-10-25r (build 'r')
+================================================
+
+The facelift. Jason's look at build 'q' (2026-10-25): "Generally
+I like the way this build looks, but i do want some minor
+tweaks, that are nit-picky, but the kind of thing that's easily
+noticeable and intimates amateur." Five items; this is the
+face lift that wraps up the build.
+
+1. TODAY TICKER SQUEEZE. The alert strip's rows carry no
+   vertical margins and tight leading, on every page the strip
+   renders — single spacing, down from double. Measured on the
+   Today page (demo book, strip open): 157px before, 104px
+   after, same rows. Ticker rules otherwise unchanged.
+
+2. ONE PAGE GEOMETRY. Every form page now opens with the same
+   header zone (.fhead): Company block at the left, the
+   Customer/Address block in the middle, the form number and
+   Date at the right — the number larger and bold — then the
+   bar, then the form. The header zone measures a uniform 100px
+   tall on every document form, and the line header band lands
+   at the same Y (235px at 1366x900) on the invoice, payment,
+   credit memo, sale, work order, quote, and change order
+   forms alike; before, those bands stood at five different
+   heights (296–573px). Billing's sub-tabs start at identical
+   positions; Check In/Out, Petty Cash, and Reports start where
+   everything else starts.
+
+3. NOTHING BELOW THE FORM + UNIVERSAL VIEW BUTTON. Every form
+   page ends with one View button at the BOTTOM LEFT, opening
+   the page's own list popup (filterable, sortable, column
+   headers, no app header inside); the popup's Refresh, Print,
+   and Close stand at its BOTTOM RIGHT. New list fragments:
+   Work Orders, Quotes, Sales. Removed from under forms: the
+   sales register table, the credit page's Open Credit Memos
+   table, the invoice editor's below-the-button-row placement
+   of the ready-work pickers (they render inside the form now).
+   This supersedes the Oct 20 every-page Done-View provision
+   and build 'n''s lone-View-door compromise (playbook,
+   buttons.md, dated 2026-10-25).
+
+4. NOTHING ABOVE THE LINE ITEMS. Every field that stood
+   between the header zone and the line rows is dispositioned:
+   needed fields moved into the form's Job Info popup (same
+   names, saved with the form — verified end-to-end for the
+   work order's Unit/Type/Charge-to/dates, the invoice's
+   Reference Ticket/Terms/Header bar note/Transport, the
+   sale's Reference #, the rental ticket's Reference Ticket,
+   the credit memo's Invoice Ref); the invoice's decorative
+   Job Info preview box and its display-only Contact Name span
+   are removed (the live Contact Name is the popup's field);
+   the credit memo's Inv Date/Reason/Credit Total moved below
+   its line rows. The work order is the worked example: WO #
+   larger and bold, customer block up top, the Unit/Type/
+   Reference Ticket area deleted.
+
+5. BILLING SETTINGS IN FIVE COLUMNS. Admin → Billing: one
+   column per option group — Billing Defaults (with the
+   printed-invoice Job Info fieldset), Payment Terms, Line
+   Units, Line Items, Compliance Documents — options straight
+   down, each column scrollable, no option dropped, the same
+   POST contract. The page measures 900px tall at 1366x900
+   (was 1137px): it fits the screen without a page scroll, and
+   a toggle save was verified end-to-end in the new layout.
+
+Manual: USER_MANUAL.txt updated (§3.2 ticker spacing, §3.6
+View overlay position and controls, new §3.7 The Form Header,
+§6.2 ready-work placement, §7.1 the popup's host-form fields,
+§11.4 the five columns). manual.pdf is NOT regenerated in
+this pack — it follows Jason's look, before the push.
+
+VERIFICATION (live; full account in PHASER-REPORT.md):
+density 69 pages PASS; tabecho 27 routes; compliance 59/4
+(H1, H12, H21, H30 — baseline-exact); health ancestor 3/3 +
+extended 16/16, demo book 33/0/0 ok=True; Suites A 11/11,
+B 5/5, C 55/55 (50 standing + 5 new C12 facelift tests; one
+C10 assertion updated to the new header doctrine), D 3/3
+(label census regenerated through its own mechanism — 38
+labels; the one removal is the invoice editor's New Invoice
+door, deleted by item 4); security 9/9; ux carries only the
+known "pbox has lock toggle"; ancestors all OK,
+migration_ledger 3/3; compile scan 28 files clean. v101 name
+union = the 34 baseline names + ONE new name,
+test_rental_add_item_wired, which asserts the rental form's
+old row4s2 header row — the exact above-the-lines row item 4
+deletes. Flagged in PHASER-REPORT for Jason's ruling; the
+product was not bent to pass it.
+
+Tree books close byte-identical (demo.db 75314589…,
+blank.db dd849736…); manual.pdf untouched.

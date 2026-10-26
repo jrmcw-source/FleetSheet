@@ -1,0 +1,100 @@
+FleetSheet v1.1 — pack 'o' round notes (built 2026-10-24, web side, from pack 'n')
+================================================================================
+Jason's authorization: his rulings of 2026-10-24 21:58–22:02 on the
+flags the 'n' round carried (envelope print out; paperwork toggle
+popup; while-out switch with a note; compliance ignoring asset
+status confirmed; the Fleet-sale v101 test ruled stale), plus two
+rulings filed during this round (2026-10-24 22:14): the print bottom
+zone correction and "Record Payment" → "Payment". Source list:
+looksee-m-fixes-2026-10-24.md (rulings at the end) + the two 22:14
+rulings. Governance: build-playbook (reviewed before building) +
+checks. Full account: PHASEO-REPORT.md (~/workspace/fleetsheet-l-build/).
+
+Checkpoint discipline: packs 'm' and 'n' as delivered on Drive were
+NOT touched; nothing was uploaded this round. Build 'o' was edited in
+place in the local tree. Tree books close byte-identical to 'm'/'n':
+demo.db 75314589f42c88d509841714bb97f4da, blank.db
+dd84973679b425e6ac0629d74bdb63d5. manual.pdf untouched (md5
+2255b085a41490d2461ab30b2a1c6771) — the PDF rebuild waits for Jason's
+look at 'o'. Version stays v1.1; 'o' is a pack letter.
+
+WHAT CHANGED
+------------------------------------------------------------------
+1. Envelope print — OUT (Jason: "Out. i don't feel like adding it in
+   properly. let them buy windowed envelopes or get out the
+   typewriter."). The envelope stops being a subsystem: the picker
+   panel on the invoice print sheet, the ?env= preset switching, the
+   Plain Paper Print link, and the plain=1 envelope PDF (pdf_envelope)
+   are all removed, with the dead code behind them. The printed
+   header geometry does not move: the address blocks stand at the
+   coordinates they have always printed at (the former default
+   preset's), now a single fixed placement (ADDRESS_PLACEMENT) —
+   coordinator scoping, flagged in the report for Jason's look.
+   Verified: ?plain=1 and ?env= now return the ordinary invoice PDF,
+   byte-identical to the plain print; the header zone of all three
+   demo invoices is pixel-identical to 'n' at 200 DPI.
+2. While-out switch — NOTED PASSAGE (Jason: "The while-out switch
+   is okay, but inconsistent. let them switch it with a note."). A
+   Designation or Status change on a unit out on a live ticket
+   (Reserved / Dispatched / On Rent / Standby) proceeds when a note
+   is supplied and refuses only without one ("a note is required to
+   switch a unit that is out"). The asset form shows a Switch Note
+   field while the unit is out. The Done entry carries the note and
+   names the live ticket, composed like the condition/FIT noted
+   passages. Supersedes the Phase 5 outright refusal.
+3. Paperwork toggle popup (Jason's shape): a Paperwork door on the
+   asset form and on the unit compliance page opens the standard
+   popup listing the unit's paperwork — checklist items,
+   certification records, data book documents — each with a toggle,
+   all on at open. Its print control is the standard three-choice
+   menu; the ticked set prints as one job (the compliance pack
+   narrowed to the selection, certifications now selectable there —
+   the /sel print route learned the r= cert selection). The default
+   Print behavior changes nowhere. Ticket-side files (job
+   attachments, condition photos) are not in the list: the model
+   files them against the ticket and offers no read path into a
+   pack (gap flagged in the report).
+4. Print bottom zone — CORRECTED (Jason 2026-10-24 22:14: "dont
+   extend them that long... still want that one block, totals right
+   justified, signatures left justified stretching right until
+   they'll get too close to the totals."). The 'n' item-4 move
+   (signature block below the totals at full width, lines to
+   6.90in) is undone: the one side-by-side block stands as before —
+   signature lines left (Print Name / Notes 3.70in, Sign Name
+   2.55in, Date 0.75in in the PDF), totals right, right-justified,
+   bottom-aligned beside the block. HTML + PDF. New PDF content
+   locks in PHASEO-REPORT.md (they supersede the 'n' locks).
+5. "Record Payment" → "Payment" (Jason 2026-10-24 22:14 — the noun
+   grammar: Invoice, Payment, Credit Memo, Work Order). One app
+   site carried the exact words: the invoice view's payment
+   section heading. It now reads "Payment"; the #record-payment
+   anchor the ticker and task links target is unchanged. The
+   manual's section 6.3 is retitled "Payment" and its two prose
+   references follow. No door or button carried the exact words
+   (the section's own button is "Apply Payment" — untouched).
+   Suite D census: no drift (the heading is not a census surface).
+6. Test reconciliation (Jason ruled 22:02 "yup, agreed"): the v101
+   sale test posts WITH fleet_confirm in both harness variants
+   (pristine ancestors stand in the pack extractions; the amendment
+   is recorded in governance/checks/baseline-post-o-2026-10-24.md).
+   Suite C's C5 money-home assertion now reads the 'n' landing
+   through the redirect capture; C9's while-out test is the noted
+   passage. The corrected test_ux bootstraps through the app's
+   migration-on-open (engine.init_db). Results: v101 name union =
+   the 34 baseline names exactly (the Fleet name is gone, no other
+   movement); Suite C 45/45; test_ux completes with only the known
+   "pbox has lock toggle" red.
+7. Playbook: buttons.md's Print section now states the sheet-bar
+   rule as built in 'n' (the single three-choice menu + Back on the
+   print sheets), dated amendment (the 'n' D-2 item).
+
+VERIFICATION (live this round — full account in PHASEO-REPORT.md)
+------------------------------------------------------------------
+Density 69 pages PASS; tabecho 27 routes OK; compliance 59/4 exactly
+(H1, H12, H21, H30 — baseline-exact); health ancestors 3/3 + extended
+16/16, demo book 33/0/0; Suites A 11/11, B 5/5, C 45/45, D 3/3;
+security 9/9; in-process ancestors all OK. Real-server sweeps:
+envelope variants dead; while-out refused without note / proceeds
+with note (Done entry quoted in the report); paperwork popup lists,
+toggles, and prints (incl. certs-only). Screenshots in
+~/workspace/fleetsheet-l-build/shots-o/.

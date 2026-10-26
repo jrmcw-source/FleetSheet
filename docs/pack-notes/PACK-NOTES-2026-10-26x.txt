@@ -1,0 +1,117 @@
+FleetSheet v1.1 — pack 2026-10-26x (build 'x')
+================================================
+
+Jason's one-ticker ruling (2026-10-26): the Today ticker is
+the only ticker in the build. It lists everything, it is
+filterable, it shows five items, and it is collapsible with
+its state kept. Every other ticker is wiped out. His
+NOTHING OFF THE RANK ruling the same day: everything must
+be in the rank somewhere — nothing in the system is off the
+rank, ever; an item may stand very low, but if the operator
+punches through everything above it there is nothing left
+that can be done. Judged in the factory-default state (all
+switches on, all categories on, nothing snoozed): a user's
+own toggles are his acts and are respected; they are never
+the excuse for a design exclusion.
+
+1. ONE TICKER, ON TODAY ONLY. The shared strip is fed only
+   on the Today page. The Billing feed (all tabs) and the
+   Reports feed are removed, and the Assets page's own
+   ticker is removed whole — the page keeps its kind bar,
+   Latest Changes, Add Asset, and View door. No page other
+   than Today renders ticker markup. The page shell is
+   otherwise unchanged: pages that never showed a strip are
+   byte-stable.
+
+2. CAPTURE ALL. Today's pool is one union: the shipping-paper
+   lines, the disputed and past-due invoice taps and the
+   PO-expiry taps, the open-ended-rental contention lines,
+   the compliance groups, and the five Assets families
+   (unit conflicts, live purchase orders, accepted quotes,
+   expected off-rent returns, a sole unit unfit for work),
+   merged with the top-of-day items. Rank ladder (stakes,
+   high to low): shipping paper; disputed; conflicts;
+   past-due and PO expiry; contention; live POs; compliance
+   groups; accepted quotes; off-rent; sole unit; idle-unit
+   paper. Filter categories: shipping paper, compliance
+   groups, sole-unit and idle paper are compliance;
+   contention, conflicts, accepted quotes and off-rent are
+   rentals; disputed, past-due, PO expiry and live POs are
+   money. Module switches still win over categories exactly
+   as before. One invoice, one tap stands.
+
+3. FIVE ITEMS. The strip shows five items before the
+   "+ N more" line; the engine cut and the render cut agree
+   at five. The overflow keeps its workload semantics — the
+   total counts everything, a grouped compliance line weighs
+   its item count.
+
+4. NOTHING OFF THE RANK. The Assets families' old rule —
+   paper surfaces only when a job is coming soon — does not
+   survive the merge. A new bottom family lists certification
+   paper on idle units: an active unit with no open rental
+   and an operative certification expired, or due within
+   30 days, stands at rank 10, counted in the workload total
+   and reachable by punching through everything above it.
+   The one hard producer limit found in the pool (live POs,
+   ten rows) is removed. A full producer census — every
+   condition that can hold an item back, with its
+   disposition — stands in PHASEX-REPORT.md; the genuine
+   boundary cases (per-shift checklist rows, not-yet-due
+   items, the PO-expiry window) are flagged there for Jason,
+   not silently settled.
+
+5. WHAT STAYS. The Filter popover governs the whole pool.
+   Snooze stands on every shown row with the standard
+   stepper. The calm line stands on a quiet book. The
+   collapse keeps its state (the ticker:<path> store now
+   only ever carries "/" — leftover keys for other paths in
+   an operator's browser are inert; no cleanup code).
+   Single spacing throughout.
+
+6. MANUAL. Tree USER_MANUAL.txt updated to the one-ticker
+   law (Sections 3.2 and 9.2; version stamp 2026-10-26x) and
+   manual.pdf rebuilt from it: 31 pages; md5 16e38a2e17b347b
+   1333e1c0398db0326 ('w') -> d1fd88507003e2c246904ddd587d3
+   b70 ('x'). The pending manual rewrite draft (its own
+   folder) carries the same factual alignment; it is NOT in
+   this pack — its swap still waits on Jason's review.
+
+BOOKS. demo.db and blank.db are byte-identical to build 'v'
+— no migration in this build:
+  demo.db  07ce2c83665a39f1d51420a624cb0b97
+  blank.db cf08a4033dbc854f3dad48962806f36c
+
+VERIFICATION (final tree). Compile 28/28. Suite A 11/11.
+Suite B 5/5 on a fresh book, single run. Suite C 97/97 —
+C17 amended where build 'w''s filings were superseded, and
+a new C18 class (7 tests) pins the one ticker: no ticker
+markup off Today, the merged pool carries all three former
+pools, five render with the correct overflow, the Filter
+narrows the merged pool including an assets-derived kind,
+collapse and snooze hold, idle paper ranks at the bottom,
+and the rank is fully traversable. Suite D 3/3, label
+census unchanged (36 labels). Density PASS (69 pages).
+Tab-echo 27 routes. Compliance exactly 65 pass / 4 fail
+(H1, H12, H21, H30 — pre-existing). Health 3/3 + extended
+16/16; demo audit 33/0/0; security 9/9; ux exactly one
+failure (pbox — pre-existing); verify.py 37/37. The v101
+failing-name union is 36 names: build 'w''s 35 plus exactly
+one — test_assets_ticker_uses_shared_component, the pin for
+the Assets ticker this build deletes by Jason's ruling
+(class: stale test, named in PHASEX-REPORT). Live Chromium
+proofs mirror C18, including snoozing through the rank until
+an idle unit's expired paper renders at the bottom.
+
+DEFECT FOUND AND FIXED IN THIS BUILD. engine_core's TTL
+cache keyed on the connection's object id; a closed
+connection's id is recycled by the next book's connection,
+so the compliance watch could serve the previous book's
+items in multi-book contexts. The key now carries the
+database file path. One-book production serving was never
+affected; Suite C caught it.
+
+STAGING. This pack's stage tree IS the staging for the
+laptop compile (Inno Setup 6.x), as in packs 'm'–'w'. The
+WinSparkle updater public key stands as the shipped
+placeholder; the real key is pasted at laptop assembly.

@@ -33,10 +33,13 @@ Small equipment rental businesses live in spreadsheets, whiteboards, and memory.
 
 ## Installation (Windows)
 
-1. Download `FleetSheet-Setup-1.0.exe` from [Releases](../../releases)
+1. Download `FleetSheet-Setup-1.1.0.exe` from the [Releases page](https://github.com/jrmcw-source/FleetSheet/releases)
 2. Run the installer — it installs per-user (into your AppData folder), no admin rights needed
+
+The installer is not code-signed. Windows SmartScreen may stop it with a "Windows protected your PC" message — choose **More info**, then **Run anyway**.
+
 3. Launch FleetSheet from the Start Menu — the server starts and opens a clean browser window
-4. First run walks you through setup: company → customers → job sites → vendors → security PIN → billing → backups → devices
+4. First run walks you through setup: company → admin → customers → assets/equipment → billing → job sites (optional) → layout options
 
 Your data lives in a single SQLite file on your machine. Automatic daily backups are on by default — check the System Health page to confirm.
 
@@ -73,4 +76,3 @@ Please don't open issues asking for support using the software — see "no suppo
 Built by someone who spent 17 years at the rental desk — as an asset manager, field engineer, and the person who had to make the invoice match the PO or not get paid. The conviction: if software gets messy real-world invoicing right, everything else follows.
 
 ---
-

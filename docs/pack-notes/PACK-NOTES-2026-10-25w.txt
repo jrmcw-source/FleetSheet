@@ -1,0 +1,70 @@
+FleetSheet v1.1 — pack 2026-10-25w (build 'w')
+================================================
+
+Jason's 'v'-look rulings (2026-10-25): the tickers keep
+their collapsed state; Invoices loses its ticker; the Petty
+Cash button stands in the Admin tab row; and no popup
+carries a control of its own invention — the Petty Cash
+popup's "Full Page" button was never asked for. Jason waived
+his look at this build and authorized the full carry-through:
+fixes, manual, battery, staged package, and upload.
+
+1. TICKER STATE PERSISTS. Each page's alert ticker now keeps
+   the collapsed or expanded state the operator left it in,
+   per page, across navigation away and back. The state rides
+   the ticker's own localStorage family (ticker:<path>); it
+   is not part of the page-layout store. Root cause of the
+   loss: the strip's toggle handler shipped as a JavaScript
+   syntax error, so the state was never written. Proven live
+   in Chromium on two pages, both directions, independent.
+
+2. INVOICES CARRIES NO TICKER. The Invoices page renders no
+   alert strip. Invoice items still surface in the Today
+   ticker as they are worked through. No tickers were added to
+   Payments, Credit Memos, or Cash — the shared money strip
+   those tabs already carried is unchanged.
+
+3. PETTY CASH DOOR IN THE ADMIN TAB ROW. On the Administration
+   page, the sealed Petty Cash button now stands in the same
+   row as the other Admin tab buttons, at the same size,
+   right-justified at the row's end. Placement and size only:
+   same destination, same PIN behavior, one door, nowhere else.
+
+4. NO FULL PAGE BUTTON ON THE PETTY CASH POPUP. Removed. The
+   popup carries the universal popup furniture only — Close,
+   Refresh, Print. The full register page stands at its own
+   address (/petty), unchanged and unlinked from the popup.
+   Popup IN and OUT posting re-proven end to end.
+
+5. MANUAL. USER_MANUAL.txt updated for all four changes
+   (Sections 3.2, 3.6, 6.6; version stamp 2026-10-25w) and
+   manual.pdf rebuilt from it with the build-folder generator
+   (build_manual_pdf.py — the original generator did not
+   survive; the new one reproduces the shipped PDF's measured
+   typography and computes the contents page numbers in two
+   passes). manual.pdf: 31 pages; md5 2255b085a41490d2461ab30
+   b2a1c6771 ('v') -> 16e38a2e17b347b1333e1c0398db0326 ('w').
+
+BOOKS. demo.db and blank.db are byte-identical to build 'v'
+— no migration in this build:
+  demo.db  07ce2c83665a39f1d51420a624cb0b97
+  blank.db cf08a4033dbc854f3dad48962806f36c
+
+VERIFICATION (final tree). Compile 28/28. Suite A 11/11
+(A1/A6 amended for the tab-row door, named in PHASEW-REPORT).
+Suite B 5/5 on a fresh book, single run. Suite C 90/90 — new
+C17 class pins the four fixes; C5's door check amended to
+the tab-row placement. Suite D 3/3, label census unchanged
+(36 labels). Density PASS (69 pages). Tab-echo 27 routes.
+Compliance exactly 65 pass / 4 fail (H1, H12, H21, H30 —
+pre-existing). Health 3/3 + extended 16/16; demo audit
+33/0/0; security 9/9; ux exactly one failure (pbox —
+pre-existing); verify.py 37/37; migration ledger 3/3. The
+v101 failing-name union is the same 35 names as build 'v',
+verified by running the pair against both trees — zero
+delta, every name in 'v''s documented classes.
+
+STAGING. This pack's stage tree IS the staging for the
+laptop compile (Inno Setup 6.x), as in packs 'm'–'v'. The
+WinSparkle updater public key stands as the shipped
+placeholder; the real key is pasted at laptop assembly.

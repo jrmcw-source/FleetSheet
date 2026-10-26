@@ -1,0 +1,45 @@
+FleetSheet v1.1 — pack 2026-10-26y (amendment to build 'x')
+============================================================
+
+One change on top of build 'x' (PACK-NOTES-2026-10-26x.txt
+stands for everything else): the installer icon.
+
+1. INSTALLER ICON. Jason's final-stage rule (2026-10-26):
+   the staged package is the real, complete package — no
+   placeholders, no missing logos. The installer script
+   carried its icon lines commented out and the project had
+   no .ico. Now present:
+
+   - stage/fleetsheet.ico — the FleetSheet mark (the gold
+     spreadsheet-grid symbol from the embedded logo in
+     stage/app/logo_data.py) centered on the logo's own navy,
+     in the seven standard sizes: 16, 24, 32, 48, 64, 128,
+     256. Built from the logo itself; the full wordmark does
+     not survive icon sizes, so the mark carries the icon
+     the way it carries the logo's left side. Moose inspected
+     the 256, 32, and 16 renders before shipping.
+   - packaging/FleetSheet.iss — SetupIconFile and
+     UninstallDisplayIcon are now active lines pointing at
+     that file. The [Files] section already installs stage\
+     into {app} whole, so {app}\fleetsheet.ico lands with
+     the program.
+
+2. WINSPARKLE KEY — UNCHANGED, BY JASON'S DECISION. The
+   staging still carries the shipped placeholder in
+   stage/app/updater_winsparkle.py. Jason pastes the real
+   public key himself before compiling, on the
+   _ED_PUBKEY_B64 line (the assignment below the
+   _ED_PUBKEY_B64_PLACEHOLDER constant — the constant itself
+   stays untouched). Moose verified the paste on a scratch
+   copy: with the line so set, the module's key check
+   reports a real key configured; as shipped it reports
+   none. The private key never enters this package.
+
+BOOKS. Untouched: demo.db 07ce2c83665a39f1d51420a624cb0b97,
+blank.db cf08a4033dbc854f3dad48962806f36c — byte-identical
+to builds 'v'–'x'. No code file changes in this amendment:
+one icon file added, one installer-script wiring change,
+this note.
+
+STAGING. This pack's stage tree IS the staging for the
+laptop compile (Inno Setup 6.x), as in packs 'm'–'x'.
