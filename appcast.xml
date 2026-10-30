@@ -7,13 +7,13 @@
     <language>en</language>
     <item>
       <title>FleetSheet 1.1.1</title>
-      <pubDate>Mon, 26 Oct 2026 20:15:42 +0000</pubDate>
+      <pubDate>Fri, 30 Oct 2026 01:34:23 +0000</pubDate>
       <sparkle:version>1.1.1</sparkle:version>
-      <enclosure url="https://github.com/jrmcw-source/FleetSheet/releases/download/v1.1/FleetSheet-Setup-1.1.0.exe"
+      <enclosure url="https://github.com/jrmcw-source/FleetSheet/releases/download/v1.1.1/FleetSheet-Setup-1.1.1.exe"
                  type="application/octet-stream"
-                 length="22244263"
+                 length="22571697"
                  sparkle:version="1.1.1"
-                 sparkle:edSignature="I07XTAXYOqbLXNPktM9tMPlsi0Vbwv1KHMGoMHbEknCBOm8C3ngI0xgeS6uhemQUHtytmki2aur7W0hw0KDZDw==" />
+                 sparkle:edSignature="s/sDQ+ziXxTOcI5rukEzw+SYe6HadJDs9WxtZSF9n+7dML/nyWOIbH/5vPybhZjr6mD7CBWdstpSPnLVCGbuCw==" />
     </item>
   </channel>
 </rss>
