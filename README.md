@@ -28,8 +28,21 @@ Small equipment rental businesses live in spreadsheets, whiteboards, and memory.
 - **Optional:** `reportlab` (PDF packs), `segno` (QR codes), `pypdf` — vendored as wheels for offline install
 
 ## Screenshots
+**Today** — the morning dashboard — alerts ticker, open AR, what needs doing.
 
-> Screenshots coming with the first packaged release. The UI follows a compact design standard: dense professional business software (think Dynamics/Great Plains), every page fitting one screen where possible, zero wasted space.
+![Today dashboard](docs/screenshots/today.png)
+
+**Assets** — the fleet list with cert expirations.
+
+![Assets list](docs/screenshots/assets.png)
+
+**Compliance** — due and overdue items by unit, with the vendor to call.
+
+![Compliance page](docs/screenshots/compliance.png)
+
+**Invoicing / A/R** — an invoice summary with payments, credits, and the open balance.
+
+![Invoice summary](docs/screenshots/invoicing-ar.png)
 
 ## Installation (Windows)
 
