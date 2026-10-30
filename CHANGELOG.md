@@ -2,6 +2,20 @@
 
 Newest first.
 
+## v1.1.1 — 10/26/2026
+
+- Update checks now run. In 1.1.0 the updater never started —
+  the program addressed the update library by two function
+  names the library does not carry — so Check for Updates
+  silently did nothing. The calls now use the library's real
+  names, and the shipped library is the current one.
+- Books created by v1.0 now open. The startup migration
+  stopped on older books whose line tables predated the
+  current layout, and the program closed without a message.
+  The migration now carries those books forward with every
+  record kept, including a book a failed start already
+  partly migrated.
+
 ## v1.1 — 10/20/2026
 
 - Developed under the working number 1.0.2, released as 1.1:

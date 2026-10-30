@@ -391,6 +391,25 @@ def migrate_legacy_schema(con: sqlite3.Connection) -> None:
     # derived from the legacy qty when the old columns exist. Legacy
     # columns (item, item_desc, qty, rate) exist only on some books —
     # each read is guarded by the PRAGMA column list.
+    # Build 'z' (2026-10-26): init_db's opening schema pass runs BEFORE
+    # this ledger on a pre-'v' book and — the table being absent from a
+    # v1.0-era book — creates credit_memo_lines in the CURRENT shape
+    # (cm_id, per schema.sql) on its way to dying on a legacy index.
+    # The pass's table is empty by construction (the only writers of
+    # cm_id lines run post-re-key), so drop it and let the CREATE below
+    # make the number-keyed shape this ledger speaks; the backfill and
+    # the end-of-ledger re-key then run exactly as on any other pre-'v'
+    # book. A NON-empty cm_id-shaped table is not a state any shipped
+    # build produces; if one is ever met, it is left untouched and the
+    # cm_no backfill below is skipped — no records fabricated, none
+    # dropped. Guarded on not _rekeyed: a re-keyed book's live
+    # credit_memo_lines IS the cm_id shape and stands.
+    _cml_cols = [r[1] for r in con.execute("PRAGMA table_info(credit_memo_lines)")]
+    if not _rekeyed and _cml_cols and "cm_no" not in _cml_cols:
+        if con.execute(
+                "SELECT COUNT(*) FROM credit_memo_lines").fetchone()[0] == 0:
+            con.execute("DROP TABLE credit_memo_lines")
+            _cml_cols = []
     con.execute("""CREATE TABLE IF NOT EXISTS credit_memo_lines (
       line_id INTEGER PRIMARY KEY AUTOINCREMENT,
       cm_no TEXT NOT NULL REFERENCES credit_memos(cm_no),
@@ -404,9 +423,11 @@ def migrate_legacy_schema(con: sqlite3.Connection) -> None:
       tax_exempt INTEGER NOT NULL DEFAULT 0,
       source_invoice_no TEXT NOT NULL DEFAULT '',
       source_line_id INTEGER NOT NULL DEFAULT 0)""")
-    con.execute("CREATE INDEX IF NOT EXISTS idx_cmlines_cm ON credit_memo_lines(cm_no)")
+    _cml_cols = [r[1] for r in con.execute("PRAGMA table_info(credit_memo_lines)")]
+    if "cm_no" in _cml_cols:
+        con.execute("CREATE INDEX IF NOT EXISTS idx_cmlines_cm ON credit_memo_lines(cm_no)")
     _cmcols = [r[1] for r in con.execute("PRAGMA table_info(credit_memos)")]
-    if _cmcols and not _rekeyed:
+    if _cmcols and not _rekeyed and "cm_no" in _cml_cols:
         for _cm in con.execute("SELECT * FROM credit_memos").fetchall():
             if con.execute("SELECT COUNT(*) FROM credit_memo_lines WHERE cm_no=?",
                            (_cm["cm_no"],)).fetchone()[0]:
@@ -441,7 +462,22 @@ def migrate_legacy_schema(con: sqlite3.Connection) -> None:
     if _icols and "item" not in _icols:
         con.execute("ALTER TABLE invoice_lines ADD COLUMN item TEXT DEFAULT ''")
     # Existing WO lines were invoiced as Labor/Each before the Type
-    # column existed — keep that effective meaning.
+    # column existed — keep that effective meaning. Build 'z': a
+    # v1.0-era book has no wo_lines at all (the table postdates it, and
+    # the opening schema pass dies before its CREATE) — ensure the
+    # number-keyed shape here, same pattern as the line tables above;
+    # the re-key rebuilds it onto the current shape at the end.
+    con.execute("""CREATE TABLE IF NOT EXISTS wo_lines (
+      line_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      wo_id TEXT NOT NULL,
+      item TEXT DEFAULT '',
+      description TEXT DEFAULT '',
+      category TEXT DEFAULT 'Other',
+      qty REAL DEFAULT 1,
+      rate REAL DEFAULT 0,
+      uom TEXT DEFAULT 'Each',
+      amount REAL DEFAULT 0,
+      line_note TEXT NOT NULL DEFAULT '')""")
     con.execute("UPDATE wo_lines SET category='Labor' WHERE category IS NULL OR category=''")
     con.execute("UPDATE wo_lines SET uom='Each' WHERE uom IS NULL OR uom=''")
     # Sites: loc_id becomes nullable — no tax jurisdiction autofill (Jason
@@ -866,6 +902,22 @@ def migrate_legacy_schema(con: sqlite3.Connection) -> None:
     # were inside the old whole-subtotal base — and are then zeroed.
     # Idempotent: sync_flat_charges_to_lines skips any ticket that
     # already has lines, so re-runs change nothing.
+    # Build 'z' (2026-10-26): the same schema-pass artifact as
+    # credit_memo_lines above — a pre-'v' book that never had
+    # ticket_lines carries the pass's EMPTY current-shape table
+    # (ticket_id INTEGER REFERENCES tickets(id)) while its tickets
+    # still key on ticket_id TEXT, so the sync's first insert dies on
+    # a foreign-key mismatch. Empty means no line was ever written
+    # (the writers run post-re-key): drop it and let the CREATE below
+    # make the number-keyed shape. A non-empty table stands untouched.
+    if not _rekeyed:
+        _tl_sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' "
+            "AND name='ticket_lines'").fetchone()
+        if _tl_sql and _tl_sql[0] and "REFERENCES tickets(id)" in _tl_sql[0]:
+            if con.execute(
+                    "SELECT COUNT(*) FROM ticket_lines").fetchone()[0] == 0:
+                con.execute("DROP TABLE ticket_lines")
     con.execute("""CREATE TABLE IF NOT EXISTS ticket_lines (
       line_id INTEGER PRIMARY KEY AUTOINCREMENT,
       ticket_id TEXT NOT NULL REFERENCES tickets(ticket_id),
@@ -1015,6 +1067,97 @@ def migrate_legacy_schema(con: sqlite3.Connection) -> None:
     # at invoicing names its source ('wo:WO-1001' / 'ticket:T-1001').
     if cecols and "carried_from" not in cecols:
         con.execute("ALTER TABLE collections ADD COLUMN carried_from TEXT")
+    # Payment corrections (build 'ab', JC-AA3): a corrected payment's
+    # original rows are marked void in place — the record stands — and
+    # name their replacement; the replacement names what it corrects.
+    if cecols and "voided" not in cecols:
+        con.execute("ALTER TABLE collections ADD COLUMN voided INTEGER NOT NULL DEFAULT 0")
+        con.execute("ALTER TABLE collections ADD COLUMN void_replaced_by TEXT")
+        con.execute("ALTER TABLE collections ADD COLUMN void_corrects TEXT")
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                   "AND name='doc_collections'").fetchone():
+        dccols = [r[1] for r in con.execute("PRAGMA table_info(doc_collections)")]
+        if "voided" not in dccols:
+            con.execute("ALTER TABLE doc_collections ADD COLUMN voided INTEGER NOT NULL DEFAULT 0")
+            con.execute("ALTER TABLE doc_collections ADD COLUMN void_replaced_by TEXT")
+            con.execute("ALTER TABLE doc_collections ADD COLUMN void_corrects TEXT")
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                   "AND name='payment_allocations'").fetchone():
+        pacols = [r[1] for r in con.execute("PRAGMA table_info(payment_allocations)")]
+        if "voided" not in pacols:
+            con.execute("ALTER TABLE payment_allocations ADD COLUMN voided INTEGER NOT NULL DEFAULT 0")
+    # Void-and-revise (build 'ab', Jason 2026-10-26): the void on a
+    # payment carries its reason + operator + timestamp, signed into
+    # the record like the documents' own void fields below.
+    if cecols and "void_reason" not in cecols:
+        con.execute("ALTER TABLE collections ADD COLUMN void_reason TEXT")
+        con.execute("ALTER TABLE collections ADD COLUMN void_by TEXT")
+        con.execute("ALTER TABLE collections ADD COLUMN void_at TEXT")
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                   "AND name='doc_collections'").fetchone():
+        dccols2 = [r[1] for r in con.execute("PRAGMA table_info(doc_collections)")]
+        if "void_reason" not in dccols2:
+            con.execute("ALTER TABLE doc_collections ADD COLUMN void_reason TEXT")
+            con.execute("ALTER TABLE doc_collections ADD COLUMN void_by TEXT")
+            con.execute("ALTER TABLE doc_collections ADD COLUMN void_at TEXT")
+    # The revision chain (same ruling): every document table carries
+    # the chain link by engine key — revises_id / revised_by_id —
+    # and the signed void: reason, operator name, timestamp. Numbers
+    # are never keys; the chain never reads them.
+    for _tbl in ("tickets", "sales", "work_orders", "quotes",
+                 "change_orders", "invoices", "credit_memos"):
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                       "AND name=?", (_tbl,)).fetchone():
+            _tc = [r[1] for r in con.execute(f"PRAGMA table_info({_tbl})")]
+            if "revises_id" not in _tc:
+                con.execute(f"ALTER TABLE {_tbl} ADD COLUMN revises_id INTEGER")
+                con.execute(f"ALTER TABLE {_tbl} ADD COLUMN revised_by_id INTEGER")
+                con.execute(f"ALTER TABLE {_tbl} ADD COLUMN void_reason TEXT")
+                con.execute(f"ALTER TABLE {_tbl} ADD COLUMN void_by TEXT")
+                con.execute(f"ALTER TABLE {_tbl} ADD COLUMN void_at TEXT")
+    # Cash + petty enter the same model (build 'ab', redirect #2 —
+    # "everything editable is void-revise"): chain links + signed
+    # void on both registers; cash entries gain their operator
+    # number (entry_no), backfilled CE-#### in entry order on books
+    # that predate it. Petty's pc_id already stands as its number.
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                   "AND name='cash_entries'").fetchone():
+        _ce = [r[1] for r in con.execute("PRAGMA table_info(cash_entries)")]
+        if "entry_no" not in _ce:
+            con.execute("ALTER TABLE cash_entries ADD COLUMN entry_no TEXT")
+            con.execute("ALTER TABLE cash_entries ADD COLUMN revises_id INTEGER")
+            con.execute("ALTER TABLE cash_entries ADD COLUMN revised_by_id INTEGER")
+            con.execute("ALTER TABLE cash_entries ADD COLUMN void_reason TEXT")
+            con.execute("ALTER TABLE cash_entries ADD COLUMN void_by TEXT")
+            con.execute("ALTER TABLE cash_entries ADD COLUMN void_at TEXT")
+            _n = 1000
+            for _r in con.execute(
+                    "SELECT entry_id FROM cash_entries ORDER BY entry_id"):
+                _n += 1
+                con.execute("UPDATE cash_entries SET entry_no=? "
+                            "WHERE entry_id=?", (f"CE-{_n:04d}", _r[0]))
+    if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                   "AND name='petty_cash'").fetchone():
+        _pc = [r[1] for r in con.execute("PRAGMA table_info(petty_cash)")]
+        if "revises_id" not in _pc:
+            con.execute("ALTER TABLE petty_cash ADD COLUMN revises_id INTEGER")
+            con.execute("ALTER TABLE petty_cash ADD COLUMN revised_by_id INTEGER")
+            con.execute("ALTER TABLE petty_cash ADD COLUMN void_reason TEXT")
+            con.execute("ALTER TABLE petty_cash ADD COLUMN void_by TEXT")
+            con.execute("ALTER TABLE petty_cash ADD COLUMN void_at TEXT")
+    # Company snapshot at issuance (build 'ab', redirect #3): every
+    # document row carries the company identity frozen at its
+    # posting; reprints render the snapshot, never the live record.
+    # Legacy rows keep NULL — they print from the live record.
+    for _tbl in ("tickets", "sales", "work_orders", "quotes",
+                 "change_orders", "invoices", "credit_memos",
+                 "collections", "doc_collections", "cash_entries",
+                 "petty_cash"):
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                       "AND name=?", (_tbl,)).fetchone():
+            _tc = [r[1] for r in con.execute(f"PRAGMA table_info({_tbl})")]
+            if _tc and "co_snapshot" not in _tc:
+                con.execute(f"ALTER TABLE {_tbl} ADD COLUMN co_snapshot TEXT")
     # An overpaid Cash In that becomes an open credit memo: the memo
     # carries the entry's id, the same one-event link as collections.
     cmcols = [r[1] for r in con.execute("PRAGMA table_info(credit_memos)")]

@@ -195,17 +195,18 @@ def _money_candidates(con: sqlite3.Connection, today: date) -> list:
             cands.append(
                 (0, fish, -late, -bal, f"money:late:{inv['invoice_no']}",
                  f"Invoice {inv['invoice_no']} {late}d late — {inv['account_name']} ${bal:,.2f}{tag}",
-                 f"/invoice/{inv['invoice_no']}#record-payment"))
+                 f"/invoice/{inv['invoice_no']}"))
         elif late == 0:
             cands.append(
                 (1, fish, 0, -bal, f"money:due:{inv['invoice_no']}",
                  f"Invoice {inv['invoice_no']} due today — {inv['account_name']} ${bal:,.2f}{tag}",
-                 f"/invoice/{inv['invoice_no']}#record-payment"))
+                 f"/invoice/{inv['invoice_no']}"))
     for p in con.execute(
         """SELECT i.invoice_no, c.amount, cu.account_name
            FROM collections c JOIN invoices i ON i.id = c.invoice_id
            JOIN customers cu ON cu.id = i.customer_id
-           WHERE date(c.pay_date) = date('now') AND c.kind = 'payment'"""
+           WHERE date(c.pay_date) = date('now') AND c.kind = 'payment'
+             AND COALESCE(c.voided,0) = 0"""
     ):
         cands.append(
             # Paid is a daily event, not a persistent condition: the date
@@ -249,6 +250,7 @@ def _money_candidates(con: sqlite3.Connection, today: date) -> list:
                JOIN change_orders co ON co.id = d.doc_id
                JOIN customers cu ON cu.id = co.customer_id
                WHERE d.doc_kind = 'change' AND d.kind = 'payment'
+                 AND COALESCE(d.voided,0) = 0
                  AND date(d.pay_date) = date('now')"""
         ):
             cands.append(

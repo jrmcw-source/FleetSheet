@@ -7,6 +7,7 @@ from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from pathlib import Path
 import hashlib
 import hmac
+import json
 import time
 
 # Tiny TTL cache for expensive read-only aggregations (invoice batches,
@@ -61,7 +62,7 @@ import zipfile
 
 """FleetSheet engine core: money/date/row helpers, shared domain constants, options, desk PIN, yard-device auth, crew, lookups. No imports from sibling engine modules."""
 
-__all__ = ['_money', '_mf', '_ms', 'parse_date', '_parse', 'terms_days', '_row_get', 'require_clerk', 'list_crew', 'add_crew', 'drop_crew', '_reserve_counter', '_next_doc', 'peek_next_doc', '_set_quote_link', 'lookups', 'LOOKUP_ADDABLE_KINDS', 'add_lookup', 'CURATED_LOOKUP_KINDS', 'deleted_lookups', 'clear_deleted_lookup', 'delete_lookup', 'period_bounds', '_ensure_device_tables', 'get_option', 'set_option', 'MODULE_NAMES', 'COND_NOT_RECORDED', 'module_on', 'set_module', 'module_seen', 'stamp_module_seen', '_pbkdf2', 'pin_is_set', 'get_pin_secret', 'set_pin', 'verify_pin', 'clear_pin', 'PIN_SECURITY_QUESTIONS', 'format_phone_number',
+__all__ = ['_money', '_mf', '_ms', 'parse_date', '_parse', 'terms_days', '_row_get', 'require_clerk', 'list_crew', 'add_crew', 'drop_crew', '_reserve_counter', '_next_doc', 'peek_next_doc', '_set_quote_link', 'lookups', 'LOOKUP_ADDABLE_KINDS', 'add_lookup', 'CURATED_LOOKUP_KINDS', 'deleted_lookups', 'clear_deleted_lookup', 'delete_lookup', 'period_bounds', '_ensure_device_tables', 'get_option', 'set_option', 'DOC_PREFIX_DEFAULTS', 'doc_prefix', 'DOC_NUMBER_FLOOR', 'DOC_NUMBER_FLOORS', 'doc_number_floor', 'company_snapshot_json', 'stamp_company_snapshot', 'MODULE_NAMES', 'COND_NOT_RECORDED', 'module_on', 'set_module', 'module_seen', 'stamp_module_seen', '_pbkdf2', 'pin_is_set', 'get_pin_secret', 'set_pin', 'verify_pin', 'clear_pin', 'PIN_SECURITY_QUESTIONS', 'format_phone_number',
     'set_pin_security', 'validate_pin_security', 'pin_security_is_set', 'pin_security_questions',
     'verify_pin_security', '_new_device_token', 'issue_device', 'list_devices', 'get_device', 'device_check', 'touch_device', 'revoke_device', 'rotate_device', '_shift_months', '_pos_or_none', 'CENT', 'SCHEMA', 'SEED_PACKS', '_LOCAL', '_TMP', 'OPEN_STATUSES', 'BLOCKING', 'ALLOWED_NEXT', 'COND_RANK', 'CASH_METHODS', 'QUOTE_NEXT', 'PC_IN_CATS', 'PC_OUT_CATS', 'EXPORT_WHENS', 'EXPORT_HOWS', 'DEVICE_GRACE_HOURS', 'TRIGGER_LABELS', 'BASIS_LABELS', 'DUE_SOON_DAYS', 'BACKUP_KEEP', 'backup_folder', 'set_backup_dir', 'backup_status', 'get_backup_schedule', 'set_backup_schedule', 'list_backups', 'prune_backups', 'run_backup', 'validate_backup_file', 'validate_backup_archive', 'restore_backup', 'restore_backup_archive', 'read_backup_file', 'sweep_orphan_photos', 'PHOTO_MAX_BYTES', 'PHOTO_EXTS', 'photo_dir', 'photo_ext_for', 'validate_photo_blob', 'safe_photo_name', 'DOC_MAX_BYTES', 'DOC_KINDS', 'doc_dir', 'doc_ext_for', 'validate_doc_blob', 'safe_doc_name', 'save_unit_doc', 'list_unit_docs', 'get_unit_doc', 'read_unit_doc', 'delete_unit_doc', 'sweep_orphan_docs', 'list_company_phones', 'main_company_phone', 'add_company_phone', 'del_company_phone', 'set_main_company_phone', 'validate_new_doc_no', 'peek_next_invoice_no', 'peek_next_ticket_no', 'key_of', 'num_of', 'doc_key', 'doc_num', 'DOC_TABLES', 'cust_key', 'cust_code', 'asset_key', 'asset_code', 'site_key', 'site_code', 'loc_key', 'loc_code', '_next_pay_key', 'pay_key_of', 'pay_id_of']
 
@@ -218,6 +219,43 @@ def main_company_phone(con):
     return con.execute(
         "SELECT label, number FROM company_phones ORDER BY sort, phone_id LIMIT 1"
     ).fetchone()
+
+
+def company_snapshot_json(con) -> str:
+    """The company identity exactly as the print header reads it
+    (build 'ab', redirect #3): the company row with the operator-
+    picked main phone overlaid — the same composition
+    printpack._company_for_print performs — frozen as JSON.
+    Issuance stamps this onto the document; reprints render the
+    stamp, never the live record."""
+    row = con.execute("SELECT * FROM company WHERE id=1").fetchone()
+    d = dict(row) if row else {}
+    try:
+        main = main_company_phone(con)
+    except Exception:
+        main = None
+    if main:
+        num = (main["number"] or "").strip()
+        if num:
+            d["phone"] = num
+    return json.dumps(d)
+
+
+def stamp_company_snapshot(con, table: str, key, pk: str = "id") -> None:
+    """Freeze the current company identity onto one document row
+    (its co_snapshot column). Called at every posting — creation
+    saves and revision-completion saves alike: a posted revision
+    is a new issuance and wears the identity current at its own
+    posting. A no-op on books whose table predates the column."""
+    if key is None:
+        return
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+    if "co_snapshot" not in cols:
+        return
+    con.execute(f"UPDATE {table} SET co_snapshot=? WHERE {pk}=?",
+                (company_snapshot_json(con), key))
+
+
 def add_company_phone(con, label: str, number: str, make_main: bool = False) -> None:
     label = ((label or "").strip() or "Main")[:40]
     number = format_phone_number((number or "").strip())[:40]
@@ -252,35 +290,82 @@ def set_main_company_phone(con, phone_id: int) -> None:
     con.execute("UPDATE company_phones SET is_main=0")
     con.execute("UPDATE company_phones SET is_main=1 WHERE phone_id=?", (phone_id,))
     con.commit()
-def _reserve_counter(con: sqlite3.Connection, col: str, default: int = 1001) -> int:
+# Generated-number floor (build 'ai', Jason 2026-10-28): every
+# number the program generates starts at 100001. The floor is
+# applied at mint and peek time — the next generated number for a
+# kind is max(its counter's current next value, 100001) — so an
+# existing book's stored counter is never rewritten, its documents
+# never renumber, and a book already past the floor is untouched.
+# Build 'ao' (Jason 2026-10-29): the single floor becomes a
+# per-kind start — the kinds all read too similar at one start,
+# so each kind's series opens at its own number. The invoice
+# keeps 100001 (DOC_NUMBER_FLOOR, also the default for any kind
+# not listed); an existing book's counter or documents are never
+# rewritten — a kind already past its start is untouched, and a
+# kind standing below it opens at the start.
+DOC_NUMBER_FLOOR = 100001
+DOC_NUMBER_FLOORS = {
+    "pay": 200001,
+    "cm": 300001,
+    "sale": 400001,
+    "ticket": 500001,
+    "wo": 600001,
+    "change": 700001,
+    "quote": 800001,
+    "batch": 900001,
+    "cash": 20001,
+    "petty": 2001,
+}
+
+def doc_number_floor(kind: str) -> int:
+    """The first number the generator hands out for a document
+    kind (build 'ao'): the kind's own start from DOC_NUMBER_FLOORS,
+    keyed by the same kind names doc_prefix uses; the invoice and
+    any unlisted kind keep the 100001 floor."""
+    return DOC_NUMBER_FLOORS.get(kind, DOC_NUMBER_FLOOR)
+
+def _reserve_counter(con: sqlite3.Connection, col: str, default: int = 1001,
+                     floor: int = 0) -> int:
     """Atomically reserve and return the current value of a company counter.
 
     SQLite serializes the UPDATE itself, so two desk/yard writers cannot both
     receive the same number.  The caller remains responsible for its normal
-    surrounding transaction/commit.
+    surrounding transaction/commit. With floor set (document-number
+    minters, build 'ai'), a counter standing below the floor hands
+    out the floor itself and advances past it in the same UPDATE.
     """
-    row = con.execute(
-        f"UPDATE company SET {col}=COALESCE({col}, ?) + 1 WHERE id=1 "
-        f"RETURNING {col} - 1", (default,)
-    ).fetchone()
+    if floor:
+        row = con.execute(
+            f"UPDATE company SET {col}=MAX(COALESCE({col}, ?), ?) + 1 "
+            f"WHERE id=1 RETURNING {col} - 1", (default, floor)
+        ).fetchone()
+    else:
+        row = con.execute(
+            f"UPDATE company SET {col}=COALESCE({col}, ?) + 1 WHERE id=1 "
+            f"RETURNING {col} - 1", (default,)
+        ).fetchone()
     if not row:
         raise ValueError("Company setup is missing")
     return int(row[0])
 
-def _next_doc(con, col: str, prefix: str, table: str, idcol: str) -> str:
+def _next_doc(con, col: str, prefix: str, table: str, idcol: str,
+              floor: int = DOC_NUMBER_FLOOR) -> str:
     while True:
-        n = _reserve_counter(con, col, 1001)
+        n = _reserve_counter(con, col, 1001, floor=floor)
         did = f"{prefix}-{n:04d}"
         if not con.execute(f"SELECT 1 FROM {table} WHERE {idcol}=?", (did,)).fetchone():
             return did
-def peek_next_doc(con, col: str, prefix: str, table: str, idcol: str) -> str:
+def peek_next_doc(con, col: str, prefix: str, table: str, idcol: str,
+                  floor: int = DOC_NUMBER_FLOOR) -> str:
     """What _next_doc would return, WITHOUT reserving: read the counter and
     skip numbers already in the table, but write nothing. GET previews use
     this so rendering a form never burns a sequence number; the real
     reservation happens at save time via _next_doc. The counter column holds
-    the next number to hand out (see _reserve_counter)."""
+    the next number to hand out (see _reserve_counter). Build 'ai': the
+    preview applies the same floor the mint applies (build 'ao': the
+    caller's per-kind start)."""
     row = con.execute(f"SELECT COALESCE({col}, 1001) FROM company WHERE id=1").fetchone()
-    n = int(row[0]) if row else 1001
+    n = max(int(row[0]) if row else 1001, floor)
     while True:
         did = f"{prefix}-{n:04d}"
         if not con.execute(f"SELECT 1 FROM {table} WHERE {idcol}=?", (did,)).fetchone():
@@ -455,7 +540,7 @@ def peek_next_invoice_no(con) -> str:
         "SELECT invoice_prefix, COALESCE(next_invoice, 1001) FROM company WHERE id=1"
     ).fetchone()
     prefix = row[0] if row else "INV"
-    n = int(row[1]) if row else 1001
+    n = max(int(row[1]) if row else 1001, DOC_NUMBER_FLOOR)
     while True:
         did = f"{prefix}-{n}"
         if not con.execute("SELECT 1 FROM invoices WHERE invoice_no=?",
@@ -466,12 +551,13 @@ def peek_next_invoice_no(con) -> str:
 
 def peek_next_ticket_no(con) -> str:
     """What next_ticket_id would hand out, WITHOUT reserving (see
-    peek_next_invoice_no)."""
+    peek_next_invoice_no). Build 'af': the stem is the operator's
+    (prefix_ticket)."""
     row = con.execute(
         "SELECT COALESCE(next_ticket, 1001) FROM company WHERE id=1").fetchone()
-    n = int(row[0]) if row else 1001
+    n = max(int(row[0]) if row else 1001, doc_number_floor("ticket"))
     while True:
-        did = f"T-{n}"
+        did = f"{doc_prefix(con, 'ticket')}-{n}"
         if not con.execute("SELECT 1 FROM tickets WHERE ticket_id=?",
                            (did,)).fetchone():
             return did
@@ -685,6 +771,31 @@ def set_option(con: sqlite3.Connection, key: str, value: str) -> None:
         (key, value or ""),
     )
     con.commit()
+
+# Document number stems (build 'af', Jason 2026-10-28): every form
+# kind's number prefix is the operator's, set in Admin -> Billing
+# beside the Invoice Number Prefix and stored as an option
+# (prefix_<kind>). Unset or blank reads as the factory literal —
+# the stem each minter carried in code before this build. The
+# invoice stem is NOT here: it is the company record's
+# invoice_prefix column, older than this mechanism.
+# Build 'ai' (Jason 2026-10-28): the factory literals reset to his
+# table — sale S -> ST, ticket T -> RT, pay P -> PMT, cash CE ->
+# CASH. A book that stored its own prefix_<kind> option keeps it;
+# only the unset fallback changes.
+DOC_PREFIX_DEFAULTS = {
+    "quote": "QT", "wo": "WO", "sale": "ST", "ticket": "RT",
+    "change": "CO", "cm": "CM", "pay": "PMT",
+    "cash": "CASH", "petty": "PC", "batch": "PB",
+}
+
+def doc_prefix(con: sqlite3.Connection, kind: str) -> str:
+    """The effective number stem for a document kind: the
+    operator's prefix_<kind> option when set, else the factory
+    literal. Minters take only the stem from here — each kind's
+    number shape and padding are its own and unchanged."""
+    v = (get_option(con, f"prefix_{kind}", "") or "").strip()
+    return v or DOC_PREFIX_DEFAULTS[kind]
 
 # --- Shop-flow switches (Jason 2026-10-21) --------------------------------
 # "What your shop does" (Setup -> Administration): one option key per

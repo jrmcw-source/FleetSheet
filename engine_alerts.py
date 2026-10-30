@@ -725,7 +725,7 @@ def alerts_for(con: sqlite3.Connection, section: str = "dash") -> list:
                 f"acct:pastdue:{inv['invoice_no']}",
                 f"Invoice {inv['invoice_no']} {late}d past due — "
                 f"{inv['account_name']} ${bal:,.2f}",
-                f"/invoice/{inv['invoice_no']}#record-payment",
+                f"/invoice/{inv['invoice_no']}",
                 verb="Record payment",
                 cat="money",
             )

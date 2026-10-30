@@ -55,7 +55,154 @@ def _chain_redirect(handler, adv):
     handler._redirect(adv[0] + sep + "from=setup&msg=" + quote_plus(adv[1]))
 
 
+def _post_sale_edit(handler, con, data, u):
+    """Save the Sale form on an existing sale (build 'ab',
+    void-and-revise): the form loaded with a sale posts editing=1
+    + sale_group_key — the group's ENGINE KEY (numbers are never
+    keys). The save is a REVISION completing: it lands only under
+    the session marker the revise act set, and writes through
+    engine.update_sale with revision=True. Rows present in the
+    post are the sale's lines (a row the operator deleted with
+    the line ✕ simply does not post, and its line is removed —
+    the first row can never be deleted in the form, the head-line
+    rule engine.update_sale also enforces). Units ENTERING the
+    sale (new lines, swapped units) pass the same checks as at
+    creation — known, unsold, and the Plant/Fleet double checks,
+    whose stamps append only when not already on the record. A
+    renamed number (the form's sale_id input) validates against
+    the whole history and lands on the head row after the save."""
+    grp = ""
+    try:
+        gkey = int(data.get("sale_group_key") or 0)
+    except (TypeError, ValueError):
+        gkey = 0
+    try:
+        if not gkey:
+            raise ValueError("No sale named for the edit")
+        old = {r["sale_id"]: r for r in con.execute(
+            "SELECT * FROM sales WHERE group_id=? ORDER BY seq, id",
+            (gkey,)).fetchall()}
+        if not old:
+            raise ValueError("Unknown sale")
+        grp = next(r["sale_id"] for r in old.values()
+                   if r["id"] == gkey)
+        if not engine.revision_pending(con, "sale", gkey):
+            raise ValueError(
+                f"Sale {grp} is posted — revise it (Edit on its "
+                f"form) to change it")
+
+        def _row_sale_edit(i):
+            suf = "" if i == 0 else str(i)
+            aid = (data.get(f"asset_id{suf}") or "").strip()
+            desc = (data.get(f"item_desc{suf}") or "").strip()
+            amt = (data.get(f"amount{suf}") or "").strip()
+            ref = (data.get(f"line_ref{suf}") or "").strip()
+            if not aid and not desc and not amt and not ref:
+                return None
+            if not aid:
+                raise ValueError("Pick a unit from the list")
+            return {
+                "line_ref": ref,
+                "asset_id": aid,
+                "qty": int(data.get(f"qty{suf}") or 1),
+                "amount": float(amt or 0),
+                "item_desc": desc,
+                "line_note": old[ref]["line_note"] if ref in old
+                             and "line_note" in old[ref].keys() else "",
+            }
+        rows = []
+        for _i in range(16):
+            _r = _row_sale_edit(_i)
+            if _r is not None:
+                rows.append(_r)
+        if not rows:
+            raise ValueError("Pick a unit from the list")
+        _seen = set()
+        _plant_units = []
+        _fleet_units = []
+        for _r in rows:
+            if _r["asset_id"] in _seen:
+                _uno = con.execute(
+                    "SELECT unit_no FROM assets WHERE asset_id=?",
+                    (_r["asset_id"],)).fetchone()
+                raise ValueError(
+                    f"Unit {_uno['unit_no'] if _uno else _r['asset_id']} "
+                    "is listed twice — one line per unit")
+            _seen.add(_r["asset_id"])
+            _a = con.execute(
+                "SELECT unit_no, sold_date, "
+                "COALESCE(designation,'Fleet') AS designation "
+                "FROM assets WHERE asset_id=?",
+                (_r["asset_id"],)).fetchone()
+            if not _a:
+                raise ValueError(f"Unknown unit {_r['asset_id']}")
+            _oref = old.get(_r["line_ref"])
+            _entering = (_oref is None or engine.asset_code(
+                con, _oref["asset_id"]) != _r["asset_id"])
+            if _entering:
+                if _a["sold_date"]:
+                    raise ValueError(
+                        f"Unit {_a['unit_no']} is already sold")
+                if _a["designation"] == "Plant":
+                    _plant_units.append(_a["unit_no"])
+                elif _a["designation"] == "Fleet":
+                    _fleet_units.append(_a["unit_no"])
+        if _plant_units and data.get("plant_confirm") != "1":
+            raise ValueError(
+                f"Plant asset {', '.join(_plant_units)} is a fixed "
+                "asset — check Confirm Plant sale on the form to proceed")
+        if _fleet_units and data.get("fleet_confirm") != "1":
+            raise ValueError(
+                f"Fleet asset {', '.join(_fleet_units)} is a rental "
+                "unit — check Confirm Fleet sale on the form to proceed")
+        _notes = (data.get("notes") or "").strip()
+        if _plant_units and "Plant sale confirmed." not in _notes:
+            _notes = ((_notes + " ") if _notes else "") \
+                + "Plant sale confirmed."
+        if _fleet_units and "Fleet sale confirmed." not in _notes:
+            _notes = ((_notes + " ") if _notes else "") \
+                + "Fleet sale confirmed."
+        header = {
+            "customer_id": (data.get("customer_id") or "").strip(),
+            "sale_date": (data.get("sale_date") or "").strip(),
+            "condition": (data.get("condition") or "").strip(),
+            "ref_no": (data.get("ref_no") or "").strip(),
+            "notes": _notes,
+            "clerk": handler.desk(con),
+        }
+        engine.update_sale(
+            con, gkey, rows, header,
+            plant_confirm=(data.get("plant_confirm") == "1"),
+            fleet_confirm=(data.get("fleet_confirm") == "1"),
+            revision=True)
+        _new_no = (data.get("sale_id") or "").strip()
+        if _new_no and _new_no != grp:
+            engine.validate_new_doc_no(con, "sales", "sale_id",
+                                       _new_no, "sale")
+            con.execute("UPDATE sales SET sale_id=? WHERE id=?",
+                        (_new_no, gkey))
+            grp = _new_no
+        con.commit()
+        engine.clear_revision_pending(con, "sale", gkey)
+        up = (handler._files or {}).get("job_attach")
+        if up and up[2]:
+            engine.save_job_attachment(con, "sale", grp, up[0], up[2],
+                                       handler.desk(con))
+        engine.add_done_manual(
+            con, f"Edited Sale {grp}", f"/sale/{grp}",
+            handler.desk(con))
+        handler._redirect(f"/sale/{grp}?msg=" + quote_plus("Sale saved"))
+    except Exception as e:
+        con.rollback()
+        handler._redirect(
+            f"/sale?edit={grp}&err="
+            + __import__("urllib.parse").parse.quote_plus(str(e)[:120]))
+    return True
+
+
 def _post_sale_save(handler, con, data, u):
+    if (data.get("editing") or "") == "1":
+        return _post_sale_edit(handler, con, data, u)
     try:
         # Line rows (2026-10-16): row 0 uses bare names, Add Item clones
         # use suffixed names (asset_id1, ...). Each non-blank row becomes
@@ -656,31 +803,6 @@ def _post_setup_security_lock(handler, con, data, u):
     handler._redirect("/setup/security?msg=" + quote_plus("Idle lock saved"))
 
 
-def _post_setup_security_questions(handler, con, data, u):
-    # Batch 3 #1: failures re-render the Security page with the error
-    # stated (this route's only surface is Security — no standalone
-    # questions form exists in the current views, so there are no
-    # answer fields on the page to re-populate).
-    if not engine.pin_is_set(con):
-        _rerender(handler, con, "Security", "/setup/security",
-                  handler.view_security(con, {}), "No desk PIN is set yet. Set a PIN before saving security questions.")
-        return
-    if not engine.verify_pin(con, data.get("cur") or ""):
-        _rerender(handler, con, "Security", "/setup/security",
-                  handler.view_security(con, {}), "The current PIN is incorrect. Enter the current desk PIN and try again.")
-        return
-    try:
-        q1 = int(data.get("sq1") or "0")
-        q2 = int(data.get("sq2") or "1")
-        engine.set_pin_security(con, q1, data.get("sa1") or "",
-                                q2, data.get("sa2") or "")
-    except (ValueError, TypeError) as e:
-        _rerender(handler, con, "Security", "/setup/security",
-                  handler.view_security(con, {}), str(e))
-        return
-    handler._redirect("/setup/security?msg=" + quote_plus(
-        "Security questions saved"))
-
 
 def _post_setup_lookups_add(handler, con, data, u):
     # Global dropdown rule (Issue 4): -Add- inserts one option into a
@@ -821,6 +943,15 @@ def _post_setup_billing(handler, con, data, u):
         engine.set_option(con, "quote_valid_days", str(max(1, int(data.get("quote_valid_days") or 30))))
     except (TypeError, ValueError):
         engine.set_option(con, "quote_valid_days", "30")
+    # Document number stems (build 'af', Jason 2026-10-28): saved
+    # with this card's Save, trimmed like the invoice field's rules;
+    # a blank stem stores blank and minting falls back to the
+    # factory literal in engine.doc_prefix.
+    for _pk in ("quote", "wo", "sale", "ticket", "change", "cm",
+                "pay", "batch", "cash", "petty"):
+        if f"prefix_{_pk}" in data:
+            engine.set_option(con, f"prefix_{_pk}",
+                              (data.get(f"prefix_{_pk}") or "").strip()[:6])
     con.commit()
     # Full Job Info print set (tweak round 2, 2026-10-20): every Job
     # Info card field, plus taxexempt. Attach File is excluded — an
@@ -1299,7 +1430,159 @@ def _post_print_save_page(handler, con, data, u):
     return True
 
 
+_REVISE_LABELS = {
+    "ticket": "Rental Ticket", "sale": "Sales Ticket", "wo": "Work Order",
+    "quote": "Quote", "change": "Change Order", "invoice": "Invoice",
+    "credit": "Credit Memo", "payment": "Payment",
+    "cash": "Cash Entry", "petty": "Petty Cash Entry",
+}
+
+_REVISE_SUMMARY = {
+    "ticket": "/ticket/{r}", "sale": "/sale/{r}",
+    "wo": "/summary/wo/{r}", "quote": "/summary/quote/{r}",
+    "change": "/summary/change/{r}", "invoice": "/invoice/{r}",
+    "credit": "/summary/credit/{r}", "payment": "/summary/payment/{r}",
+    # Registers, not summaries: the Done entry lands on the
+    # register/form that carries the chain (redirect #2).
+    "cash": "/money?tab=cash&edit={r}", "petty": "/petty?edit={r}",
+}
+
+
+def _revise_payment(con, ref, reason, name):
+    """The payment arm of void-and-revise (build 'ab'): confirm
+    voids the original batch on the ledgers — signed with the
+    reason, the operator's name, and the timestamp — and names its
+    replacement batch '<original> Rev. N'. The replacement carries
+    no rows until its form's Apply posts them; the target name
+    rides a session option the correction post checks."""
+    if not reason:
+        raise ValueError("A revision needs its reason")
+    if not name:
+        raise ValueError("A revision needs the operator's name")
+    block = engine.payment_edit_block(con, ref)
+    if block:
+        raise ValueError(block)
+    info = engine.payment_batch_info(con, ref)
+    depth = 0
+    seen = set()
+    cur = info.get("corrects")
+    while cur and cur not in seen:
+        seen.add(cur)
+        depth += 1
+        nxt = engine.payment_batch_info(con, cur)
+        cur = nxt.get("corrects") if nxt.get("rows") else None
+    existing = set()
+    for tbl in ("collections", "doc_collections"):
+        try:
+            existing |= {r[0] for r in con.execute(
+                f"SELECT DISTINCT COALESCE(batch_id, pay_id) FROM {tbl}")}
+        except Exception:
+            pass
+    n = depth + 1
+    cand = f"{engine.rev_base(ref)} Rev. {n}"
+    while cand in existing:
+        n += 1
+        cand = f"{engine.rev_base(ref)} Rev. {n}"
+    at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    engine.void_payment_batch(con, ref, name, cand, reason=reason, at=at)
+    engine.set_option(con, f"revtarget:payment:{cand}", ref)
+    # Refresh the statuses of invoices the voided batch touched —
+    # collections rows name them by engine key (invoice_id); doc
+    # rows settled documents, whose money reads are chain-aware
+    # already and need no status write.
+    for r in con.execute(
+            "SELECT DISTINCT invoice_id FROM collections "
+            "WHERE COALESCE(batch_id, pay_id)=?", (ref,)):
+        _ino = engine.num_of(con, "invoices", r[0])
+        if _ino:
+            engine._refresh_invoice_status(con, _ino)
+    con.commit()
+    return cand
+
+
+def _post_revise(handler, con, data, u):
+    """POST /revise — the Edit act on a locked-open document form
+    (Jason 2026-10-26, void-and-revise): reason + operator name,
+    confirmed, void the original and create its revision in one
+    engine operation (JC-AB0), then land on the revision's own form
+    under its session marker."""
+    kind = (data.get("rev_kind") or "").strip()
+    ref = (data.get("rev_ref") or "").strip()
+    reason = (data.get("rev_reason") or "").strip()
+    name = (data.get("rev_name") or "").strip()
+    label = _REVISE_LABELS.get(kind, "Document")
+    back = _REVISE_SUMMARY.get(kind, "/").format(r=quote_plus(ref))
+    try:
+        if kind == "payment":
+            new_ref = _revise_payment(con, ref, reason, name)
+            form_url = (f"/money?tab=pay&edit={quote_plus(ref)}"
+                        f"&rev={quote_plus(new_ref)}")
+        elif kind in _REVISE_LABELS:
+            new_ref = engine.create_revision(con, kind, ref, reason, name)
+            form_url = {
+                "ticket": f"/ticket/new?kind=rental&edit={quote_plus(new_ref)}",
+                "sale": f"/sale?edit={quote_plus(new_ref)}",
+                "wo": f"/wo/{quote_plus(new_ref)}",
+                "quote": f"/quote/{quote_plus(new_ref)}",
+                "change": f"/ticket/new?kind=change&co_no={quote_plus(new_ref)}",
+                "invoice": f"/invoice/new?edit={quote_plus(new_ref)}",
+                "credit": f"/money?tab=credit&cm_no={quote_plus(new_ref)}",
+                "cash": f"/money?tab=cash&edit={quote_plus(new_ref)}",
+                "petty": f"/petty?edit={quote_plus(new_ref)}",
+            }[kind]
+            if kind == "credit":
+                _cmr = con.execute(
+                    "SELECT customer_id FROM credit_memos "
+                    "WHERE cm_no=?", (new_ref,)).fetchone()
+                if _cmr:
+                    form_url += "&customer_id=" + quote_plus(
+                        engine.cust_code(con, _cmr["customer_id"]) or "")
+        else:
+            raise ValueError("Unknown document kind")
+    except ValueError as e:
+        handler._redirect(back + "?err=" + quote_plus(str(e)[:160]))
+        return True
+    engine.add_done_manual(
+        con, f"{label} {ref} voided — revised as {new_ref}: {reason}",
+        _REVISE_SUMMARY[kind].format(r=quote_plus(new_ref)), name)
+    handler._redirect(
+        form_url + ("&" if "?" in form_url else "?") + "msg="
+        + quote_plus(f"{label} {ref} voided. Revision {new_ref} — "
+                     f"edit and Save."))
+    return True
+
+
+def _post_summary_upload(handler, con, data, u):
+    """A summary's Paperwork upload (build 'af', Jason 2026-10-28):
+    add-only — the file field on a summary files the upload through
+    the engine's one attachment writer and returns to the summary.
+    No path from here edits, replaces or deletes an upload."""
+    from urllib.parse import quote_plus
+    ret = data.get("return") or "/today"
+    if not str(ret).startswith("/"):
+        ret = "/today"
+    kind = (data.get("kind") or "").strip()
+    ref = (data.get("ref") or "").strip()
+    fitem = (handler._files or {}).get("attach")
+    if kind not in ("invoice", "ticket", "sale", "quote", "wo",
+                    "change", "credit", "pay") or not ref:
+        handler._redirect(ret + ("&" if "?" in ret else "?")
+                          + "err=" + quote_plus("Upload refused"))
+        return True
+    if not fitem or not fitem[0]:
+        handler._redirect(ret)
+        return True
+    _, _ct, blob = fitem
+    engine.save_job_attachment(con, kind, ref, fitem[0], blob,
+                               handler.desk(con))
+    handler._redirect(ret + ("&" if "?" in ret else "?")
+                      + "msg=" + quote_plus("File attached"))
+    return True
+
+
 _POST_ROUTES = {
+    "/summary/upload": _post_summary_upload,
+    "/revise": _post_revise,
     "/print/save": _post_print_save,
     "/print/save-page": _post_print_save_page,
     "/sale/save": _post_sale_save,
@@ -1323,7 +1606,6 @@ _POST_ROUTES = {
     "/pin/logout": _post_pin_logout,
     "/pin/forgot/questions": _post_pin_forgot_questions,
     "/setup/security/pin": _post_setup_security_pin,
-    "/setup/security/questions": _post_setup_security_questions,
     "/setup/security/lock": _post_setup_security_lock,
     "/setup/lookups/add": _post_setup_lookups_add,
     "/setup/devices/issue": _post_setup_devices_issue,

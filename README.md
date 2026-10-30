@@ -33,7 +33,7 @@ Small equipment rental businesses live in spreadsheets, whiteboards, and memory.
 
 ## Installation (Windows)
 
-1. Download `FleetSheet-Setup-1.1.0.exe` from the [Releases page](https://github.com/jrmcw-source/FleetSheet/releases)
+1. Download `FleetSheet-Setup-1.1.1.exe` from the [Releases page](https://github.com/jrmcw-source/FleetSheet/releases)
 2. Run the installer — it installs per-user (into your AppData folder), no admin rights needed
 
 The installer is not code-signed. Windows SmartScreen may stop it with a "Windows protected your PC" message — choose **More info**, then **Run anyway**.

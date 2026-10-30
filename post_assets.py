@@ -8,23 +8,176 @@ from urllib.parse import quote_plus
 from views_core import chain_advance
 
 
+def _haul_names(con, cust_key=None, cust_code=None):
+    """Names for engine.resolve_haul_text (build 'am', Jason
+    2026-10-28): the company's dba/name and the customer's account
+    name — the two name-form Transport presets resolve to their
+    keys when the caller supplies them. '' when unknown."""
+    try:
+        co = con.execute(
+            "SELECT dba, name FROM company WHERE id=1").fetchone()
+        company = ((co["dba"] or co["name"]) if co else "") or ""
+    except Exception:
+        company = ""
+    customer = ""
+    try:
+        key = cust_key
+        if key is None and cust_code:
+            key = engine.cust_key(con, cust_code)
+        if key is not None:
+            r = con.execute(
+                "SELECT account_name FROM customers WHERE id=?",
+                (key,)).fetchone()
+            customer = (r["account_name"] or "") if r else ""
+    except Exception:
+        customer = ""
+    return company, customer
+
+
 def _chain_redirect(handler, adv):
     sep = "&" if "?" in adv[0] else "?"
     handler._redirect(adv[0] + sep + "from=setup&msg=" + quote_plus(adv[1]))
 
 
-def _posted_charge_lines(data):
-    """RETIRED (build 's', Jason 2026-10-25): charge lines posted by a
-    ticket form (the c-prefixed grid fields) are no longer read by any
-    handler — charges on tickets ended as a capability; freight and
-    extras are line items on the invoice. Kept as a named stub so the
-    retirement is on the record; it parses nothing and saves nothing."""
-    return []
+
+def _post_ticket_edit(handler, con, data):
+    """Save the rental editor (build 'ab', void-and-revise): the
+    booking form loaded with an existing ticket posts editing=1.
+    Under the model this save is a REVISION completing — the form
+    was loaded with a fresh revision under its session marker
+    (edit_target names the revision as loaded; the posted
+    ticket_id is the operator's number for it, renames included,
+    validated against the whole history). Without the marker the
+    save is refused: a posted rental never updates in place.
+    engine.update_ticket writes the revision's own row; the gates
+    it carries (customer lock, unit-after-check-out, JC-AB1/AB2)
+    apply unchanged. The Job Info popup's Well # and the form's
+    Off-Rent Est map onto the ticket's columns here (JC-AB15: at
+    creation both are dropped by the booking handler —
+    pre-existing, untouched). The ticket's tax jurisdiction is
+    not a field on this form and is preserved from the record."""
+    target = (data.get("edit_target") or "").strip()
+    tid = (data.get("ticket_id") or "").strip()
+    if not target:
+        handler._redirect("/tickets?err=" + quote_plus(
+            "Rental Ticket " + (tid or "?") + " is posted — revise "
+            "it (Edit on its form) to change it"))
+        return True
+    back = f"/ticket/new?kind=rental&edit={target}"
+    trow = con.execute(
+        "SELECT id, customer_id, tax_loc_id FROM tickets "
+        "WHERE ticket_id=?", (target,)).fetchone()
+    if not trow:
+        handler._redirect("/tickets?err=" + quote_plus(
+            "No such rental ticket"))
+        return True
+    if not engine.revision_pending(con, "ticket", trow["id"]):
+        handler._redirect(f"/ticket/{target}?err=" + quote_plus(
+            f"Rental Ticket {target} is posted — revise it (Edit "
+            f"on its form) to change it"))
+        return True
+    # Site from the Job Info popup's Job Location text — the same
+    # resolution creation applies to a typed site name.
+    site_id = None
+    site_text = (data.get("job_location") or "").strip()
+    if site_text:
+        hit = con.execute(
+            "SELECT site_id FROM sites WHERE site_name=?",
+            (site_text,)).fetchone()
+        if hit:
+            site_id = hit["site_id"]
+        else:
+            site_id = engine.next_site_id(con)
+            con.execute(
+                "INSERT INTO sites (site_id, site_name, customer_id, loc_id) VALUES (?,?,?,NULL)",
+                (site_id, site_text,
+                 engine.cust_key(con, data.get("customer_id") or "")))
+            con.commit()
+    haul_text = (data.get("haul_text") or "").strip()
+    haul_by, haul_note = engine.resolve_haul_text(
+        haul_text, *_haul_names(con, cust_code=data.get("customer_id")))
+    deliver_text = (data.get("deliver_text") or "").strip()
+    deliver_to, deliver_note = "job_site", ""
+    for d in ("job_site", "our_yard", "customer_yard", "dock"):
+        if deliver_text.lower() in (d, engine.DELIVER_LABELS[d].lower()):
+            deliver_to = d
+            break
+    else:
+        if deliver_text:
+            deliver_note = deliver_text
+    upd = {
+        "customer_id": data.get("customer_id") or "",
+        "site_id": site_id,
+        "asset_id": (data.get("asset_id") or "").strip(),
+        "job_name": data.get("job_name"),
+        "well_or_pad": data.get("well_no") or data.get("well_or_pad"),
+        "afe": data.get("afe"),
+        "po": data.get("po"),
+        "rate_type": engine.uom_to_rate_type(data.get("uom"))
+                     or (data.get("rate_type") or "Day"),
+        "rate_value": data.get("rate_value") or None,
+        "on_rent": data.get("on_rent"),
+        "off_rent": (data.get("off_rent_est") or "").strip() or None,
+        "haul_by": haul_by,
+        "haul_note": haul_note,
+        "deliver_to": deliver_to,
+        "deliver_note": deliver_note,
+        "tax_loc_id": engine.loc_code(con, trow["tax_loc_id"])
+                      if trow["tax_loc_id"] else None,
+        "location_note": data.get("location_note") or "",
+        "clerk": handler.desk(con),
+    }
+    try:
+        engine.update_ticket(con, target, upd)
+    except engine.SoftReserveConflict as sc:
+        con.rollback()
+        handler._redirect(back + "&err=" + quote_plus(
+            f"Unit is soft-reserved on Rental Ticket "
+            f"{sc.ticket['ticket_id']} for another job — the edit "
+            f"was not saved"))
+        return True
+    except ValueError as e:
+        con.rollback()
+        handler._redirect(back + "&err=" + quote_plus(str(e)[:160]))
+        return True
+    final = target
+    if tid and tid != target:
+        try:
+            engine.validate_new_doc_no(con, "tickets", "ticket_id",
+                                       tid, "rental ticket")
+        except ValueError as e:
+            handler._redirect(back + "&err=" + quote_plus(str(e)[:160]))
+            return True
+        con.execute("UPDATE tickets SET ticket_id=? WHERE ticket_id=?",
+                    (tid, target))
+        final = tid
+    con.execute(
+        "UPDATE tickets SET ref_ticket=? WHERE ticket_id=?",
+        ((data.get("ref_ticket") or "").strip() or None, final))
+    con.commit()
+    engine.clear_revision_pending(
+        con, "ticket", engine.doc_key(con, "ticket", final))
+    up = (handler._files or {}).get("job_attach")
+    if up and up[2]:
+        engine.save_job_attachment(con, "ticket", final, up[0], up[2],
+                                   handler.desk(con))
+    up2 = (handler._files or {}).get("ticket_upload")
+    if up2 and up2[2]:
+        engine.save_job_attachment(con, "ticket", final, up2[0], up2[2],
+                                   handler.desk(con))
+    engine.add_done_manual(
+        con, f"Edited Rental Ticket {final}", f"/ticket/{final}",
+        handler.desk(con))
+    handler._redirect(f"/ticket/{final}?msg=" + quote_plus(
+        "Rental Ticket saved"))
+    return True
 
 
 def handle_post(handler, con, data, u):
     """Handle one POST. Returns True when the path was handled."""
     if u.path == "/ticket/new":
+            if (data.get("editing") or "") == "1":
+                return _post_ticket_edit(handler, con, data)
             # Site is optional on the rental form (Jason 2026-10-07) — no
             # site field is rendered. A site may still arrive from older
             # flows; match it, else leave the ticket site-less (NULL).
@@ -50,7 +203,9 @@ def handle_post(handler, con, data, u):
             # its key; any other text is a third-party carrier name, kept
             # verbatim as the note (engine.resolve_haul_text).
             haul_text = (data.get("haul_text") or "").strip()
-            haul_by, haul_note = engine.resolve_haul_text(haul_text)
+            haul_by, haul_note = engine.resolve_haul_text(
+                haul_text,
+                *_haul_names(con, cust_code=data.get("customer_id")))
             deliver_text = (data.get("deliver_text") or "").strip()
             deliver_to, deliver_note = "job_site", ""
             for d in ("job_site", "our_yard", "customer_yard", "dock"):
@@ -269,7 +424,13 @@ def handle_post(handler, con, data, u):
             # so a locked ticket's popup post is refused whole —
             # fields and upload alike.
             tid = u.path.split("/")[2]
-            _haul_by, _haul_note = engine.resolve_haul_text(data.get("haul_by"))
+            _trow = con.execute(
+                "SELECT customer_id FROM tickets WHERE ticket_id=?",
+                (tid,)).fetchone()
+            _haul_by, _haul_note = engine.resolve_haul_text(
+                data.get("haul_by"),
+                *_haul_names(con, cust_key=(
+                    _trow["customer_id"] if _trow else None)))
             engine.update_ticket_transport(con, tid, {
                 "haul_by": _haul_by,
                 "haul_note": _haul_note,
@@ -430,6 +591,28 @@ def handle_post(handler, con, data, u):
                 handler._redirect("/sites?msg=Site+saved")
     elif u.path == "/wo/save":
             wid = data.get("wo_id") or None
+            # Void-and-revise (build 'ab', Jason 2026-10-26): an
+            # existing Work Order never saves in place — except a
+            # fresh revision completing under its session marker.
+            _wo_session = False
+            if wid and con.execute(
+                    "SELECT 1 FROM work_orders WHERE wo_id=?",
+                    (wid,)).fetchone():
+                if not engine.revision_pending(
+                        con, "wo", engine.doc_key(con, "wo", wid)):
+                    raise ValueError(
+                        f"Work Order {wid} is posted — revise it "
+                        f"(Edit on its form) to change it")
+                _wo_session = True
+                _wo_new = (data.get("wo_rename") or "").strip()
+                if _wo_new and _wo_new != wid:
+                    engine.validate_new_doc_no(
+                        con, "work_orders", "wo_id", _wo_new,
+                        "work order")
+                    con.execute("UPDATE work_orders SET wo_id=? "
+                                "WHERE wo_id=?", (_wo_new, wid))
+                    con.commit()
+                    wid = _wo_new
             # Line rows: indexed item0..item7 (Add Item clones), with a
             # fallback to the legacy unindexed names. One WO with many
             # lines (2026-10-15): every non-blank row becomes a line
@@ -503,6 +686,9 @@ def handle_post(handler, con, data, u):
                 "SELECT 1 FROM work_orders WHERE wo_id=?", (wid,)).fetchone())
             wid = engine.save_wo(con, dict(header, description=desc,
                                            lines=lines), wid)
+            if _wo_session:
+                engine.clear_revision_pending(
+                    con, "wo", engine.doc_key(con, "wo", wid))
             if not _wo_existed:
                 engine.add_done_manual(
                     con, f"Created work order {wid}", f"/summary/wo/{wid}",

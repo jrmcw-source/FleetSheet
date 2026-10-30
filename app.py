@@ -16,7 +16,7 @@ import threading
 import time
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, quote, quote_plus, unquote, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, unquote, unquote_plus, urlparse
 
 import engine
 import printpack
@@ -96,7 +96,7 @@ GET_ROUTES = {
     "/health": ("System Health", lambda self, con, q: self.view_system_health(con)),
     "/billing": ("Billing", lambda self, con, q: self._redirect("/money")),
     "/rentals": ("Rentals", lambda self, con, q: self._redirect("/ticket/new")),
-    "/sale": ("Sale", lambda self, con, q: self.view_sale(con, q)),
+    "/sale": ("Sales Ticket", lambda self, con, q: self.view_sale(con, q)),
     "/reports": (
         "Reports",
         lambda self, con, q: self.view_reports(
@@ -396,6 +396,7 @@ class Handler(views_accounting.AccountingViews,
         ("prefix", '/photo/', "_get_photo"),
         ("prefix", '/doc/', "_get_doc"),
         ("prefix", '/invoicedoc/', "_get_invoicedoc"),
+        ("prefix", '/jobdoc/', "_get_jobdoc"),
         ("any_prefix", None, "_get_prefix_route"),
         ("exact", '/phone.html', "_get_phone_html"),
         ("exact", '/phone.url', "_get_phone_url"),
@@ -621,9 +622,33 @@ class Handler(views_accounting.AccountingViews,
         else:
             self._redirect("/?err=" + quote_plus("Paperwork not found"))
 
+    def _get_jobdoc(self, con, q, flash, name, path):
+        # A summary Paperwork link (build 'af'): serve one job
+        # attachment by its stored name from the shared document
+        # folder. The name is a bare filename from the folder scan —
+        # any path separator or traversal is refused outright.
+        import mimetypes
+        from pathlib import Path
+        stored = unquote(path[len("/jobdoc/"):])
+        p = None
+        if stored and Path(stored).name == stored:
+            cand = Path(engine.doc_dir()) / stored
+            if cand.is_file():
+                p = cand
+        if p is not None:
+            self._send_bytes(
+                p.read_bytes(),
+                mimetypes.guess_type(p.name)[0]
+                or "application/octet-stream")
+        else:
+            self._redirect("/?err=" + quote_plus("Paperwork not found"))
+
     def _get_prefix_route(self, con, q, flash, name, path):
         prefix, handler = next(pair for pair in GET_PREFIX_ROUTES if path.startswith(pair[0]))
-        item_id = path[len(prefix):]
+        # Build 'ab': decode the id the way the app's own links encode
+        # it (quote_plus). Revision numbers ("WO-1001 Rev. 1") always
+        # carry spaces; without the decode they landed on blank forms.
+        item_id = unquote_plus(path[len(prefix):])
         try:
             title, body = handler(self, con, item_id, q)
         except TypeError:

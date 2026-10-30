@@ -18,7 +18,10 @@ from engine_core import (
     _row_get,
     require_clerk,
     validate_new_doc_no,
+    doc_key,
     key_of,
+    stamp_company_snapshot,
+    company_snapshot_json,
     num_of,
     cust_key,
     cust_code,
@@ -39,6 +42,9 @@ from engine_core import (
     period_bounds,
     _ensure_device_tables,
     get_option,
+    doc_prefix,
+    DOC_NUMBER_FLOOR,
+    doc_number_floor,
     set_option,
     module_on,
     COND_NOT_RECORDED,
@@ -124,9 +130,9 @@ from engine_core import (
 
 """FleetSheet engine: assets flow — units, sites, tickets, work orders, rental calculations, availability reports."""
 
-__all__ = ['billable_days', 'applied_rate', 'rental_amount', 'compliance', 'fit_reason', 'possession_rules', 'ticket_money', 'ticket_lines', 'save_ticket_lines', 'sync_flat_charges_to_lines', 'FREIGHT_CATS', 'asset_status', 'next_ticket_id', 'create_ticket', 'SoftReserveConflict', 'update_ticket_transport', 'condition_worse', 'save_ticket_condition', 'save_ticket_photo', 'read_ticket_photo', 'set_status', 'ready_work_orders', 'next_asset_id', 'save_asset', 'next_site_id', 'save_site', 'report_availability', 'report_upcoming', 'report_stays', 'report_maintenance', 'next_wo_id', 'wo_cost', 'save_wo', 'wo_lines', 'report_work_orders', 'HAUL_BY', 'DELIVER_TO', 'HAUL_LABELS', 'DELIVER_LABELS', 'clean_haul_by', 'clean_deliver_to', 'haul_consequence', 'haul_from', 'RATE_UNITS', 'clean_rate_unit', 'ticket_hours',
+__all__ = ['billable_days', 'applied_rate', 'rental_amount', 'compliance', 'fit_reason', 'possession_rules', 'ticket_money', 'ticket_lines', 'save_ticket_lines', 'sync_flat_charges_to_lines', 'FREIGHT_CATS', 'asset_status', 'next_ticket_id', 'create_ticket', 'update_ticket', 'SoftReserveConflict', 'update_ticket_transport', 'condition_worse', 'save_ticket_condition', 'save_ticket_photo', 'read_ticket_photo', 'set_status', 'ready_work_orders', 'next_asset_id', 'save_asset', 'next_site_id', 'save_site', 'report_availability', 'report_upcoming', 'report_stays', 'report_maintenance', 'next_wo_id', 'wo_cost', 'save_wo', 'wo_lines', 'report_work_orders', 'HAUL_BY', 'DELIVER_TO', 'HAUL_LABELS', 'DELIVER_LABELS', 'clean_haul_by', 'clean_deliver_to', 'haul_consequence', 'haul_from', 'RATE_UNITS', 'clean_rate_unit', 'ticket_hours',
  'day_equivalent', 'ASSET_STATUSES', 'clean_asset_status', 'rentable_or_raise',
- 'create_sale', 'list_sales', 'next_sale_id', 'peek_next_sale_id']
+ 'create_sale', 'update_sale', 'sale_edit_block', 'list_sales', 'next_sale_id', 'peek_next_sale_id']
 
 # Single rate field (2026-09-27): one unit + one value per record. The common
 # four lead; Monthly/Standby/Yard stay legal for legacy records that use them.
@@ -200,12 +206,16 @@ def haul_from(data: dict) -> str:
     return clean_haul_by(data.get("haul_by"))
 
 
-def resolve_haul_text(text) -> tuple:
+def resolve_haul_text(text, company_name="", customer_name="") -> tuple:
     """Resolve operator-entered transport text to (haul_by, haul_note).
 
     The two presets and the storage keys resolve to their key with no
-    note; the retired label set resolves the same way. Any other text is
-    a third-party carrier name and is kept verbatim as the note."""
+    note; the retired label set resolves the same way. Build 'am'
+    (Jason 2026-10-28): the presets are PRESENTED with the company's
+    and the customer's own names ("<name> Transport"), so those
+    name-forms resolve to their keys too when the caller supplies the
+    names. Any other text is a third-party carrier name and is kept
+    verbatim as the note."""
     t = (text or "").strip()
     if not t:
         return ("we", "")
@@ -216,17 +226,29 @@ def resolve_haul_text(text) -> tuple:
     for label, key in HAUL_LEGACY_LABELS.items():
         if low == label.lower():
             return (key, "")
+    for name, key in ((company_name, "we"), (customer_name, "customer")):
+        if name and low == f"{name} Transport".lower():
+            return (key, "")
     return ("third_party", t)
 
 
-def transport_display(haul_by, haul_note="") -> str:
-    """The one transport wording shown on screens and print."""
+def transport_display(haul_by, haul_note="", company_name="",
+                      customer_name="") -> str:
+    """The one transport wording shown on screens and print.
+
+    Build 'am' (Jason 2026-10-28): the hauler is named, not
+    categorised — the company's own dba/name + " Transport" when the
+    company hauls, the customer's dba/name + " Transport" when the
+    customer hauls. A caller that cannot supply a name gets the
+    generic preset label."""
     h = clean_haul_by(haul_by)
     if h == "customer":
-        return HAUL_LABELS["customer"]
+        return (f"{customer_name} Transport" if customer_name
+                else HAUL_LABELS["customer"])
     if h == "third_party":
         return (haul_note or "").strip() or HAUL_LABELS["third_party"]
-    return HAUL_LABELS["we"]
+    return (f"{company_name} Transport" if company_name
+            else HAUL_LABELS["we"])
 
 def haul_consequence(haul: str, dest: str) -> str:
     """Explain the operational consequence. Tax is the operator's call —
@@ -651,8 +673,9 @@ def next_ticket_id(con: sqlite3.Connection) -> str:
     # Skip numbers already in use, like every other generator: a ticket
     # created ahead of the counter (say T-1050) must never be reissued.
     while True:
-        n = _reserve_counter(con, "next_ticket", 1001)
-        tid = f"T-{n}"
+        n = _reserve_counter(con, "next_ticket", 1001,
+                             floor=doc_number_floor("ticket"))
+        tid = f"{doc_prefix(con, 'ticket')}-{n}"
         if not con.execute("SELECT 1 FROM tickets WHERE ticket_id=?",
                            (tid,)).fetchone():
             return tid
@@ -753,8 +776,104 @@ def create_ticket(con: sqlite3.Connection, data: dict) -> str:
         sync_flat_charges_to_lines(con, tid)
     if (data.get("quote_no") or "").strip():
         _set_quote_link(con, "tickets", "ticket_id", tid, data["quote_no"].strip(), data["customer_id"])
+    stamp_company_snapshot(con, "tickets", key_of(con, "tickets", tid))
     con.commit()
     return tid
+def update_ticket(con: sqlite3.Connection, ticket_id: str, data: dict) -> str:
+    """Save an edit to an existing rental ticket (build 'ab', Jason's
+    JC-AA3 ruling: every document edits on its own form). The ticket
+    number never changes (posted permanence), and neither does its
+    workflow status — status moves stay in the summary's Status door.
+    Gates mirror creation where they still make sense: the unit must
+    pass the class guard and the busy check (excluding this ticket),
+    dates parse, the tax jurisdiction must exist, and a Reserved
+    ticket carrying a PO recomputes its soft hold. Two locks are
+    judgment calls of this build (JC-AB1/JC-AB2): the customer never
+    changes on a saved ticket (the invoice editor's rule), and the
+    unit never changes once a check-out condition stands — that
+    record belongs to the unit on the ticket. Stored charge lines
+    are not touched: build 's' retired charge entry from this form,
+    and the lines on file stay the read-only record the summary
+    shows (JC-AB3)."""
+    t = con.execute("SELECT * FROM tickets WHERE ticket_id=?",
+                    (ticket_id,)).fetchone()
+    if not t:
+        raise ValueError("Unknown rental ticket")
+    if t["status"] in ("Billed", "Closed", "Void") or t["invoice_id"]:
+        raise ValueError(
+            f"Rental Ticket {ticket_id} is locked — "
+            + ("it has been invoiced" if t["invoice_id"]
+               else f"it is {t['status']}"))
+    require_clerk(data.get("clerk"))
+    new_cust = (data.get("customer_id") or "").strip()
+    if new_cust and cust_key(con, new_cust) != t["customer_id"]:
+        raise ValueError(
+            "The customer can't change on a saved rental ticket — "
+            "void it and write a new one")
+    akey = t["asset_id"]
+    new_aid = (data.get("asset_id") or "").strip()
+    if new_aid and asset_key(con, new_aid) != t["asset_id"]:
+        if t["out_condition"]:
+            raise ValueError(
+                "The unit can't change after check-out — the "
+                "condition record belongs to the unit on the ticket")
+        rentable_or_raise(con, new_aid)
+        akey = asset_key(con, new_aid)
+        busy = con.execute(
+            """SELECT ticket_id, customer_id, job_name, well_or_pad, po,
+                      on_rent, off_rent,
+                      COALESCE(soft_reserve,0) AS soft_reserve
+               FROM tickets
+               WHERE asset_id=? AND id<>?
+                 AND status IN ('Reserved','Dispatched','On Rent','Standby')""",
+            (akey, t["id"])).fetchone()
+        if busy:
+            if busy["soft_reserve"]:
+                raise SoftReserveConflict(busy)
+            raise ValueError(
+                f"Unit already on rental ticket {busy['ticket_id']} (open)")
+    on_rent = parse_date(data.get("on_rent"), "On-rent date")
+    off_rent = parse_date(data.get("off_rent"), "Off-rent date",
+                         required=False)
+    haul = haul_from(data)
+    dest = clean_deliver_to(data.get("deliver_to"))
+    tax_loc_id = clean_tax_loc_id(data.get("tax_loc_id"))
+    if tax_loc_id and not con.execute(
+            "SELECT 1 FROM jurisdictions WHERE loc_id=?",
+            (tax_loc_id,)).fetchone():
+        raise ValueError("Selected tax jurisdiction does not exist")
+    soft = 1 if t["status"] == "Reserved" and (data.get("po") or "").strip() else 0
+    rate_value = data.get("rate_value")
+    if rate_value in (None, ""):
+        rate_value = data.get("special_override")
+    if rate_value in (None, ""):
+        rate_value = t["rate_value"]
+    con.execute(
+        """UPDATE tickets SET site_id=?, asset_id=?, job_name=?,
+               well_or_pad=?, afe=?, po=?, rate_type=?, rate_value=?,
+               on_rent=?, off_rent=?, customer_transport=?, haul_by=?,
+               haul_note=?, deliver_to=?, deliver_note=?, tax_loc_id=?,
+               waiver_yn=?, soft_reserve=?, location_note=?
+           WHERE ticket_id=?""",
+        (
+            site_key(con, data["site_id"]) if (data.get("site_id") or "") else None,
+            akey,
+            data.get("job_name") or "", data.get("well_or_pad") or "",
+            data.get("afe") or "", data.get("po") or "",
+            clean_rate_unit(data.get("rate_type")), rate_value,
+            on_rent, off_rent,
+            0 if haul == "we" else 1,
+            haul, data.get("haul_note") or "",
+            dest, data.get("deliver_note") or "",
+            loc_key(con, tax_loc_id),
+            1 if data.get("waiver_yn", bool(t["waiver_yn"])) else 0,
+            soft, data.get("location_note") or "",
+            ticket_id,
+        ),
+    )
+    stamp_company_snapshot(con, "tickets", key_of(con, "tickets", ticket_id))
+    con.commit()
+    return ticket_id
 def update_ticket_transport(con: sqlite3.Connection, ticket_id: str, data: dict) -> None:
     t = con.execute("SELECT status, invoice_id, haul_note FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()
     if not t:
@@ -1546,8 +1665,9 @@ def next_wo_id(con) -> str:
     # other generator — a WO created ahead of the counter must never
     # be reissued.
     while True:
-        n = _reserve_counter(con, "next_wo", 101)
-        wid = f"WO-{n}"
+        n = _reserve_counter(con, "next_wo", 101,
+                             floor=doc_number_floor("wo"))
+        wid = f"{doc_prefix(con, 'wo')}-{n}"
         if not con.execute("SELECT 1 FROM work_orders WHERE wo_id=?",
                            (wid,)).fetchone():
             return wid
@@ -1723,6 +1843,7 @@ def save_wo(con, data: dict, wo_id: str | None = None) -> str:
                  clean_line_uom(con, ln.get("uom")), float(amt)))
     if data.get("quote_no") and cust:
         _set_quote_link(con, "work_orders", "wo_id", wid, data["quote_no"], cust)
+    stamp_company_snapshot(con, "work_orders", key_of(con, "work_orders", wid))
     con.commit()
     return wid
 def report_work_orders(con, kind: str = "ytd") -> dict:
@@ -1769,18 +1890,28 @@ def report_work_orders(con, kind: str = "ytd") -> dict:
     }
 
 def next_sale_id(con) -> str:
-    """The one sale-number minter (build 'v'): S-{year}-{n}, unpadded —
-    the format the book already carries (the sale form's padded
-    variant is retired; existing numbers never change). Skips any
-    number already in use."""
-    import datetime as _dt
-    yr = _dt.date.today().year
-    n = con.execute(
-        "SELECT COALESCE(MAX(CAST(SUBSTR(sale_id, 8) AS INTEGER)), 0) "
-        "FROM sales WHERE sale_id LIKE ?", (f"S-{yr}-%",)).fetchone()[0]
+    """The one sale-number minter. Build 'v': S-{year}-{n}, unpadded.
+    Build 'af' (Jason 2026-10-28): the stem is the operator's
+    (prefix_sale). Build 'ai' (Jason 2026-10-28): the year segment
+    is SUPERSEDED — the shape is now the standing one, {stem}-{n},
+    the stem's factory default is ST, and the sequence starts at
+    the floor (build 'ao', Jason 2026-10-29: per-kind starts — the
+    sale kind's start is 400001). Existing numbers never change: the MAX scan
+    reads only the plain {stem}-<digits> series, so year-shaped
+    numbers from before stand as records and never enter the
+    sequence. Skips any number already in use."""
+    _stem = doc_prefix(con, "sale")
+    n = doc_number_floor("sale") - 1
+    _pat = re.compile(r"^" + re.escape(_stem) + r"-(\d+)$")
+    for (sid_val,) in con.execute(
+            "SELECT sale_id FROM sales WHERE sale_id LIKE ?",
+            (f"{_stem}-%",)):
+        _m = _pat.match(str(sid_val))
+        if _m:
+            n = max(n, int(_m.group(1)))
     while True:
         n += 1
-        sid = f"S-{yr}-{n}"
+        sid = f"{_stem}-{n}"
         if not con.execute("SELECT 1 FROM sales WHERE sale_id=?",
                            (sid,)).fetchone():
             return sid
@@ -1858,8 +1989,230 @@ def create_sale(con, asset_id, customer_id, sale_date, amount, notes="", clerk="
         "UPDATE assets SET sold_date=?, sold_amount=?, sold_to=?, active=0 WHERE asset_id=?",
         (sale_date, amount, customer_id, asset_id)
     )
+    stamp_company_snapshot(con, "sales", key_of(con, "sales", sale_id))
     con.commit()
     return sale_id
+
+def sale_edit_block(con, grp: str):
+    """Why sale group grp may not be edited, or None when it may
+    (build 'ab', JC-AA3). A sale's money state lives in the
+    accounting engine: money carried onto an invoice belongs to the
+    invoice, and a fully settled sale is closed (JC-AB5)."""
+    from engine_accounting import doc_settled  # lazy: import order
+    rows = con.execute(
+        "SELECT invoice_id FROM sales WHERE group_id=?",
+        (doc_key(con, "sale", grp),)).fetchall()
+    if not rows:
+        return "No such sale."
+    if any(r["invoice_id"] for r in rows):
+        ino = next(num_of(con, "invoices", r["invoice_id"])
+                   for r in rows if r["invoice_id"])
+        return (f"Sale {grp} is on {ino} — its money lives on the "
+                f"invoice now")
+    settled = doc_settled(con, "sale", grp)["total"]
+    if settled > Decimal("0.009"):
+        total = con.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM sales WHERE group_id=?",
+            (doc_key(con, "sale", grp),)).fetchone()[0]
+        if _money(total) - settled <= Decimal("0.009"):
+            return f"Sale {grp} is fully settled — it is closed"
+    return None
+
+
+def update_sale(con, gkey: int, rows: list, header: dict,
+                plant_confirm: bool = False,
+                fleet_confirm: bool = False,
+                revision: bool = False) -> str:
+    """Save a sale's own form onto its group (build 'ab'). Under
+    void-and-revise this writes a REVISION's first save: the group
+    addressed by its engine key (numbers are never keys), under
+    the session marker the revise act set (the POST layer holds
+    that license). rows = [{line_ref (an existing line's sale_id,
+    '' for a new line), asset_id, item_desc, qty, amount,
+    line_note}] in form order; an existing line absent from rows
+    is removed. header carries customer_id, sale_date, condition,
+    ref_no, notes, clerk.
+    Gates (judgment calls JC-AB4..JC-AB6): the group's number rides
+    on its head line, which may be edited but never removed; the
+    group's total may not fall below the money already settled
+    against its CHAIN (doc_settled walks the revision chain — a
+    revision inherits its ancestors' settlements as its floor),
+    and the customer may not change once money stands. A line's
+    own settled share binds at the group floor: the ancestor's
+    line allocations stay on the ancestor's rows as its record.
+    Plant/Fleet units pass the same double check as at creation,
+    stamps included. A removed line's unit is un-sold; a swapped
+    or added unit is marked sold exactly as create_sale marks it.
+    An invoiced sale never reaches here (the revise gate refuses
+    it — its money lives on the invoice); a fully settled sale is
+    closed to a plain edit but IS the revision case, so the
+    settled arm of sale_edit_block applies only when revision is
+    False. Caller owns the transaction."""
+    from engine_accounting import doc_settled, _doc_line_allocated
+    old = con.execute(
+        "SELECT * FROM sales WHERE group_id=? ORDER BY seq, id",
+        (gkey,)).fetchall()
+    if not old:
+        raise ValueError("Unknown sale")
+    head = old[0]
+    grp = head["sale_id"]
+    if any(r["invoice_id"] for r in old):
+        ino = next(num_of(con, "invoices", r["invoice_id"])
+                   for r in old if r["invoice_id"])
+        raise ValueError(
+            f"Sale {grp} is on {ino} — its money lives on the "
+            f"invoice now")
+    require_clerk(header.get("clerk"))
+    settled_total = doc_settled(con, "sale", grp)["total"]
+    if not revision and settled_total > Decimal("0.009"):
+        _tot = con.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM sales WHERE group_id=?",
+            (gkey,)).fetchone()[0]
+        if _money(_tot) - settled_total <= Decimal("0.009"):
+            raise ValueError(f"Sale {grp} is fully settled — it is closed")
+    cust = (header.get("customer_id") or "").strip()
+    if cust and cust_key(con, cust) != head["customer_id"] \
+            and settled_total > Decimal("0.009"):
+        raise ValueError(
+            "The customer can't change on a sale with money applied — "
+            "the money stands against the customer who paid it")
+    old_by_ref = {r["sale_id"]: r for r in old}
+    kept_refs = [(rw.get("line_ref") or "").strip() for rw in rows]
+    if head["sale_id"] not in kept_refs:
+        raise ValueError(
+            "The sale's first line carries its number and cannot be "
+            "removed — edit it, or void the sale and write a new one")
+    # Validate everything before any write (atomic posting).
+    plan = []
+    seen_assets = set()
+    new_total = Decimal("0.00")
+    for rw in rows:
+        ref = (rw.get("line_ref") or "").strip()
+        amount = _money(rw.get("amount"))
+        qty = float(rw.get("qty") or 0)
+        if qty <= 0:
+            raise ValueError("Sale quantity must be positive")
+        if amount < 0:
+            raise ValueError("Sale amount cannot be negative")
+        new_total += amount
+        orow = old_by_ref.get(ref) if ref else None
+        if orow is not None:
+            alloc = _doc_line_allocated(con, "sale", ref, orow["id"])
+            if amount < alloc:
+                raise ValueError(
+                    f"Line {ref} already has ${_money(alloc):,.2f} "
+                    f"applied — its amount cannot go below that")
+            aid = (rw.get("asset_id") or "").strip()
+            if aid and asset_key(con, aid) != orow["asset_id"] \
+                    and alloc > Decimal("0.009"):
+                raise ValueError(
+                    f"Line {ref} has money applied — its unit cannot "
+                    f"change")
+        plan.append((orow, rw))
+    if new_total < settled_total:
+        raise ValueError(
+            f"Sale {grp} already has ${_money(settled_total):,.2f} "
+            f"applied — its total cannot go below that")
+    ckey = cust_key(con, cust) if cust else head["customer_id"]
+    sale_date = (header.get("sale_date") or "").strip() or head["sale_date"]
+    # Removed lines: un-sell their units.
+    kept = {r["sale_id"] for r in old
+            if r["sale_id"] in kept_refs}
+    for orow in old:
+        if orow["sale_id"] in kept:
+            continue
+        con.execute(
+            "UPDATE assets SET sold_date=NULL, sold_amount=NULL, "
+            "sold_to=NULL, active=1 WHERE id=?", (orow["asset_id"],))
+        con.execute("DELETE FROM sales WHERE id=?", (orow["id"],))
+    # Kept and new lines, in form order (seq renumbered).
+    for i, (orow, rw) in enumerate(plan):
+        aid = (rw.get("asset_id") or "").strip()
+        amount = float(_money(rw.get("amount")))
+        qty = float(rw.get("qty") or 0)
+        if orow is not None:
+            old_aid = orow["asset_id"]
+            new_aid = asset_key(con, aid) if aid else old_aid
+            if new_aid != old_aid:
+                _check_sale_unit(con, aid, plant_confirm, fleet_confirm)
+                con.execute(
+                    "UPDATE assets SET sold_date=NULL, sold_amount=NULL, "
+                    "sold_to=NULL, active=1 WHERE id=?", (old_aid,))
+                con.execute(
+                    "UPDATE assets SET sold_date=?, sold_amount=?, "
+                    "sold_to=?, active=0 WHERE id=?",
+                    (sale_date, amount,
+                     cust_code(con, ckey), new_aid))
+            elif float(orow["amount"]) != amount:
+                con.execute(
+                    "UPDATE assets SET sold_amount=? WHERE id=?",
+                    (amount, old_aid))
+            con.execute(
+                """UPDATE sales SET asset_id=?, customer_id=?,
+                       sale_date=?, qty=?, amount=?, condition=?,
+                       ref_no=?, item_desc=?, line_note=?, seq=?,
+                       notes=?, clerk=?
+                   WHERE id=?""",
+                (new_aid, ckey, sale_date, qty, amount,
+                 header.get("condition") or "",
+                 header.get("ref_no") or "",
+                 rw.get("item_desc") or "", rw.get("line_note") or "",
+                 i + 1, header.get("notes") or "",
+                 header.get("clerk") or "", orow["id"]))
+        else:
+            _check_sale_unit(con, aid, plant_confirm, fleet_confirm)
+            nid = next_sale_id(con)
+            cur = con.execute(
+                """INSERT INTO sales (sale_id, asset_id, customer_id,
+                       sale_date, qty, amount, condition, notes, clerk,
+                       ref_no, item_desc, seq, group_id, line_note)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (nid, asset_key(con, aid), ckey, sale_date, qty, amount,
+                 header.get("condition") or "", header.get("notes") or "",
+                 header.get("clerk") or "", header.get("ref_no") or "",
+                 rw.get("item_desc") or "", i + 1, gkey,
+                 rw.get("line_note") or ""))
+            con.execute(
+                "UPDATE assets SET sold_date=?, sold_amount=?, "
+                "sold_to=?, active=0 WHERE id=?",
+                (sale_date, amount, cust_code(con, ckey),
+                 asset_key(con, aid)))
+    # A completed revision is a new issuance (redirect #3): the
+    # whole group wears the identity current at this posting.
+    _hkey = doc_key(con, "sale", grp)
+    if _hkey is not None:
+        for _r in con.execute("SELECT id FROM sales WHERE group_id=?",
+                              (_hkey,)):
+            stamp_company_snapshot(con, "sales", _r[0])
+    return grp
+
+
+def _check_sale_unit(con, asset_id: str, plant_confirm: bool,
+                     fleet_confirm: bool) -> None:
+    """create_sale's unit gates for a unit entering a sale through
+    the editor: known, Active, unsold, and the Plant/Fleet double
+    check."""
+    _a = _asset_row(con, asset_id)
+    if not _a:
+        raise ValueError(f"Unknown unit {asset_id}")
+    if _a["status"] != "Active":
+        raise ValueError(
+            f"Unit {_a['unit_no']} is {_a['status']} — set it Active "
+            "to sell it")
+    _sold = con.execute(
+        "SELECT sold_date FROM assets WHERE asset_id=?",
+        (asset_id,)).fetchone()
+    if _sold and _sold["sold_date"]:
+        raise ValueError(f"Unit {_a['unit_no']} is already sold")
+    if _a["designation"] == "Plant" and not plant_confirm:
+        raise ValueError(
+            f"Plant asset {_a['unit_no']} is a fixed asset — confirm "
+            "the Plant sale to proceed")
+    if _a["designation"] == "Fleet" and not fleet_confirm:
+        raise ValueError(
+            f"Fleet asset {_a['unit_no']} is a rental unit — confirm "
+            "the Fleet sale to proceed")
+
 
 def list_sales(con, limit=50):
     """Recent equipment sales, newest first."""

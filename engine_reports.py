@@ -487,7 +487,7 @@ def mixed_rows(con: sqlite3.Connection, kinds: list, date_from: str = "",
                 continue
             if customer_id and s["customer_id"] != customer_id:
                 continue
-            rows.append({"date": d, "type": "Sale", "ref": s["sale_id"],
+            rows.append({"date": d, "type": "Sales Ticket", "ref": s["sale_id"],
                          "customer": s["account_name"],
                          "unit": s["unit_no"],
                          "amount": round(float(s["amount"] or 0), 2),
@@ -558,7 +558,7 @@ def mixed_rows(con: sqlite3.Connection, kinds: list, date_from: str = "",
     # Newest first; same-date rows keep type/ref order (stable sort).
     rows.sort(key=lambda r: (r["type"], r["ref"]))
     rows.sort(key=lambda r: r["date"], reverse=True)
-    type_of = {"Rental": "rentals", "Sale": "sales", "Work order": "work_orders",
+    type_of = {"Rental": "rentals", "Sales Ticket": "sales", "Work order": "work_orders",
                "Invoice": "invoices", "Payment": "payments", "Credit": "credits"}
     totals = {}
     for k in kinds:
@@ -750,7 +750,7 @@ def mixed_rows(con: sqlite3.Connection, kinds: list, date_from: str = "",
                 continue
             if customer_id and s["customer_id"] != customer_id:
                 continue
-            rows.append({"date": d, "type": "Sale", "ref": s["sale_id"],
+            rows.append({"date": d, "type": "Sales Ticket", "ref": s["sale_id"],
                          "customer": s["account_name"],
                          "unit": s["unit_no"],
                          "amount": round(float(s["amount"] or 0), 2),
@@ -821,7 +821,7 @@ def mixed_rows(con: sqlite3.Connection, kinds: list, date_from: str = "",
     # Newest first; same-date rows keep type/ref order (stable sort).
     rows.sort(key=lambda r: (r["type"], r["ref"]))
     rows.sort(key=lambda r: r["date"], reverse=True)
-    type_of = {"Rental": "rentals", "Sale": "sales", "Work order": "work_orders",
+    type_of = {"Rental": "rentals", "Sales Ticket": "sales", "Work order": "work_orders",
                "Invoice": "invoices", "Payment": "payments", "Credit": "credits"}
     totals = {}
     for k in kinds:

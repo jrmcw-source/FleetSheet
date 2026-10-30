@@ -31,11 +31,6 @@ def _rows(con, sql, args=()):
     return con.execute(sql, args).fetchall()
 
 
-def _table_exists(con, name):
-    return con.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-        (name,)).fetchone() is not None
-
 
 def _valid_date(v):
     try:

@@ -244,7 +244,14 @@ CREATE TABLE IF NOT EXISTS tickets (
   haul_note TEXT NOT NULL DEFAULT '',
   deliver_note TEXT NOT NULL DEFAULT '',
   soft_reserve INTEGER NOT NULL DEFAULT 0,
-  ref_ticket TEXT
+  ref_ticket TEXT,
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT
+,
+  co_snapshot TEXT
 );
 
 CREATE TABLE IF NOT EXISTS invoices (
@@ -268,7 +275,14 @@ CREATE TABLE IF NOT EXISTS invoices (
   po_expire TEXT,
   po_cost_code TEXT,
   po_notes TEXT,
-  shipped_by TEXT
+  shipped_by TEXT,
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT
+,
+  co_snapshot TEXT
 );
 
 CREATE TABLE IF NOT EXISTS invoice_lines (
@@ -329,7 +343,14 @@ CREATE TABLE IF NOT EXISTS collections (
   unapplied_amount REAL NOT NULL DEFAULT 0,
   batch_id TEXT,
   cash_entry_id INTEGER REFERENCES cash_entries(entry_id),
-  carried_from TEXT
+  carried_from TEXT,
+  voided INTEGER NOT NULL DEFAULT 0,
+  void_replaced_by TEXT,
+  void_corrects TEXT,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT,
+  co_snapshot TEXT
 );
 
 -- Invoice paperwork (2026-09-27): the PO scan and the tax-exempt certificate
@@ -364,7 +385,14 @@ CREATE TABLE IF NOT EXISTS credit_memos (
   category TEXT DEFAULT 'Other',
   uom TEXT DEFAULT 'Each',
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  cash_entry_id INTEGER REFERENCES cash_entries(entry_id)
+  cash_entry_id INTEGER REFERENCES cash_entries(entry_id),
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT
+,
+  co_snapshot TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_cm_cust ON credit_memos(customer_id);
@@ -396,7 +424,16 @@ CREATE TABLE IF NOT EXISTS petty_cash (
   ref_no TEXT,
   notes TEXT,
   clerk TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Build 'ab' (redirect #2): pc_id is the entry's operator number
+  -- (free text, unique across the log incl. voided); the void-and-
+  -- revise chain links by the engine key (id), never by pc_id.
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT,
+  co_snapshot TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_pc_date ON petty_cash(txn_date);
@@ -425,7 +462,18 @@ CREATE TABLE IF NOT EXISTS cash_entries (
   asset_id INTEGER REFERENCES assets(id),
   notes TEXT,
   clerk TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  -- Build 'ab' (redirect #2): cash entries gain an operator number
+  -- (entry_no — free text, unique across the register incl. voided)
+  -- and the void-and-revise chain, linked by entry_id, never by
+  -- entry_no. Pre-'ab' books backfill CE-#### in entry order.
+  entry_no TEXT,
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT,
+  co_snapshot TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cash_date ON cash_entries(entry_date);
 
@@ -464,7 +512,14 @@ CREATE TABLE IF NOT EXISTS work_orders (
   wo_date TEXT,
   item TEXT,
   qty REAL DEFAULT 1,
-  cost REAL DEFAULT 0
+  cost REAL DEFAULT 0,
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT
+,
+  co_snapshot TEXT
 );
 
 CREATE TABLE IF NOT EXISTS quotes (
@@ -480,7 +535,14 @@ CREATE TABLE IF NOT EXISTS quotes (
   status TEXT NOT NULL CHECK (status IN ('Draft','Sent','Accepted','Declined','Expired','Converted','Void')),
   notes TEXT,
   clerk TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT
+,
+  co_snapshot TEXT
 );
 
 CREATE TABLE IF NOT EXISTS quote_lines (
@@ -515,7 +577,14 @@ CREATE TABLE IF NOT EXISTS change_orders (
   notes TEXT,
   clerk TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  po TEXT
+  po TEXT,
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT
+,
+  co_snapshot TEXT
 );
 
 CREATE TABLE IF NOT EXISTS change_order_lines (
@@ -555,7 +624,14 @@ CREATE TABLE IF NOT EXISTS sales (
   item_desc TEXT,
   seq INTEGER,
   group_id INTEGER,
-  line_note TEXT NOT NULL DEFAULT ''
+  line_note TEXT NOT NULL DEFAULT '',
+  revises_id INTEGER,
+  revised_by_id INTEGER,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT
+,
+  co_snapshot TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_wo_asset ON work_orders(asset_id);
@@ -596,6 +672,7 @@ CREATE TABLE IF NOT EXISTS payment_allocations (
   doc_id INTEGER NOT NULL DEFAULT 0,
   line_id INTEGER,
   carried INTEGER NOT NULL DEFAULT 0,
+  voided INTEGER NOT NULL DEFAULT 0,
   amount REAL NOT NULL CHECK (amount != 0),
   pay_date TEXT NOT NULL DEFAULT '',
   clerk TEXT,
@@ -634,7 +711,14 @@ CREATE TABLE IF NOT EXISTS doc_collections (
   clerk TEXT,
   applied_amount REAL,
   unapplied_amount REAL NOT NULL DEFAULT 0,
-  cash_entry_id INTEGER REFERENCES cash_entries(entry_id)
+  cash_entry_id INTEGER REFERENCES cash_entries(entry_id),
+  voided INTEGER NOT NULL DEFAULT 0,
+  void_replaced_by TEXT,
+  void_corrects TEXT,
+  void_reason TEXT,
+  void_by TEXT,
+  void_at TEXT,
+  co_snapshot TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_dcol_doc ON doc_collections(doc_kind, doc_id);
 CREATE INDEX IF NOT EXISTS idx_dcol_cm ON doc_collections(cm_id);

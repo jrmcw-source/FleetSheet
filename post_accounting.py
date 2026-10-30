@@ -1,4 +1,5 @@
 """FleetSheet POST actions — accounting flow: invoices, payments, credit, quotes, petty cash, customers, export."""
+import re
 from datetime import date
 
 import engine
@@ -40,19 +41,31 @@ def _post_invoice_create(handler, con, data, u):
     replace = False
     stored_terms = None
     if data.get("editing") == "1" and (data.get("invoice_no") or "").strip():
-        _want = data["invoice_no"].strip()
+        # Void-and-revise (build 'ab', Jason 2026-10-26): a saved
+        # invoice is a record — it never updates in place. The one
+        # licensed in-place save is a REVISION's own form completing
+        # under the session marker the revise act set (edit_target
+        # names the revision the form was loaded with; the posted
+        # invoice_no is the operator's number for it, renames
+        # included). The old invoice_locked refusal is superseded:
+        # money recorded against the chain resolves to the head, so
+        # a revised invoice keeps its payments as chain facts.
+        _target = (data.get("edit_target") or "").strip() \
+            or data["invoice_no"].strip()
         _ex = con.execute(
             "SELECT customer_id, terms FROM invoices WHERE invoice_no=?",
-            (_want,)).fetchone()
+            (_target,)).fetchone()
         if _ex:
-            if engine.invoice_locked(con, _want):
+            _key = engine.doc_key(con, "invoice", _target)
+            if not engine.revision_pending(con, "invoice", _key):
                 raise ValueError(
-                    "Invoice is locked (sent, paid, or has payments)")
+                    f"Invoice {_target} is posted — revise it (Edit "
+                    f"on its form) to change it")
             if (data.get("customer_id") or "") != engine.cust_code(con, _ex["customer_id"]):
                 raise ValueError(
                     "The customer can't change on a saved invoice — "
                     "void it and write a new one")
-            ino = _want
+            ino = _target
             replace = True
             stored_terms = _ex["terms"]
     if ino is None:
@@ -195,6 +208,24 @@ def _post_invoice_create(handler, con, data, u):
             (engine.doc_key(con, "invoice", ino), "", cat, it, ds or "Item", qi, uom, ri, amt, "",
              0.0 if line_exempt else tr, ltax, int(line_exempt),
              "" if line_exempt else "Tax", "", "quick", ""))
+    if replace:
+        # The revision's first Save completes it (build 'ab'): an
+        # operator-renamed number validates against the kind's whole
+        # history — voided numbers stay taken — then the session
+        # marker clears; the form reopens locked from here on.
+        _new_no = (data.get("invoice_no") or "").strip()
+        if _new_no and _new_no != ino:
+            engine.validate_new_doc_no(con, "invoices", "invoice_no",
+                                       _new_no, "invoice")
+            con.execute("UPDATE invoices SET invoice_no=? "
+                        "WHERE invoice_no=?", (_new_no, ino))
+            ino = _new_no
+        engine.clear_revision_pending(
+            con, "invoice", engine.doc_key(con, "invoice", ino))
+        # The completed revision is a new issuance (redirect #3):
+        # it wears the company identity current at this posting.
+        engine.stamp_company_snapshot(
+            con, "invoices", engine.doc_key(con, "invoice", ino))
     con.commit()
     if not replace:
         # A create is an explicit operator action — Done Today gets
@@ -316,7 +347,257 @@ def _line_allocs_from(data, prefix):
     return out
 
 
+def _pay_add_splits(data, splits, co_splits):
+    """Add Item rows on the payment form (build 'af', Jason
+    2026-10-28): adddoc__N names a document ("invoice:<no>" /
+    "change:<co_no>" — the picker's open documents, the same
+    source the splits table lists) and addamt__N its amount; the
+    pair merges into the batch's splits. A document that already
+    holds an allocation row in this batch — a standing split with
+    an amount, or a second added row naming it — is refused with
+    a plain error."""
+    have_inv = {ref for ref, _a in splits}
+    have_co = {ref for ref, _a in co_splits}
+    seen = set()
+    for k in sorted(data.keys()):
+        if not k.startswith("adddoc__"):
+            continue
+        n = k[len("adddoc__"):]
+        spec = (data.get(k) or "").strip()
+        raw = (data.get(f"addamt__{n}") or "").strip()
+        if not spec or not raw:
+            continue
+        try:
+            amt = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if amt <= 0:
+            continue
+        kind, _, ref = spec.partition(":")
+        ref = ref.strip()
+        label = {"invoice": "Invoice",
+                 "change": "Change Order"}.get(kind)
+        if label is None or not ref:
+            continue
+        if (kind, ref) in seen or (kind == "invoice" and ref in have_inv) \
+                or (kind == "change" and ref in have_co):
+            raise ValueError(
+                f"{label} {ref} already has a row in this payment")
+        seen.add((kind, ref))
+        if kind == "invoice":
+            splits.append((ref, amt))
+            have_inv.add(ref)
+        else:
+            co_splits.append((ref, amt))
+            have_co.add(ref)
+    return splits, co_splits
+
+
+def _post_pay_correction(handler, con, data, u):
+    """Apply the payment revision (build 'ab', void-and-revise —
+    the correction model, approved by Jason 2026-10-26: "the
+    payment mechanic is sound... The records must stay"). The
+    original was voided at the revise CONFIRM (signed with the
+    reason, the operator's name, the timestamp; JC-AB0) and its
+    replacement batch '<original> Rev. N' minted there; this post
+    is the revision form's Apply, licensed by the session marker
+    the confirm set (target_batch names the minted batch, the
+    marker names the original). The splits post into the minted
+    batch through the ordinary record paths — balance reads
+    already exclude the voided original, so they validate against
+    the restored state. The posted pay_no may rename the batch
+    (a free-text number under the same law); the void's
+    replaced-by stamp follows the final name. The batch names
+    the original (void_corrects); Done carries the posting (the
+    void's Done entry was written at the confirm)."""
+    target = (data.get("target_batch") or "").strip()
+    orig = engine.get_option(con, f"revtarget:payment:{target}") \
+        if target else ""
+    if not target or not orig:
+        raise ValueError(
+            "That payment is posted — revise it (Edit on its form) "
+            "to change it")
+    info = engine.payment_batch_info(con, orig)
+    ocust = info["customer_id"]
+    pdate = data.get("pay_date") or date.today().isoformat()
+    method = data.get("method") or ""
+    ref = data.get("ref") or ""
+    notes = (data.get("notes") or "").strip()
+    clerk = _desk(handler, con)
+    splits = []
+    for k, v in data.items():
+        if k.startswith("p__") and v:
+            try:
+                amt = float(v)
+            except (TypeError, ValueError):
+                continue
+            if amt > 0:
+                splits.append((k[3:], amt))
+    co_splits = []
+    for k, v in data.items():
+        if k.startswith("pco__") and v:
+            try:
+                amt = float(v)
+            except (TypeError, ValueError):
+                continue
+            if amt > 0:
+                co_splits.append((k[5:], amt))
+    doc_splits = _doc_applies_from(data, "pd", "pdl")
+    splits, co_splits = _pay_add_splits(data, splits, co_splits)
+    if not splits and not co_splits and not doc_splits:
+        raise ValueError(
+            "Enter an Apply amount — a correction posts the payment "
+            "somewhere, or it is not a correction")
+    # Chain-head resolution (JC-AB26): a document the original
+    # payment settled may itself have been revised since — the
+    # correction's money belongs on the live head of its chain,
+    # never on the voided ancestor the form was prefilled from.
+    # Line breakdowns do not translate (the revision's lines are
+    # new rows); a translated document's split posts without its
+    # original breakdown.
+    _moved = set()
+
+    def _head(kind, ref):
+        h = engine.chain_head_ref(con, kind, ref)
+        if h and h != ref:
+            _moved.add((kind, ref))
+            return h
+        return ref
+
+    splits = [(_head("invoice", ino), amt) for ino, amt in splits]
+    co_splits = [(_head("change", cno), amt) for cno, amt in co_splits]
+    doc_splits = [
+        (k2, _head(k2, r2), a2, None if (k2, r2) in _moved else l2)
+        for k2, r2, a2, l2 in doc_splits]
+    allocs = _line_allocs_from(data, "pl")
+    allocs = {ino: v for ino, v in allocs.items()
+              if ("invoice", ino) not in _moved}
+    _split_inos = {ino for ino, _a in splits}
+    for ino in allocs:
+        if ino not in _split_inos:
+            raise ValueError(
+                f"Line amounts entered for {ino} with no Apply amount")
+    # A correction cannot move money to another customer (JC-AB12):
+    # every split must belong to the original payment's customer.
+    custs = set()
+    for ino, _amt in splits:
+        r = con.execute(
+            "SELECT customer_id FROM invoices WHERE invoice_no=?",
+            (ino,)).fetchone()
+        if not r:
+            raise ValueError(f"Unknown invoice {ino}")
+        custs.add(engine.cust_code(con, r["customer_id"]))
+    for cno, _amt in co_splits:
+        r = con.execute(
+            "SELECT customer_id FROM change_orders WHERE co_no=?",
+            (cno,)).fetchone()
+        if not r:
+            raise ValueError(f"Unknown change order {cno}")
+        custs.add(engine.cust_code(con, r["customer_id"]))
+    _doc_cust_q = {
+        "wo": "SELECT customer_id FROM work_orders WHERE wo_id=?",
+        "ticket": "SELECT customer_id FROM tickets WHERE ticket_id=?",
+        "sale": "SELECT customer_id FROM sales WHERE sale_id=?",
+        "quote": "SELECT customer_id FROM quotes WHERE quote_no=?",
+    }
+    for kind, ref2, _a, _l in doc_splits:
+        r = con.execute(_doc_cust_q[kind], (ref2,)).fetchone()
+        if not r:
+            raise ValueError(f"Unknown {engine.DOC_LABELS[kind]} {ref2}")
+        custs.add(engine.cust_code(con, r["customer_id"]))
+    if custs != {ocust}:
+        raise ValueError(
+            "A correction keeps the payment on its customer — the "
+            "documents span another customer")
+    posted_cust = (data.get("customer_id") or "").strip()
+    if posted_cust and posted_cust != ocust:
+        raise ValueError(
+            "A correction keeps the payment on its customer")
+    new_batch = target
+    _pay_no = (data.get("pay_no") or "").strip()
+    if _pay_no and _pay_no != target:
+        _taken = False
+        for _tbl in ("collections", "doc_collections"):
+            try:
+                _taken = _taken or bool(con.execute(
+                    f"SELECT 1 FROM {_tbl} "
+                    f"WHERE COALESCE(batch_id, pay_id)=? LIMIT 1",
+                    (_pay_no,)).fetchone())
+            except Exception:
+                pass
+        if _taken:
+            raise ValueError(f"Payment number {_pay_no} is taken")
+        new_batch = _pay_no
+    orig_inos = []
+    for r in info["crows"]:
+        ino = engine.doc_num(con, "invoice", r["invoice_id"])
+        if ino:
+            orig_inos.append(ino)
+    try:
+        if new_batch != target:
+            for _tbl in ("collections", "doc_collections"):
+                con.execute(
+                    f"UPDATE {_tbl} SET void_replaced_by=? "
+                    f"WHERE voided=1 AND void_replaced_by=?",
+                    (new_batch, target))
+        pay_ids = []
+        for ino, amt in splits:
+            res = engine.record_payment(
+                con, ino, amt, pdate, method, ref, clerk,
+                batch_id=new_batch, commit=False,
+                line_allocs=allocs.get(ino))
+            if res["pay_id"]:
+                pay_ids.append(res["pay_id"])
+        for cno, amt in co_splits:
+            res = engine.record_doc_payment(
+                con, "change", cno, amt, pdate, method, ref, clerk,
+                batch_id=new_batch, commit=False)
+            if res["pay_id"]:
+                pay_ids.append(res["pay_id"])
+        for kind, ref2, amt, lns in doc_splits:
+            res = engine.record_doc_payment(
+                con, kind, ref2, float(amt), pdate, method, ref,
+                clerk, batch_id=new_batch, commit=False,
+                line_allocs=lns)
+            if res["pay_id"]:
+                pay_ids.append(res["pay_id"])
+        for pid in pay_ids:
+            con.execute(
+                "UPDATE collections SET ref_no=?, clerk=?, "
+                "notes=? WHERE pay_id=?",
+                (ref.strip(), clerk, notes, pid))
+            con.execute(
+                "UPDATE doc_collections SET ref_no=?, clerk=?, "
+                "notes=? WHERE pay_id=?",
+                (ref.strip(), clerk, notes, pid))
+        engine.stamp_payment_correction(con, new_batch, orig)
+        # Invoices the correction moved money OFF of need their
+        # status recomputed against the void (record_payment
+        # already refreshed the ones it re-applied to).
+        for ino in orig_inos:
+            engine._refresh_invoice_status(con, ino)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    engine.set_option(con, f"revtarget:payment:{target}", "")
+    engine.add_done_manual(
+        con, f"Payment {new_batch} recorded — correction of {orig}",
+        f"/summary/payment/{new_batch}", clerk)
+    up = (handler._files or {}).get("pay_upload")
+    if up and up[2] and pay_ids:
+        engine.save_job_attachment(
+            con, "pay", str(pay_ids[0]), up[0], up[2], clerk)
+    handler._redirect(
+        f"/summary/payment/{new_batch}?msg=" + quote_plus(
+            f"Payment {new_batch} recorded — correction of {orig}; "
+            f"the original stands void"))
+    return
+
+
 def _post_pay(handler, con, data, u):
+    if (data.get("revising") or "") == "1":
+        return _post_pay_correction(handler, con, data, u)
     pcols = [r[1] for r in con.execute("PRAGMA table_info(collections)")]
     for col, ddl in [("pay_ref", "TEXT"), ("user_name", "TEXT")]:
         if col not in pcols:
@@ -348,6 +629,9 @@ def _post_pay(handler, con, data, u):
                 continue
             if amt > 0:
                 co_splits.append((k[5:], amt))
+    # Add Item rows (build 'af'): picker rows merge into the same
+    # splits before every check below — one batch, one customer.
+    splits, co_splits = _pay_add_splits(data, splits, co_splits)
     # No splits and no invoice: the form has no invoice to attach to.
     # (The invoice picker is no longer HTML-required — a customer +
     # Apply amounts is a complete payment — so this is enforced here.)
@@ -723,6 +1007,31 @@ def _post_quote_save(handler, con, data, u):
             "uom": data.get(f"u{i}") or "",
         })
     _qn_in = (data.get("quote_no") or "").strip()
+    # Void-and-revise (build 'ab', Jason 2026-10-26): an existing
+    # quote never saves in place — except a fresh revision
+    # completing under its session marker (edit_target names the
+    # revision the form was loaded with; a renamed number
+    # validates against the whole history and lands first, so the
+    # save updates the revision row itself).
+    _q_target = (data.get("edit_target") or "").strip()
+    if _q_target:
+        _qk = engine.doc_key(con, "quote", _q_target)
+        if not engine.revision_pending(con, "quote", _qk):
+            raise ValueError(
+                f"Quote {_q_target} is posted — revise it (Edit on "
+                f"its form) to change it")
+        if _qn_in and _qn_in != _q_target:
+            engine.validate_new_doc_no(con, "quotes", "quote_no",
+                                       _qn_in, "quote")
+            con.execute("UPDATE quotes SET quote_no=? "
+                        "WHERE quote_no=?", (_qn_in, _q_target))
+            con.commit()
+    elif _qn_in and con.execute(
+            "SELECT 1 FROM quotes WHERE quote_no=?",
+            (_qn_in,)).fetchone():
+        raise ValueError(
+            f"Quote {_qn_in} is posted — revise it (Edit on its "
+            f"form) to change it")
     _q_existed = bool(_qn_in and con.execute(
         "SELECT 1 FROM quotes WHERE quote_no=?", (_qn_in,)).fetchone())
     qn = engine.save_quote(con, {
@@ -758,6 +1067,9 @@ def _post_quote_save(handler, con, data, u):
         engine.add_done_manual(
             con, f"Created quote {qn}", f"/summary/quote/{qn}",
             _desk(handler, con))
+    if _q_target:
+        engine.clear_revision_pending(
+            con, "quote", engine.doc_key(con, "quote", qn))
     up = (handler._files or {}).get("job_attach")
     if up and up[2]:
         engine.save_job_attachment(con, "quote", qn, up[0], up[2], _desk(handler, con))
@@ -806,15 +1118,43 @@ def _post_change_save(handler, con, data, u):
     if _ar:
         assoc_kind, _, assoc_ref = _ar.partition(":")
     co_no = (data.get("co_no") or "").strip()
+    # Void-and-revise (build 'ab', Jason 2026-10-26): an existing
+    # Change Order never saves in place — except a fresh revision
+    # completing under its session marker (edit_target names the
+    # revision the form was loaded with; a renamed number
+    # validates against the whole history and lands first).
+    _co_target = (data.get("edit_target") or "").strip()
+    _co_session = False
+    if _co_target:
+        _ck = engine.doc_key(con, "change", _co_target)
+        if not engine.revision_pending(con, "change", _ck):
+            raise ValueError(
+                f"Change Order {_co_target} is issued — revise it "
+                f"(Edit on its form) to change it")
+        _co_session = True
+        if co_no and co_no != _co_target:
+            engine.validate_new_doc_no(con, "change_orders", "co_no",
+                                       co_no, "change order")
+            con.execute("UPDATE change_orders SET co_no=? "
+                        "WHERE co_no=?", (co_no, _co_target))
+            con.commit()
     exists = bool(co_no and con.execute(
         "SELECT 1 FROM change_orders WHERE co_no=?", (co_no,)).fetchone())
+    if exists and not _co_session:
+        raise ValueError(
+            f"Change Order {co_no} is issued — revise it (Edit on "
+            f"its form) to change it")
     if exists:
         cno = engine.save_change_order(
             con, co_no, data.get("customer_id") or "",
             data.get("reason") or "", lines,
             data.get("co_date") or None, data.get("notes") or "",
             _desk(handler, con), data.get("po") or "",
-            assoc_kind=assoc_kind, assoc_ref=assoc_ref)
+            assoc_kind=assoc_kind, assoc_ref=assoc_ref,
+            revision=_co_session)
+        if _co_session:
+            engine.clear_revision_pending(
+                con, "change", engine.doc_key(con, "change", cno))
         _verb = "saved"
     else:
         cno = engine.issue_change_order(
@@ -832,6 +1172,40 @@ def _post_change_save(handler, con, data, u):
 
 
 def _post_petty(handler, con, data, u):
+    # Revision session (build 'ab', redirect #2): the loaded entry
+    # is a revision shell in the petty log; its Save completes it in
+    # place (complete_petty_revision) under the marker's license.
+    if (data.get("revising") or "") == "1":
+        _tgt = (data.get("target") or "").strip()
+        _shell = con.execute(
+            "SELECT * FROM petty_cash WHERE pc_id=?", (_tgt,)).fetchone()
+        if (not _shell or not engine.revision_pending(
+                con, "petty", _shell["id"])):
+            handler._redirect(
+                "/petty?err=" + quote_plus(
+                    f"Petty cash entry {_tgt} is posted — revise it "
+                    f"(Edit on its register row) to change it"))
+            return True
+        _new_no = engine.complete_petty_revision(
+            con, _shell["id"],
+            data.get("direction") or "",
+            data.get("amount") or 0,
+            data.get("category") or "",
+            data.get("txn_date") or None,
+            data.get("payee") or "",
+            data.get("ref_no") or "",
+            data.get("notes") or "",
+            _desk(handler, con),
+            pc_id=data.get("pc_id") or "")
+        engine.clear_revision_pending(con, "petty", _shell["id"])
+        engine.add_done_manual(
+            con, f"Petty cash entry {_new_no} recorded — revision",
+            "/petty", _desk(handler, con))
+        if (data.get("frag") or "") == "1":
+            handler._redirect("/petty?frag=1&msg=Petty+cash+saved")
+        else:
+            handler._redirect("/petty?msg=Petty+cash+saved")
+        return True
     engine.record_petty(
         con,
         data.get("direction") or "",
@@ -842,6 +1216,7 @@ def _post_petty(handler, con, data, u):
         data.get("ref_no") or "",
         data.get("notes") or "",
         _desk(handler, con),
+        pc_id=data.get("pc_id") or "",
     )
     # Drawer under Administration (Jason 2026-10-24): the save lands
     # back on the drawer — inside the popup fragment when posted from
@@ -858,6 +1233,60 @@ def _post_cash_save(handler, con, data, u):
     # attachment — whichever document kind it is. The attachment's
     # kind rides in cash_doc_kind so a ref is never guessed at.
     _cash_allocs = _line_allocs_from(data, "cl")
+    # Revision session (build 'ab', redirect #2): the loaded entry
+    # is a revision shell standing under its marker; completing it
+    # re-posts the entry fresh (complete_cash_revision) — full
+    # validation, fresh settlement, chain re-pointed.
+    _target = (data.get("edit_target") or "").strip()
+    if _target:
+        _shell = con.execute(
+            "SELECT * FROM cash_entries WHERE entry_no=?",
+            (_target,)).fetchone()
+        if (not _shell or not engine.revision_pending(
+                con, "cash", _shell["entry_id"])):
+            handler._redirect(
+                "/money?tab=cash&err=" + quote_plus(
+                    f"Cash entry {_target} is posted — revise it "
+                    f"(Edit on its form) to change it"))
+            return True
+        _orig = con.execute(
+            "SELECT entry_no FROM cash_entries WHERE entry_id=?",
+            (_shell["revises_id"],)).fetchone()
+        _att2 = {
+            "invoice": (data.get("invoice_no") or "").strip(),
+            "wo": (data.get("wo_no") or "").strip(),
+            "ticket": (data.get("ticket_id") or "").strip(),
+            "sale": (data.get("sale_group") or "").strip(),
+            "quote": (data.get("quote_no") or "").strip(),
+            "change": (data.get("co_no") or "").strip(),
+        }
+        _ref2 = next((v for v in _att2.values() if v), "")
+        _new_id = engine.complete_cash_revision(
+            con, _shell["entry_id"],
+            entry_no=data.get("entry_no") or "",
+            entry_date=data.get("entry_date") or None,
+            direction=data.get("direction") or "",
+            method=data.get("method") or "",
+            amount=data.get("amount") or 0,
+            customer_id=data.get("customer_id") or "",
+            invoice_no=data.get("invoice_no") or "",
+            wo_no=data.get("wo_no") or "",
+            ticket_id=data.get("ticket_id") or "",
+            asset_id=data.get("asset_id") or "",
+            notes=data.get("notes") or "",
+            clerk=_desk(handler, con),
+            line_allocs=_cash_allocs.get(_ref2),
+            sale_group=data.get("sale_group") or "",
+            quote_no=data.get("quote_no") or "",
+            co_no=data.get("co_no") or "")
+        engine.clear_revision_pending(con, "cash", _shell["entry_id"])
+        engine.add_done_manual(
+            con, f"Cash entry {data.get('entry_no') or _target} "
+                 f"recorded — revision of "
+                 f"{_orig[0] if _orig else _target}",
+            "/money?tab=cash", _desk(handler, con))
+        handler._redirect("/money?tab=cash&msg=Cash+entry+saved")
+        return True
     _att = {
         "invoice": (data.get("invoice_no") or "").strip(),
         "wo": (data.get("wo_no") or "").strip(),
@@ -888,10 +1317,11 @@ def _post_cash_save(handler, con, data, u):
         sale_group=data.get("sale_group") or "",
         quote_no=data.get("quote_no") or "",
         co_no=data.get("co_no") or "",
+        entry_no=data.get("entry_no") or "",
     )
     engine.add_done_manual(
-        con, f"Cash entry {eid} recorded", "/money?tab=cash",
-        _desk(handler, con))
+        con, f"Cash entry {data.get('entry_no') or eid} recorded",
+        "/money?tab=cash", _desk(handler, con))
     handler._redirect("/money?tab=cash&msg=Cash+entry+saved")
 
 
@@ -927,6 +1357,15 @@ def _post_customer_save(handler, con, data, u):
         "credit_limit": data.get("credit_limit"),
         "notes": data.get("notes"),
     }, cid)
+    # Build 'ae' rebuild (Phase 3, JC-AE4): Contacts + Locations ride this one
+    # Save — sync the posted in-form rows against the customer's sets,
+    # the syncs resolve the code to the customer's engine id
+    # (the schema's FK key), then one commit. Deletions happen ONLY via the explicit
+    # in-form Remove flag (ct_del/lc_del), never by omission; existing
+    # ids never posted are left standing.
+    _sync_customer_contacts(con, cid, data)
+    _sync_customer_locations(con, cid, data)
+    con.commit()
     if not _existed:
         engine.add_done_manual(
             con, f"Added customer {(data.get('account_name') or '').strip()} ({cid})"[:200],
@@ -941,28 +1380,113 @@ def _post_customer_save(handler, con, data, u):
         handler._redirect("/customers?msg=Customer+saved")
 
 
-def _post_customer_contact_save(handler, con, data, u):
-    cid=data.get("customer_id") or ""; name=(data.get("name") or "").strip()
-    if not cid or not name: raise ValueError("Customer and contact name are required")
-    if data.get("is_primary")=="1": con.execute("UPDATE customer_contacts SET is_primary=0 WHERE customer_id=?",(cid,))
-    con.execute("INSERT INTO customer_contacts(customer_id,name,role,phone,email,is_primary) VALUES (?,?,?,?,?,?)",(cid,name,data.get("role") or "Other",engine.format_phone_number(data.get("phone") or ""),data.get("email") or "",1 if data.get("is_primary")=="1" else 0))
-    con.commit(); handler._redirect(f"/customer/{cid}#contacts")
+def _posted_row_indices(data, pfx):
+    """Indices of the in-form rows posted under a prefix (ct_/lc_),
+    collected by key scan — the app.py indexed-name pattern."""
+    out = set()
+    for k in data:
+        m = re.match(pfx + r"[a-z0-9]+_(\d+)$", k)
+        if m:
+            out.add(int(m.group(1)))
+    return sorted(out)
 
 
-def _post_customer_contact_delete(handler, con, data, u):
-    cid=data.get("customer_id") or ""; con.execute("DELETE FROM customer_contacts WHERE contact_id=? AND customer_id=?",(int(data.get("contact_id") or 0),cid)); con.commit(); handler._redirect(f"/customer/{cid}#contacts")
+def _sync_customer_contacts(con, cid, data):
+    """Build 'ae' rebuild Phase 3 sync (JC-AE4): row with id + del flag →
+    DELETE; row with id → UPDATE (a blank Name falls back to the
+    stored name — a filled row never loses its name to an accidental
+    clear); row without id + non-blank Name → INSERT (phone through
+    engine.format_phone_number, as the retired add handler); blank
+    new rows are skipped. A saved row carrying the primary flag
+    first clears is_primary on the customer's other rows — the last
+    primary-checked row in form order wins, deterministically."""
+    # Children key by the customer's ENGINE id (schema FK +
+    # enforced pragma; see the view-side note in
+    # views_accounting.view_customer_form).
+    _kr = con.execute(
+        "SELECT id FROM customers WHERE customer_id=?", (cid,)).fetchone()
+    if not _kr:
+        return
+    cid = _kr[0]
+    for i in _posted_row_indices(data, "ct_"):
+        rid = (data.get(f"ct_id_{i}") or "").strip()
+        name = (data.get(f"ct_name_{i}") or "").strip()
+        if rid and data.get(f"ct_del_{i}") == "1":
+            con.execute(
+                "DELETE FROM customer_contacts WHERE contact_id=? AND customer_id=?",
+                (int(rid), cid))
+            continue
+        if not rid and not name:
+            continue
+        primary = 1 if data.get(f"ct_primary_{i}") == "1" else 0
+        if primary:
+            con.execute(
+                "UPDATE customer_contacts SET is_primary=0 WHERE customer_id=?",
+                (cid,))
+        role = data.get(f"ct_role_{i}") or "Other"
+        phone = engine.format_phone_number(data.get(f"ct_phone_{i}") or "")
+        email = data.get(f"ct_email_{i}") or ""
+        if rid:
+            if not name:
+                _r = con.execute(
+                    "SELECT name FROM customer_contacts WHERE contact_id=? AND customer_id=?",
+                    (int(rid), cid)).fetchone()
+                name = _r["name"] if _r else ""
+            con.execute(
+                "UPDATE customer_contacts SET name=?, role=?, phone=?, email=?, is_primary=? "
+                "WHERE contact_id=? AND customer_id=?",
+                (name, role, phone, email, primary, int(rid), cid))
+        else:
+            con.execute(
+                "INSERT INTO customer_contacts(customer_id,name,role,phone,email,is_primary) "
+                "VALUES (?,?,?,?,?,?)",
+                (cid, name, role, phone, email, primary))
 
 
-def _post_customer_location_save(handler, con, data, u):
-    cid=data.get("customer_id") or ""; name=(data.get("location_name") or "").strip()
-    if not cid or not name: raise ValueError("Customer and location name are required")
-    if data.get("is_primary")=="1": con.execute("UPDATE customer_locations SET is_primary=0 WHERE customer_id=?",(cid,))
-    con.execute("INSERT INTO customer_locations(customer_id,location_name,street,street2,city,state,zip,is_primary) VALUES (?,?,?,?,?,?,?,?)",(cid,name,data.get("street") or "",data.get("street2") or "",data.get("city") or "",data.get("state") or "",data.get("zip") or "",1 if data.get("is_primary")=="1" else 0))
-    con.commit(); handler._redirect(f"/customer/{cid}#locations")
-
-
-def _post_customer_location_delete(handler, con, data, u):
-    cid=data.get("customer_id") or ""; con.execute("DELETE FROM customer_locations WHERE location_id=? AND customer_id=?",(int(data.get("location_id") or 0),cid)); con.commit(); handler._redirect(f"/customer/{cid}#locations")
+def _sync_customer_locations(con, cid, data):
+    """Build 'ae' rebuild Phase 3 sync (JC-AE4): the locations mirror of
+    _sync_customer_contacts, same semantics over customer_locations."""
+    _kr = con.execute(
+        "SELECT id FROM customers WHERE customer_id=?", (cid,)).fetchone()
+    if not _kr:
+        return
+    cid = _kr[0]
+    for i in _posted_row_indices(data, "lc_"):
+        rid = (data.get(f"lc_id_{i}") or "").strip()
+        name = (data.get(f"lc_name_{i}") or "").strip()
+        if rid and data.get(f"lc_del_{i}") == "1":
+            con.execute(
+                "DELETE FROM customer_locations WHERE location_id=? AND customer_id=?",
+                (int(rid), cid))
+            continue
+        if not rid and not name:
+            continue
+        primary = 1 if data.get(f"lc_primary_{i}") == "1" else 0
+        if primary:
+            con.execute(
+                "UPDATE customer_locations SET is_primary=0 WHERE customer_id=?",
+                (cid,))
+        vals = (name, data.get(f"lc_street_{i}") or "",
+                data.get(f"lc_street2_{i}") or "",
+                data.get(f"lc_city_{i}") or "",
+                data.get(f"lc_state_{i}") or "",
+                data.get(f"lc_zip_{i}") or "", primary)
+        if rid:
+            if not name:
+                _r = con.execute(
+                    "SELECT location_name FROM customer_locations WHERE location_id=? AND customer_id=?",
+                    (int(rid), cid)).fetchone()
+                name = _r["location_name"] if _r else ""
+                vals = (name,) + vals[1:]
+            con.execute(
+                "UPDATE customer_locations SET location_name=?, street=?, street2=?, city=?, "
+                "state=?, zip=?, is_primary=? WHERE location_id=? AND customer_id=?",
+                vals + (int(rid), cid))
+        else:
+            con.execute(
+                "INSERT INTO customer_locations(customer_id,location_name,street,street2,city,state,zip,is_primary) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (cid,) + vals)
 
 
 def _post_export_run(handler, con, data, u):
@@ -1063,10 +1587,9 @@ _POST_ROUTES = {
     "/reports/mixed/save": _post_mixed_save,
     "/reports/mixed/delete": _post_mixed_delete,
     "/customer/save": _post_customer_save,
-    "/customer/contact/save": _post_customer_contact_save,
-    "/customer/contact/delete": _post_customer_contact_delete,
-    "/customer/location/save": _post_customer_location_save,
-    "/customer/location/delete": _post_customer_location_delete,
+    # Build 'ae' rebuild Phase 3: /customer/contact|location
+    # save+delete retired with their cards — contacts/locations
+    # post inside /customer/save now (one step, one form).
     "/export/run": _post_export_run,
     "/export/save": _post_export_save,
     "/export/saved/del": _post_export_saved_del,

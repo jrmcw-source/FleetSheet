@@ -48,6 +48,20 @@ INVOICE_LEGAL_REST_TEMPLATE = (
 )
 
 
+def _revto_for(con, kind, row) -> str:
+    """Build 'al' (Jason 2026-10-28): the revision a voided
+    original was revised into, or "" — the printed document of an
+    original carries *Revised to: <number> across its top, so a
+    reprint states where its money went."""
+    if row is None:
+        return ""
+    try:
+        info = engine.revision_info(con, kind, row)
+    except Exception:
+        return ""
+    return str(info.get("revised_by") or "")
+
+
 def _invoice_due_sentence(terms) -> str:
     """First legalese sentence, derived from the resolved terms:
     a 'Net N' value anywhere in the terms (including discount forms
@@ -141,7 +155,7 @@ def invoice_pack(con, invoice_no: str, selected=None) -> dict | None:
     ).fetchone()
     if not inv:
         return None
-    co = _company_for_print(con)
+    co = _doc_company(con, _rowval(inv, "co_snapshot"))
     tot = engine.invoice_totals(con, invoice_no)
     # Operator tax-exempt click (guarded — the column may not exist on
     # pre-migration books): when set, NO line counts as taxed for the
@@ -426,6 +440,7 @@ def invoice_pack(con, invoice_no: str, selected=None) -> dict | None:
             "ship_to": ship_to, "tax_info": tax_info,
             "attachments": attachments, "adjustment": _adj,
             "adj_label": _adj_label,
+            "revised_to": _revto_for(con, "invoice", inv),
             "grand_total": float(tot["total"])}
 
 
@@ -611,9 +626,16 @@ def _customer_addr_lines(inv):
     bill_to when it differs from the account name, street, street2
     only when non-blank, then city_st. No phone, no email."""
     lines = []
+
+    def _add(v):
+        # A line identical to the one directly above it is a data echo
+        # (a street typed into the bill-to line), not an address line.
+        if v and str(v).strip() and (not lines or lines[-1] != v):
+            lines.append(v)
+
     try:
         if inv["bill_to"] and inv["bill_to"] != inv["account_name"]:
-            lines.append(inv["bill_to"])
+            _add(inv["bill_to"])
     except Exception:
         pass
     for key in ("bill_street", "bill_street2", "city_st"):
@@ -621,8 +643,7 @@ def _customer_addr_lines(inv):
             v = inv[key]
         except Exception:
             v = ""
-        if v and str(v).strip():
-            lines.append(v)
+        _add(v)
     return lines
 
 
@@ -694,10 +715,24 @@ def _invoice_bar_data(pack) -> dict:
     they print only inside the Job Info box when toggled."""
     inv = pack["inv"]
     jb = pack.get("job") or {}
+    _ship = (_rowval(inv, "shipped_by") or "").strip()
+    # Build 'am' (Jason 2026-10-28): the two preset wordings print
+    # as the hauler's own name — the company's dba/name when the
+    # company hauls, the customer's name when the customer hauls.
+    # Any other stored text is the operator's own words and prints
+    # exactly as stored.
+    if _ship == "Company Transport":
+        _co_name = (_rowval(pack["co"], "dba")
+                    or _rowval(pack["co"], "name") or "")
+        if _co_name:
+            _ship = f"{_co_name} Transport"
+    elif _ship == "Customer Transport":
+        if inv["account_name"]:
+            _ship = f"{inv['account_name']} Transport"
     return {
         "bar_text": (_rowval(inv, "bar_text") or "").strip(),
         "contact_name": (jb.get("contact_name") or "").strip(),
-        "shipped_by": (_rowval(inv, "shipped_by") or "").strip(),
+        "shipped_by": _ship,
     }
 
 
@@ -785,7 +820,7 @@ def credit_pack(con, cm_no: str) -> dict | None:
     if not cm:
         return None
     cust = con.execute("SELECT * FROM customers WHERE id=?", (cm["customer_id"],)).fetchone()
-    co = _company_for_print(con)
+    co = _doc_company(con, _rowval(cm, "co_snapshot"))
     lines = []
     for r in con.execute(
         """SELECT c.pay_id, c.pay_date, i.invoice_no, c.amount
@@ -800,6 +835,7 @@ def credit_pack(con, cm_no: str) -> dict | None:
             "amount": -float(r["amount"]),
         })
     return {"cm": cm, "info": info, "cust": cust, "co": co, "lines": lines,
+            "revised_to": _revto_for(con, "credit", cm),
             "items": engine.credit_lines(con, cm_no)}
 
 
@@ -885,6 +921,7 @@ def html_credit(pack) -> str:
             ("Applied", f"−${info['applied']:,.2f}"),
             ("Unapplied", f"−${info['unapplied']:,.2f}"),
         ],
+        revto=pack.get("revised_to") or "",
     )
     body = _doc_wrap(_header, f"""
     <table><thead><tr><th>ITEM</th><th>DESCRIPTION</th><th style='text-align:right'>QTY</th><th>UNIT</th><th style='text-align:right'>UNIT PRICE</th><th style='text-align:right'>LINE TOTAL</th></tr></thead><tbody>{item_rows}</tbody></table>
@@ -909,7 +946,7 @@ def html_quote(con, quote_no: str):
     if not pack:
         return None
     q, tot = pack["q"], pack["tot"]
-    co = _company_for_print(con)
+    co = _doc_company(con, _rowval(q, "co_snapshot"))
     rows = "".join(
         f"<tr><td>{html.escape(L['kind'])}</td><td>{html.escape(L['description'])}</td>"
         f"<td>{float(L['qty']):.2f} × ${float(L['rate']):,.2f}</td>"
@@ -922,6 +959,7 @@ def html_quote(con, quote_no: str):
     # totals (the quote_pack cos entries are not rendered here).
     _header = _form_header_html(
         co, "Quote", q["quote_no"], _fmt_date(q['quote_date']),
+        revto=_revto_for(con, "quote", q),
         cust=(q["account_name"],
               [x for x in [q.get("bill_to") or "",
                            q.get("city_st") or ""] if x]),
@@ -958,7 +996,7 @@ def html_change(con, co_no: str):
     # involved.
     cust = con.execute("SELECT * FROM customers WHERE id=?",
                        (co["customer_id"],)).fetchone()
-    company = _company_for_print(con)
+    company = _doc_company(con, _rowval(co, "co_snapshot"))
     lines = con.execute("SELECT * FROM change_order_lines WHERE co_id=? ORDER BY line_id", (co["id"],)).fetchall()
     rows = "".join(
         f"<tr><td>{html.escape(L['direction'])}</td><td>{html.escape(L['kind'])}</td>"
@@ -973,6 +1011,7 @@ def html_change(con, co_no: str):
                   if _assoc else "")
     _header = _form_header_html(
         company, "Change Order", co["co_no"], _fmt_date(co['co_date']),
+        revto=_revto_for(con, "change", co),
         cust=((cust["account_name"] if cust else ""),
               [x for x in [(cust["bill_to"] or "") if cust else "",
                            (cust["city_st"] or "") if cust else ""] if x]),
@@ -1006,7 +1045,7 @@ def html_petty(con) -> str:
         f"<tr><td>{html.escape(_fmt_date(r['txn_date']))}</td><td>{html.escape(r['pc_id'])}</td>"
         f"<td>{html.escape(r['category'])}</td><td>{html.escape(r['payee'])}</td>"
         f"<td style='text-align:right'>${r['signed']:,.2f}</td>"
-        f"<td style='text-align:right'>${r['running']:,.2f}</td></tr>"
+        f"<td style='text-align:right'>{('$' + format(r['running'], ',.2f')) if r['running'] is not None else '—'}</td></tr>"
         for r in book["rows"]
     ) or "<tr><td colspan=6>Empty box.</td></tr>"
     _header = _form_header_html(
@@ -1091,9 +1130,10 @@ def ticket_pack(con, ticket_id: str) -> dict | None:
     ).fetchone()
     if not t:
         return None
-    co = _company_for_print(con)
+    co = _doc_company(con, _rowval(t, "co_snapshot"))
     m = engine.ticket_money(con, ticket_id)
-    return {"t": t, "co": co, "m": m}
+    return {"t": t, "co": co, "m": m,
+            "revised_to": _revto_for(con, "ticket", t)}
 
 
 def _doc_actions(html_path, pdf_path, back_href, back_label="Back"):
@@ -1130,6 +1170,7 @@ body {{ margin:0; font:13px/1.4 Calibri,Segoe UI,sans-serif; color:#1a1a1a; }}
 .cust {{ border:1px solid #c5cdd6; padding:10px; min-width:240px; }}
 .cust span {{ display:block; font-size:10px; color:#5C6B7A; text-transform:uppercase; }}
 h1 {{ color:#1B2A4A; font-size:20px; margin:16px 0 8px; }}
+.revto {{ font-weight:700; font-size:15px; margin:0 0 8px; text-align:center; }}
 table {{ width:100%; border-collapse:collapse; margin:12px 0; }}
 th {{ background:#1B2A4A; color:#fff; text-align:left; padding:6px 8px; font-size:11px; }}
 td {{ border-bottom:1px solid #e5e7eb; padding:6px 8px; vertical-align:top; }}
@@ -1224,6 +1265,24 @@ def _company_for_print(con):
     return row
 
 
+def _doc_company(con, snapshot):
+    """A document's company identity for print (build 'ab',
+    redirect #3 — Jason: "reprint is fixed as originally issued"):
+    the snapshot frozen on the document at its posting, never the
+    live Company record. Documents issued before the snapshot
+    existed carry none — they print from the live record (the
+    legacy behavior, named in PHASEAB-REPORT)."""
+    if snapshot:
+        try:
+            import json as _json
+            d = _json.loads(snapshot)
+            if isinstance(d, dict) and d:
+                return d
+        except Exception:
+            pass
+    return _company_for_print(con)
+
+
 def _output_by(co) -> str:
     """Printed attribution (Batch 3 #13): 'Output by:' + the desk
     identity — the company DBA when filled, else the legal name (the
@@ -1314,6 +1373,7 @@ _INVOICE_CSS = """<style>
   @bottom-center { content: "Page " counter(page) " of " counter(pages);
                    font-size: 9px; color: #5C6B7A; } }
 .inv-wrap { padding: 0; display: flex; flex-direction: column; }
+.revto { font-weight:700; font-size:15px; margin:0 0 8px; text-align:center; }
 .inv-foot { margin-top: 28px; font-size: 10px; color: #5C6B7A;
             border-top: 1px solid #d0d5dd; padding-top: 8px;
             background: #fff; }
@@ -1389,7 +1449,7 @@ def _invoice_signature_html(pack) -> str:
 
 
 def _form_header_html(co, doc_label, doc_no, doc_date, cust=None,
-                      subject=None, info_rows=None) -> str:
+                      subject=None, info_rows=None, revto="") -> str:
     """Shared form header (template round): mirrors the invoice
     header zone for every non-invoice form. LEFT column: a
     "Remit To:" label (12px, blank line under it, like the invoice's
@@ -1446,6 +1506,7 @@ def _form_header_html(co, doc_label, doc_no, doc_date, cust=None,
           {_rows}
         </div></div>"""
     return f"""
+    {(f'<div class="revto">*Revised to: {html.escape(str(revto))}</div>' if revto else '')}
     <div class="fh-zone" style="display:flex;justify-content:space-between;gap:24px;align-items:flex-start">
       <div class="fh-left">
         <div class="fh-label" style="font-size:12px;line-height:20px">Remit To:<br>&nbsp;</div>
@@ -1489,8 +1550,16 @@ def _form_bar_html(left_text, contact_name, shipped_by) -> str:
                 else f"<span style='{_fill}'>&nbsp;</span>")
         return (f"<div><span style='{_lab}'>{label}</span><br>{_val}</div>")
 
-    _left_html = (f"<b>{html.escape(left_text)}</b>"
-                  if left_text else "&nbsp;")
+    # Build 'am' (Jason 2026-10-28): the left cell carries the same
+    # two-line anatomy as its siblings (caption line over value
+    # line) whether or not it holds text. An empty left cell stood
+    # as a bare &nbsp; — shorter than the Contact/Transport cells
+    # beside it, a misshaped box. Empty prints the fill-in line.
+    _left_html = (
+        f"<div><span style='{_lab}'>&nbsp;</span><br>"
+        + (f"<b>{html.escape(left_text)}</b>" if left_text
+           else f"<span style='{_fill}'>&nbsp;</span>")
+        + "</div>")
     return f"""
     <div style="display:flex;flex-wrap:wrap;gap:2px;margin:0 0 1px;font-size:10px;line-height:0.95;align-items:flex-start">
       <div style="flex:1 1 0;min-width:180px;{_box}">{_left_html}</div>
@@ -1623,12 +1692,11 @@ def html_invoice(pack) -> str:
     rows = "".join(_line_row(L) for L in lines)
     if not lines:
         rows = "<tr><td colspan=6>No lines.</td></tr>"
-    _terms = _invoice_terms(inv)
-    _terms_txt = f"Terms {html.escape(_terms)}" if _terms else ""
     body = f"""
     {_INVOICE_CSS}
     <div class="inv-wrap">
     {_invoice_selection_panel_html(pack)}
+    {(f'<div class="revto">*Revised to: {html.escape(str(pack.get("revised_to")))}</div>' if pack.get("revised_to") else '')}
     <table style="margin-top:0"><thead>
     <tr><td colspan="6" style="border:0;padding:0">
     <div style="position:relative;min-height:{_env_zone_h}in;padding-bottom:2px">
@@ -1655,7 +1723,6 @@ def html_invoice(pack) -> str:
       <div style="margin-left:auto">{_inv_totals_rows_html(pack)}</div>
     </div>
     <div class="inv-foot">
-      <div>{_terms_txt}</div>
       {('<div>* Taxes included</div>' if _pack_has_taxed(pack) else '')}
       <b>Terms &amp; Conditions</b>
       <p style="margin:4px 0">{html.escape(_invoice_legal_for(pack))}</p>
@@ -1743,6 +1810,7 @@ def html_ticket(pack, kind: str) -> str:
         f" — {t['description']}" if t["description"] else "")
     _header = _form_header_html(
         co, _doc_label, t["ticket_id"], _fmt_date(t['on_rent']),
+        revto=pack.get("revised_to") or "",
         cust=(t["account_name"],
               [x for x in [t["bill_to"], t["city_st"], t["phone"]] if x]),
         info_rows=[
@@ -1756,7 +1824,10 @@ def html_ticket(pack, kind: str) -> str:
     )
     _bar = _form_bar_html(
         t["site_name"] or "", t["operator"] or "",
-        _fit_note(engine.transport_display(m.get("haul_by"), m.get("haul_note")), 120))
+        _fit_note(engine.transport_display(
+            m.get("haul_by"), m.get("haul_note"),
+            company_name=(_rowval(co, "dba") or _rowval(co, "name") or ""),
+            customer_name=t["account_name"]), 120))
     # Charges (2026-10-23): the ticket's real line items, each with its
     # own Tax flag (asterisk), then the per-line tax on the total.
     _lrows = "".join(
@@ -1793,7 +1864,10 @@ def html_ticket(pack, kind: str) -> str:
     <table>
       <tr><th>Who transports</th><th>Possession</th><th>Tax situs</th></tr>
       <tr>
-        <td>{html.escape(_fit_note(engine.transport_display(m.get("haul_by"), m.get("haul_note")), 120))}</td>
+        <td>{html.escape(_fit_note(engine.transport_display(
+            m.get("haul_by"), m.get("haul_note"),
+            company_name=(_rowval(co, "dba") or _rowval(co, "name") or ""),
+            customer_name=t["account_name"]), 120))}</td>
         <td>{html.escape(m.get("possession_label") or "")}</td>
         <td>{html.escape(m.get("tax_name") or "")} {m.get("tax_rate", 0):.4f}
             {" · exempt" if m.get("tax_exempt") else ""}<br>
@@ -2153,15 +2227,13 @@ def pdf_invoice(pack) -> bytes:
     # lines are a 6pt small-caps label over a 7.5pt value, so the
     # 6.6pt baseline spacing still clears both glyph rows.
     styles.add(ParagraphStyle(name="InvBar", fontSize=7.5, leading=6.6))
-    _terms_txt = _invoice_terms(inv)
-    _footer_terms = f"Terms {_terms_txt}" if _terms_txt else ""
     _has_taxed = _pack_has_taxed(pack)
 
     from reportlab.pdfgen.canvas import Canvas as _Canvas
     from reportlab.lib.utils import simpleSplit as _split
 
     class _NumberedCanvas(_Canvas):
-        """Draws the footer zone — the Terms strip with Page X of Y,
+        """Draws the footer zone — the strip with Page X of Y,
         above the Terms & Conditions paragraph — in the bottom
         margin of every invoice page at save() time, when the page
         count is known. When the invoice has taxed lines, the strip
@@ -2203,14 +2275,8 @@ def pdf_invoice(pack) -> bytes:
             self.setStrokeColor(colors.HexColor("#d0d5dd"))
             self.line(_mx, _strip_y + 10, _w - _mx, _strip_y + 10)
             self.setFont("Helvetica", 7.5)
-            if _footer_terms:
-                self.drawString(_mx, _strip_y, _footer_terms)
             if getattr(self, "taxed_note", False):
-                _note_x = _mx
-                if _footer_terms:
-                    _note_x += self.stringWidth(
-                        _footer_terms, "Helvetica", 7.5) + 12
-                self.drawString(_note_x, _strip_y, "* Taxes included")
+                self.drawString(_mx, _strip_y, "* Taxes included")
             self.drawRightString(_w - _mx, _strip_y,
                                  f"Page {num} of {total}")
             self.restoreState()
@@ -2417,6 +2483,15 @@ def pdf_invoice(pack) -> bytes:
     story.append(Spacer(1, _BAR_TOP_GAP))
     story.append(_bar_tab)
     story.append(Spacer(1, _BAR_BOT_GAP))
+    if pack.get("revised_to"):
+        # Build 'al' (Jason 2026-10-28): the voided original's
+        # reprint names its revision at the top of the document,
+        # above its lines. (In the flow here, not in the header
+        # zone: the header's frames are measured for the envelope
+        # window and a flowable there collides with them.)
+        story.append(Paragraph(
+            f"<para alignment=\"center\"><b>*Revised to: {html.escape(str(pack['revised_to']))}</b></para>",
+            styles["InvBody"]))
     # Lines table: ITEM | DESCRIPTION | QTY | UNIT | UNIT PRICE |
     # LINE TOTAL — description is the desc text only, and there are
     # exactly len(lines) body rows (no filler rows).
@@ -2651,7 +2726,10 @@ def pdf_ticket(pack, kind: str) -> bytes:
             ("Well / Pad", t["well_or_pad"] or ""),
         ],
         bar=(t["site_name"] or "", t["operator"] or "",
-             engine.transport_display(m.get("haul_by"), m.get("haul_note"))),
+             engine.transport_display(
+                 m.get("haul_by"), m.get("haul_note"),
+                 company_name=(_rowval(co, "dba") or _rowval(co, "name") or ""),
+                 customer_name=t["account_name"])),
     )
     story = []
     data = [
@@ -2660,7 +2738,10 @@ def pdf_ticket(pack, kind: str) -> bytes:
         ["On / off", _fmt_date(t["on_rent"]), _fmt_date(t["off_rent"] or "open")],
         ["Rate / days", f"{t['rate_type']} ${m['rate']:,.2f}", str(m["days"])],
         ["Fit / status", (m.get("fit") or "") + (f" (override: {t['fit_override']})" if ("fit_override" in t.keys() and t["fit_override"]) else ""), t["status"]],
-        ["Transport", engine.transport_display(m.get("haul_by"), m.get("haul_note")), m.get("possession_label") or ""],
+        ["Transport", engine.transport_display(
+            m.get("haul_by"), m.get("haul_note"),
+            company_name=(_rowval(co, "dba") or _rowval(co, "name") or ""),
+            customer_name=t["account_name"]), m.get("possession_label") or ""],
         ["Tax situs", m.get("tax_name") or "", f"{m.get('tax_rate', 0):.4f}" + (" exempt" if m.get("tax_exempt") else "")],
     ]
     # The ticket's real charge lines (2026-10-23), then its tax.
@@ -2680,6 +2761,12 @@ def pdf_ticket(pack, kind: str) -> bytes:
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
     ]))
+    if pack.get("revised_to"):
+        # Build 'al' (Jason 2026-10-28): the voided original's
+        # reprint names its revision at the top of the document.
+        story.append(Paragraph(
+            f"<para alignment=\"center\"><b>*Revised to: {html.escape(str(pack['revised_to']))}</b></para>",
+            _st["body"]))
     story.append(tbl)
     story.append(Spacer(1, 10))
     if kind == "work":

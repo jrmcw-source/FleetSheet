@@ -307,6 +307,13 @@ input[type=checkbox]{width:auto;flex:0 0 auto}
    side, bottom-aligned, wrapping on narrow screens. */
 .frow{display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap}
 .frow>*{min-width:0}
+/* PIN security-question commit (build 'ah', Jason 2026-10-28): on
+   the PIN setup forms the Save button stays on the Answer 2 row,
+   with the settings-card field-to-button gap — the .frow 12px the
+   Desk idle lock card renders — between the entry box and the
+   button, so the two never render as one connected piece. One
+   class, every PIN form whose commit follows the questions. */
+.sqsave{display:block;margin-top:8px}
 button,.btn{background:var(--frame);color:#fff;border:0;padding:9px 14px;border-radius:6px;cursor:pointer;font:inherit;display:inline-block;text-decoration:none;transition:background .12s ease,box-shadow .12s ease,transform .05s ease}
 button:hover,.btn:hover{background:#1a2431}
 button:active,.btn:active{transform:translateY(1px)}
@@ -486,6 +493,32 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
 .todo.tier-later a{color:var(--mute)}
 .vbtn{background:var(--frame);color:#fff;border:1px solid var(--frame);border-radius:3px;
   font-size:11px;padding:2px 8px;cursor:pointer;margin-left:auto;white-space:nowrap}
+/* Build 'ac' (Jason 2026-10-27, one size within a line): a summary
+   door-row door renders at the one large standard — the global
+   button metrics (14px, padding 9px 14px, no border), the same
+   rendered height as the row's Edit and Print. The small .vbtn
+   size stands where a whole zone is uniformly small (the View row
+   below the door row, the ticker); the door row is one line and
+   carries one size. */
+.sumdoor{font-size:14px;padding:9px 14px;border:0;border-radius:6px}
+/* Summary fact blocks (build 'af', Jason 2026-10-28): a summary's
+   facts stand in grouped blocks in columns, mimicking the creation
+   form — customer block up-left, Job Info block at right, the
+   document's own facts in their own block — never one fact per row
+   down the full width. */
+.sumfacts{display:flex;flex-wrap:wrap;gap:6px 28px;align-items:flex-start;margin:2px 0 6px}
+.sumblk{flex:1 1 280px;min-width:250px}
+.sumblk h3{margin:0 0 3px;font-size:12px;font-weight:700;color:var(--frame);text-transform:uppercase;letter-spacing:.05em}
+.sumblk table{width:100%}
+.sumblk table th{width:128px}
+/* Print-inclusion marker on a summary Job Info fact (build 'af'):
+   a state marker only — a plain span, never a control. */
+.jmark{color:var(--ok);font-weight:700;margin-left:6px}
+.jmark.no{color:#98a2b3}
+/* In-card section heading on a summary (build 'af'): styled like
+   the page's section headings but NOT an h2 — the shell's section
+   wrapper starts a new card at an h2, and a summary is one card. */
+.sumsec{font-size:16px;font-weight:700;color:var(--frame);margin:14px 0 6px}
 /* Facelift geometry (Jason 2026-10-25, build 'r'): ONE header zone for
    every document form — Company block (left), Customer/Address block
    (middle), form # + Date (right, the number larger and bold) — then
@@ -517,13 +550,15 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
    ends with this row — one View button, bottom LEFT of the form,
    opening the page's own list popup. Nothing else renders below a
    form. */
-.viewrow{display:flex;justify-content:flex-start;margin:8px 0 0}
+.viewrow{display:flex;justify-content:flex-start;gap:8px;margin:8px 0 0}
 .viewrow .vbtn{margin-left:0}
 /* View popup footer (Jason 2026-10-25, build 'r'): when the popup is
    opened by a universal View button, its controls — Refresh, Print,
    Close — ride the BOTTOM RIGHT of the window; the title bar keeps
-   the title and the Full page link only. Other popups keep the
-   standing title-bar controls. */
+   the title and the Collapse control. Other popups keep the
+   standing title-bar controls. (Build 'aa', 2026-10-26: the Full
+   page link that rode the title bar is deleted — no popup carries
+   it, for anyone.) */
 .apop-foot{display:none}
 .apop-win.viewpop .apop-foot{display:flex;justify-content:flex-end;gap:8px;
   background:var(--frame);padding:8px 12px;flex:0 0 auto}
@@ -575,12 +610,36 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
   border-radius:4px;padding:3px 10px;font-size:12px;cursor:pointer;text-decoration:none;width:auto}
 .apop-bar button:hover,.apop-bar a:hover{background:#54687F}
 .apop-win iframe{flex:1;border:0;width:100%;background:var(--surface)}
+/* Popup geometry (build 'aa', Jason 2026-10-26): BOTH popup shells
+   collapse to their bar/heading and restore; Shell A keeps its
+   resize grip + title-bar drag at every text size, and Shell B
+   (.wpop — the inline working popups) gains the same three
+   behaviors: collapse, CSS resize, drag by its heading. Collapse
+   state is in-page only; it is never persisted. */
+.apop-win.collapsed{height:auto !important;min-height:0}
+.apop-win.collapsed iframe,.apop-win.collapsed .note-body,
+.apop-win.collapsed .apop-foot{display:none !important}
+.wpop{resize:both}
+.wpop .wpop-h{cursor:move;user-select:none}
+.wpop.collapsed{height:auto !important;min-height:0;max-height:none}
+.wpop.collapsed>*:not(.wpop-h){display:none !important}
 /* Notes doctrine (Jason 2026-10-24): a note shows only what fits its
    little field everywhere; the full text reads in a pop-up. Clickable
    note text is dotted-underlined; the pop-up body is plain readable
    text, wrapped and scrollable. */
 .notepop{cursor:pointer;text-decoration:underline dotted}
 .notepop-btn{margin-left:6px}
+/* Summary line-note box (build 'ah', Jason 2026-10-28): a note
+   longer than its summary cell opens in this temporary box,
+   editable. The box carries exactly ONE control — Minimize; there
+   is no Close and no Save (a note saves with the document, via the
+   summary's Print door). Named exception to the standing popup
+   furniture, by Jason's explicit design for this box. */
+#sumnotebox{display:none;position:fixed;inset:0;z-index:95;background:rgba(20,28,38,.45);align-items:center;justify-content:center}
+#sumnotebox.open{display:flex}
+#sumnotebox .snb-card{background:#fff;border-radius:10px;box-shadow:0 18px 50px rgba(16,24,40,.35);width:min(560px,92vw);padding:16px;display:flex;flex-direction:column;gap:10px}
+#sumnotebox textarea{width:100%;min-height:180px;font:inherit;font-size:15px;line-height:1.5;padding:10px;border:1px solid #c8d0da;border-radius:6px;resize:vertical}
+#sumnotebox .snb-row{display:flex;justify-content:flex-end}
 .note-body{display:none;padding:18px;white-space:pre-wrap;word-break:break-word;overflow:auto;flex:1;font-size:15px;line-height:1.55}
 @media (max-width:900px){
   .dashgrid{grid-template-columns:1fr}
@@ -613,16 +672,11 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
   body.ts-xlarge header nav.aside{margin-left:0}
   body.ts-xlarge .mark{display:none}
 }
-@media (max-width:805px){
-  body.ts-large .apop{padding:0}
-  body.ts-large .apop-win{width:100%;height:100%;border-radius:0;resize:none}
-  body.ts-large .apop-bar{cursor:default}
-}
-@media (max-width:910px){
-  body.ts-xlarge .apop{padding:0}
-  body.ts-xlarge .apop-win{width:100%;height:100%;border-radius:0;resize:none}
-  body.ts-xlarge .apop-bar{cursor:default}
-}
+/* Build 'aa' (2026-10-26): the text-size full-screen rules that
+   stripped the audit popup's resize + drag at large/xlarge are
+   REMOVED — the popup keeps its geometry controls at every text
+   size. Only the <=700px small-screen rule above still makes the
+   popup full-screen. */
 @media (max-width:1035px){
   body.ts-large .dashgrid{grid-template-columns:1fr}
   body.ts-large .pbox-grid{grid-template-columns:minmax(0,1fr)}
@@ -643,9 +697,19 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
    stay too: inputs are hidden only inside popup fragments (frag
    doc), where they are filter/entry chrome, never record data. */
 @media print{
-  header,nav.main,footer,.tabs,.btn,.actions,button,.pbox-move,.pbox-grip,.pbox-width,.dcard-ctl,.dcard-grip,#apop{display:none !important}
+  header,nav.main,footer,.tabs,.btn,.actions,button,.pbox-move,.pbox-grip,.pbox-width,.dcard-ctl,.dcard-grip,#apop,.wpop,.lockbanner{display:none !important}
   .print-head{display:block !important;font-size:14px;font-weight:700;margin:0 0 10px;padding-bottom:6px;border-bottom:2px solid #222}
 }
+/* Locked banner (build 'al', Jason 2026-10-28): a form sitting
+   locked says so — a red box at the top of the form, screen only
+   (the print block above removes it from paper). _LOCK_JS stands
+   it at the locked form's head. */
+.lockbanner{border:2px solid #b00020;background:#fdecea;color:#b00020;font-weight:700;font-size:15px;padding:6px 12px;margin:0 0 10px;border-radius:6px;text-align:center}
+/* Revised-to line (build 'al', Jason 2026-10-28): a voided
+   original names its revision across its top — on its summary
+   and on its printed document. It PRINTS (no print rule hides
+   it): the reprint of an original states where its money went. */
+.revto{font-weight:700;font-size:15px;margin:0 0 8px;text-align:center}
 /* Printed-view header (Jason 2026-10-24): company · title · date,
    print-only — a printed view says what it is and when it printed. */
 .print-head{display:none}
@@ -1007,7 +1071,7 @@ AUDIT_POPUP_HTML = """
 <div class="apop" id="apop" hidden>
   <div class="apop-win" role="dialog" aria-label="audit">
     <div class="apop-bar"><span class="t"></span>
-      <a class="fullpage" href="#" target="_top">Full page</a>
+      <button data-apop-collapse>Collapse</button>
       <button data-apop-reload>Refresh</button>
       <button data-apop-print>Print</button>
       <button data-apop-close>Close</button>
@@ -1183,6 +1247,17 @@ PBOX_JS = """
   }
   cands.forEach(function(c){
     var el = c.el, sh = headOf(el);
+    // Popup containers are never section boxes (build 'aa', Jason
+    // 2026-10-26): a hidden working popup (.wpop, or any fixed
+    // overlay div) standing among a page's sections used to be
+    // wrapped as its own .pbox, and the box rendered as an EMPTY
+    // horizontal strip on the page — the summary pages carried one
+    // strip per working popup. Skip them: a popup is not a section,
+    // and the sections around it close up without it.
+    if ((el.classList && el.classList.contains('wpop')) ||
+        (el.style && el.style.position === 'fixed')) {
+      cur = null; curParent = null; return;
+    }
     if (el.classList && el.classList.contains('pbox')) {
       // Dashboard columns (dashgrid): NOT boxes. The three column
       // containers are glue, and the CARDS inside them are the movable
@@ -1767,10 +1842,10 @@ function w0win(){ var w = document.getElementById('apop'); return w ? w.querySel
 function openAudit(url, title){
   var w = document.getElementById('apop'); if(!w) return;
   w.querySelector('.t').textContent = title || 'Everything';
-  w.querySelector('a.fullpage').href = url;
   // Batch 3 #7: the box loads the chrome-less fragment (?frag=1 — the
-  // list only, no app header/nav), never the full page. The Full page
-  // link above keeps the plain URL and navigates the main window.
+  // list only, no app header/nav), never the full page. (Build 'aa',
+  // 2026-10-26: the Full page link that used to ride this bar is
+  // deleted from the shell — no popup carries one, for anyone.)
   // Popup controls (Jason 2026-10-23): the fragment URL is kept as
   // the popup's identity (data-base) so Refresh re-fetches exactly
   // this popup's content from the server, in place.
@@ -1793,14 +1868,25 @@ function refreshAudit(){
 function closeAudit(){
   var w = document.getElementById('apop'); if(!w) return;
   var _win = w.querySelector('.apop-win'); if (_win) _win.classList.remove('viewpop');
+  if (_win) _win.classList.remove('collapsed');
+  var _cb = w.querySelector('[data-apop-collapse]'); if (_cb) _cb.textContent = 'Collapse';
   w.hidden = true; w.querySelector('iframe').src = 'about:blank';
   document.body.style.overflow = '';
   // Note pop-up shares this overlay: reset it too, so a closed note
   // never leaks into the next audit popup (and vice versa).
   var nb = w.querySelector('.note-body'); if (nb) nb.style.display = 'none';
   var f = w.querySelector('iframe'); if (f) f.style.display = '';
-  var fp = w.querySelector('a.fullpage'); if (fp) fp.style.display = '';
   var pp = w.querySelector('[data-apop-print]'); if (pp) pp.style.display = '';
+}
+// Popup geometry (build 'aa', Jason 2026-10-26): the audit window
+// collapses to its title bar and expands back — one control on the
+// bar, in-page state only, never persisted.
+function collapseAudit(){
+  var w = document.getElementById('apop'); if(!w) return;
+  var _win = w.querySelector('.apop-win'); if(!_win) return;
+  var on = _win.classList.toggle('collapsed');
+  var _cb = w.querySelector('[data-apop-collapse]');
+  if (_cb) _cb.textContent = on ? 'Expand' : 'Collapse';
 }
 // Print (Jason 2026-10-24): every view popup prints what it shows —
 // the filtered, sorted fragment as it stands, via the iframe's own
@@ -1823,14 +1909,8 @@ document.addEventListener('click', function(e){
     // controls at the window's bottom right — the .viewpop class
     // switches the footer bar on and the title-bar controls off.
     var _win = w0win(); if (_win) _win.classList.toggle('viewpop', !!m.getAttribute('data-viewpop'));
-    // A popup whose opener carries data-nofullpage shows the
-    // universal furniture only (Close, Refresh, Print) — no Full
-    // Page door (Jason 2026-10-25, build 'w': the Petty Cash
-    // drawer's popup; no one-off controls on a single popup).
-    // closeAudit restores the link for the next popup.
-    var _fp = document.querySelector('#apop a.fullpage');
-    if (_fp) _fp.style.display = m.getAttribute('data-nofullpage') ? 'none' : '';
     return; }
+  if (e.target.closest('[data-apop-collapse]')) { collapseAudit(); return; }
   if (e.target.closest('[data-apop-close]')) { closeAudit(); return; }
   var r = e.target.closest('[data-apop-reload]');
   if (r) { refreshAudit(); return; }
@@ -1916,6 +1996,70 @@ function closeFloatpop(){
   bar.addEventListener('pointerup', function(){ drag = false; });
   bar.addEventListener('pointercancel', function(){ drag = false; });
 })();
+// Shell B — the inline working popups (.wpop: _pop_wrap popups, the
+// Job Info popups, and their hand-built copies). Build 'aa' (Jason
+// 2026-10-26): every one carries the universal furniture — Refresh,
+// Print, Close — in that order in its heading, beside the Collapse
+// control; the heading drags the popup, the box's corner grip
+// resizes it (CSS resize on .wpop), and Collapse shrinks it to its
+// heading. State is in-page only; nothing persists.
+function wpopCollapse(pid, btn){
+  var pop = document.getElementById(pid); if(!pop) return;
+  var on = pop.classList.toggle('collapsed');
+  if (btn) btn.textContent = on ? 'Expand' : 'Collapse';
+}
+function wpopPrint(){
+  // The working popup's Print prints the host document/page — the
+  // same print the host form or summary offers. Print CSS drops the
+  // popup itself (and every button) from the sheet.
+  window.print();
+}
+function wpopRefresh(pid){
+  // Refresh the way the Job Info popup's refresh works: re-fetch the
+  // host page from the server and stand this popup's freshly
+  // rendered copy in place of the open one — same popup, same
+  // record, current server state.
+  var dst = document.getElementById(pid); if (!dst) return;
+  fetch(location.pathname + location.search, {credentials:'same-origin'})
+    .then(function(r){ return r.text(); })
+    .then(function(t){
+      var doc = new DOMParser().parseFromString(t, 'text/html');
+      var src = doc.getElementById(pid); if (!src) return;
+      src.style.display = 'block';
+      if (dst.dataset.moved) {
+        src.dataset.moved = '1';
+        src.style.left = dst.style.left; src.style.top = dst.style.top;
+        src.style.width = dst.style.width; src.style.height = dst.style.height;
+        src.style.right = 'auto';
+      }
+      dst.replaceWith(src);
+    }).catch(function(){});
+}
+(function(){
+  // Drag a Shell B popup by its heading (buttons exempt), the same
+  // gesture as the audit window's title-bar drag.
+  var dragPop = null, sx = 0, sy = 0, ox = 0, oy = 0;
+  document.addEventListener('pointerdown', function(e){
+    var h = e.target.closest ? e.target.closest('.wpop-h') : null;
+    if (!h) return;
+    if (e.target.closest('button') || e.target.closest('a') ||
+        e.target.closest('input') || e.target.closest('select')) return;
+    var pop = h.closest('.wpop'); if (!pop) return;
+    dragPop = pop; sx = e.clientX; sy = e.clientY;
+    var r = pop.getBoundingClientRect(); ox = r.left; oy = r.top;
+    pop.style.left = ox + 'px'; pop.style.top = oy + 'px';
+    pop.style.right = 'auto'; pop.style.width = r.width + 'px';
+    pop.style.margin = '0'; pop.dataset.moved = '1';
+    try { h.setPointerCapture(e.pointerId); } catch (err) {}
+  });
+  document.addEventListener('pointermove', function(e){
+    if (!dragPop) return;
+    dragPop.style.left = Math.max(0, ox + e.clientX - sx) + 'px';
+    dragPop.style.top = Math.max(0, oy + e.clientY - sy) + 'px';
+  });
+  document.addEventListener('pointerup', function(){ dragPop = null; });
+  document.addEventListener('pointercancel', function(){ dragPop = null; });
+})();
 </script>
 """
 
@@ -1930,7 +2074,6 @@ function openNote(text){
   var _win = w.querySelector('.apop-win'); if (_win) _win.classList.remove('viewpop');
   w.querySelector('.t').textContent = 'Note';
   var f = w.querySelector('iframe'); f.style.display = 'none';
-  var fp = w.querySelector('a.fullpage'); if (fp) fp.style.display = 'none';
   var pp = w.querySelector('[data-apop-print]'); if (pp) pp.style.display = 'none';
   var nb = w.querySelector('.note-body'); nb.textContent = text || '';
   nb.style.display = 'block';
@@ -1973,6 +2116,103 @@ document.addEventListener('input', function(e){
 });
 document.addEventListener('DOMContentLoaded', function(){ injectNoteBtns(); syncNoteBtns(); });
 injectNoteBtns(); syncNoteBtns();
+</script>
+"""
+
+SUM_NOTE_JS = r"""
+<script>
+/* Summary line-note box (build 'ah', Jason 2026-10-28). On a
+   summary, a line note longer than its cell stands truncated and
+   clickable; clicking it opens the temporary box (#sumnotebox)
+   holding the full note in an editable field. The box carries
+   exactly one control — Minimize. There is no Close and no Save:
+   an edited note is held on the page and posts when the operator
+   uses the summary's Print door — the record updates first, then
+   the print renders — the way everything on a document saves with
+   the document. (Named exception to the standing popup furniture,
+   by Jason's explicit design for this box.) */
+(function(){
+  var dirty = {};   /* line_id -> {url, note} */
+  var cur = null;   /* {cell, lineId, url, orig} */
+  function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+  function openBox(cell){
+    var box = document.getElementById('sumnotebox');
+    if(!box) return;
+    cur = { cell: cell,
+            lineId: cell.getAttribute('data-lineid'),
+            url: cell.getAttribute('data-noteurl'),
+            orig: cell.getAttribute('data-full') || '' };
+    box.querySelector('textarea').value =
+      (dirty[cur.lineId] ? dirty[cur.lineId].note : cur.orig);
+    box.classList.add('open');
+  }
+  function minimize(){
+    var box = document.getElementById('sumnotebox');
+    if(!box || !cur) return;
+    var v = box.querySelector('textarea').value;
+    box.classList.remove('open');
+    if(v !== cur.orig){ dirty[cur.lineId] = {url: cur.url, note: v}; }
+    else { delete dirty[cur.lineId]; }
+    var val = dirty[cur.lineId] ? dirty[cur.lineId].note : cur.orig;
+    if(val.length <= 80){
+      var t = document.createElement('span');
+      t.textContent = val;
+      cur.cell.replaceWith(t);
+    } else {
+      cur.cell.setAttribute('data-full', val);
+      cur.cell.textContent = val.slice(0, 80) + '\u2026';
+    }
+    cur = null;
+  }
+  document.addEventListener('click', function(e){
+    var cell = e.target.closest('.sumnote');
+    if(cell){ openBox(cell); return; }
+    if(e.target.closest('#sumnotebox .snb-min')){ minimize(); }
+  });
+  /* The Print door carries the note post: on a click on a print
+     option (never the menu's own summary toggle), edited notes
+     post first — capture phase, ahead of the option's own
+     handler — then the chosen print action proceeds. */
+  document.addEventListener('click', function(e){
+    var opts = e.target.closest('.pmenu .popts');
+    if(!opts) return;
+    var keys = Object.keys(dirty);
+    if(!keys.length) return;
+    var a = e.target.closest('a');
+    var btn = e.target.closest('button');
+    if(!a && !btn) return;
+    e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    var seq = Promise.resolve();
+    keys.forEach(function(k){
+      var d = dirty[k];
+      seq = seq.then(function(){
+        return fetch(d.url, { method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'line_id=' + encodeURIComponent(k) +
+                '&note=' + encodeURIComponent(d.note)
+        }).catch(function(){});
+      });
+    });
+    seq.then(function(){
+      dirty = {};
+      if(a && a.getAttribute('href')){
+        window.open(a.getAttribute('href'), '_blank');
+      } else if(btn && btn.hasAttribute('data-doc')){
+        if(window.fsSaveLoc) window.fsSaveLoc(btn);
+      } else if(btn){
+        var oc = btn.getAttribute('onclick') || '';
+        if(oc.indexOf('fsPrintScreen') >= 0){
+          if(window.fsPrintScreen) window.fsPrintScreen();
+        } else if(oc.indexOf('fsSavePage') >= 0){
+          if(window.fsSavePage) window.fsSavePage(btn);
+        } else {
+          window.print();
+        }
+      }
+    });
+  }, true);
+})();
 </script>
 """
 
@@ -2449,29 +2689,6 @@ def _snoozed_section(con):
         f"Snoozed alerts ({len(rows)})</summary>"
         f"<div class='news'>{items}</div></details>")
 
-def _snooze_form(key, path, minutes=None):
-    """The strip hero's one defer (2026-10-17, Jason): the ticker already
-    prioritized \u2014 by the time an item is up here, it's do it or snooze
-    it. One word everywhere: Snooze. And one default: the standard snooze
-    (ack_snooze_minutes, the same standard the steppers open at and
-    teach), passed in by the caller \u2014 no bespoke hero default for the
-    user to remember. No steppers up here; the standard is the custom."""
-    try:
-        minutes = int(minutes)
-    except (TypeError, ValueError):
-        minutes = 30
-    if minutes < 1:
-        minutes = 30
-    return (
-        f"<span class='ack-right'>"
-        f"<form method='post' action='/alert/ack' class='ackf'>"
-        f"<input type='hidden' name='key' value='{html.escape(key, quote=True)}'>"
-        f"<input type='hidden' name='next' value='{html.escape(path, quote=True)}'>"
-        f"<input type='hidden' name='minutes' value='{minutes}'>"
-        f"<button type='submit' name='action' value='snooze' "
-        f"title='Snooze \u2014 your standard {minutes} minutes'>Snooze</button>"
-        f"</form></span>")
-
 
 def tickf_html(cats, path):
     """The ticker filter popover (Batch 3-era; popup controls Jason
@@ -2489,6 +2706,7 @@ def tickf_html(cats, path):
         f"<div style='display:flex;gap:6px;align-items:center;margin-bottom:6px'>"
         f"<b style='flex:1'>Filter</b>"
         f"<button type='button' onclick='refreshTickf()'>Refresh</button>"
+        f"<button type='button' onclick='wpopPrint()'>Print</button>"
         f"<button type='button' onclick='closeTickf()'>Close</button></div>"
         f"<form method='post' action='/ticker/cats'>{boxes}"
         f"<input type='hidden' name='next' value='{html.escape(path, quote=True)}'>"
@@ -3200,7 +3418,7 @@ def page(title, body, company="FleetSheet", path="", alerts=None, top_items=None
     inp.value = v;
   }});
 }})();
-</script>{AUDIT_POPUP_JS}{NOTE_POPUP_JS}<script>window.FS_IDLE_MINS={IDLE_MINS};window.FS_LOCK_MINS={LOCK_MINS};</script>{HEARTBEAT_JS}{LINEDEL_JS}{PRINTMENU_JS}
+</script>{AUDIT_POPUP_JS}{NOTE_POPUP_JS}{SUM_NOTE_JS}<script>window.FS_IDLE_MINS={IDLE_MINS};window.FS_LOCK_MINS={LOCK_MINS};</script>{HEARTBEAT_JS}{LINEDEL_JS}{PRINTMENU_JS}
 </body></html>"""
 
 
@@ -3274,15 +3492,18 @@ def tabs_boards(active="avail", days=14, period="mtd"):
 
 
 # The sealed Petty Cash door (Jason 2026-10-25, build 'w'): a popup
-# button, not a tab — it opens the drawer popup (data-audit) and
-# carries data-nofullpage (the drawer popup carries the universal
-# furniture only, no Full Page door). It renders in the Admin tab
-# row at tab-button size (.tabdoor mirrors .tabs a), right end.
+# button, not a tab — it opens the drawer popup (data-audit). It
+# renders in the Admin tab row at tab-button size (.tabdoor mirrors
+# .tabs a), right end. (Build 'aa', 2026-10-26: the data-nofullpage
+# opt-out that build 'w' hung on this door is retired — the Full
+# page element is deleted from the popup shell itself, so no
+# opener needs, or carries, a suppression flag.)
 _PETTY_DOOR = ("<button type=\"button\" class=\"tabdoor\" data-audit=\"/petty\" "
-               "data-title=\"Petty Cash\" data-nofullpage=\"1\">Petty Cash</button>")
+               "data-title=\"Petty Cash\">Petty Cash</button>")
 
 
-def tabs_admin(active="/setup/admin", heading="", petty_door=False):
+def tabs_admin(active="/setup/admin", heading="", petty_door=False,
+               con=None):
     # Heading renders ABOVE the sub-tabs (Jason 2026-10-06): the page title
     # leads, the section tabs follow. Two-row Admin nav (Jason
     # 2026-10-24): Row 1 order Administration, Billing, Security,
@@ -3322,8 +3543,25 @@ def tabs_admin(active="/setup/admin", heading="", petty_door=False):
         ("/setup", "Setup", "Company, customers, job sites, and vendors."),
     ], right_html=_PETTY_DOOR if petty_door else "")
     if row2_active:
+        # Build 'ai' (Jason 2026-10-28): the Company tab wears the
+        # company's own name — the entered DBA when one stands, else
+        # the entered legal name, else "Company" (no company info
+        # yet). The label reads the LIVE company record: a tab label
+        # is screen furniture, not a printed document, so the
+        # issuance-snapshot rule does not apply to it.
+        _co_label = "Company"
+        if con is not None:
+            try:
+                _crow = con.execute(
+                    "SELECT dba, name FROM company WHERE id=1").fetchone()
+                if _crow:
+                    _co_label = ((str(_crow[0] or "").strip())
+                                 or (str(_crow[1] or "").strip())
+                                 or "Company")
+            except Exception:
+                _co_label = "Company"
         out += tabs(row2_active, [
-            ("/setup", "Company", "Company identity, address, phone numbers, and business profile."),
+            ("/setup", _co_label, "Company identity, address, phone numbers, and business profile."),
             ("/customers", "Customers", "Customers, locations, contacts, and commercial terms."),
             ("/setup/vendors", "Vendors", "Outside vendors and services for repairs, inspections, and rentals."),
             ("/sites", "Job Sites", "Physical work locations and their optional tax treatment."),
@@ -4108,19 +4346,6 @@ class CoreViews:
         </form>
         """
 
-    def clerk_field(self, con, extra="", label="Name", default=None):
-        # `default=None` keeps the old behavior (pre-fill the company name);
-        # pass default="" for a blank field. Devices passes label="Issued by"
-        # + default="" (Issue 2, 2026-10-15): the field is the "who issued
-        # this code" audit trail — a person's name, never the company name.
-        d = html.escape(self.desk(con) if default is None else default)
-        opts = "".join(f'<option value="{html.escape(n)}"></option>' for n in engine.list_crew(con))
-        return (
-            f'<div><label>{html.escape(label)}</label>'
-            f'<input name=clerk list=crew value="{d}" required maxlength=40 {extra}>'
-            f'<datalist id=crew>{opts}</datalist></div>'
-        )
-
     def _photo_field(self, tid, side, current, locked=False):
         """File input plus thumbnail for a ticket condition photo (JPG/PNG/WebP)."""
         thumb = ""
@@ -4210,9 +4435,6 @@ class CoreViews:
         sig = hmac.new(engine.get_pin_secret(con).encode(), exp.encode(),
                        "sha256").hexdigest()
         return f"{self.PIN_COOKIE}={exp}.{sig}; Path=/; HttpOnly; SameSite=Lax"
-
-    def _money_path(self, path):
-        return any(path == p or path.startswith(p + "/") for p in MONEY_PREFIXES)
 
     def _gated_path(self, path):
         """True when the desk PIN gate covers this path: money routes plus
@@ -4326,11 +4548,11 @@ class CoreViews:
                 f"{err_box}"
                 "<form method=post action='/pin/forgot/questions'>"
                 f"<label>{html.escape(qs[q1])}</label>"
-                f"<input name='sa1' autocomplete=off required value=\"{_ra1}\">"
+                f"<input name='sa1' autocomplete=off required style='max-width:40ch' value=\"{_ra1}\">"
                 f"<label>{html.escape(qs[q2])}</label>"
-                f"<input name='sa2' autocomplete=off required value=\"{_ra2}\">"
-                "<button class=big type=submit style='margin-top:12px'>"
-                "Clear the PIN</button></form>")
+                f"<input name='sa2' autocomplete=off required style='max-width:40ch' value=\"{_ra2}\">"
+                "<button type=submit class=sqsave>"
+                "Save</button></form>")
         return (
             "<div class=card style='max-width:420px;margin:24px auto'>"
             "<h2 style='margin-top:0'>Reset the desk PIN</h2>"
@@ -4363,7 +4585,7 @@ class CoreViews:
                 "questions are used to reset a forgotten PIN. Pick "
                 "questions only you could answer.</p>"
                 f"{self._sq_fields(*self._retained_sq(q))}"
-                "<button class=big type=submit style='margin-top:12px'>Set PIN</button></form>")
+                "<button type=submit class=sqsave>Save</button></form>")
         else:
             form = (
                 "<h3>Change the desk PIN</h3>"
@@ -4376,7 +4598,7 @@ class CoreViews:
                 f"<div><label>New PIN</label><input type=password name=pin1 inputmode=numeric maxlength=8 required style='{_pin_style}'></div>"
                 f"<div><label>Repeat new PIN</label><input type=password name=pin2 inputmode=numeric maxlength=8 required style='{_pin_style}'></div>"
                 "</div>"
-                "<button class=big type=submit style='margin-top:12px'>Change PIN</button></form>")
+                "<button type=submit>Save</button></form>")
         # No standing security-questions card (Jason 2026-10-21,
         # look-see batch 2): the questions live only inside the flows
         # that use them — PIN set (above, and the welcome flow) and
@@ -4397,7 +4619,7 @@ class CoreViews:
             "<form method=post action='/setup/security/lock'>"
             "<div class=frow><div><label>Lock after (minutes)</label>"
             f"<input name=desk_lock_mins type=number min=0 max=1440 class=w-xs value=\"{_lock_mins}\"></div>"
-            "<div style='align-self:end'><button class=secondary>Save idle lock</button></div>"
+            "<div style='align-self:end'><button class=secondary>Save</button></div>"
             "</div></form>")
         # Tightened layout (laptop-pass fix round, 2026-10-20, Jason):
         # the lock card and the PIN card share one row instead of two
@@ -4434,7 +4656,7 @@ class CoreViews:
             "<p class=mute>Answering these two questions resets a "
             "forgotten PIN. Pick questions only you could answer.</p>"
             f"{self._sq_fields(*self._retained_sq(q))}"
-            "<button class=big type=submit style='margin-top:12px'>Set PIN and start</button></form>"
+            "<button type=submit class=sqsave>Save</button></form>"
             "</div>")
 
     def view_devices(self, con, q):
@@ -4640,7 +4862,7 @@ class CoreViews:
               <label>Meter / hours / fuel</label><input name=meter value="{html.escape(t["out_meter"] or "")}">
               {self._photo_field(tid, "out", t["out_photo"])}
               <label>Note</label><input name=note value="{html.escape(t["out_note"] or "")}">
-              <button class="big" type=submit>Save check-out</button>
+              <button class="big" type=submit>Save</button>
             </form>
             <form method=post action="/d/ticket/{html.escape(tid)}/condition" data-autosave enctype="multipart/form-data">
               <input type=hidden name=side value=in>
@@ -4650,7 +4872,7 @@ class CoreViews:
               <label>Meter / hours / fuel</label><input name=meter value="{html.escape(t["in_meter"] or "")}">
               {self._photo_field(tid, "in", t["in_photo"])}
               <label>Note</label><input name=note value="{html.escape(t["in_note"] or "")}">
-              <button class="big" type=submit>Save check-in</button>
+              <button class="big" type=submit>Save</button>
             </form>
             <h3>Status</h3>
             {status_btns}
@@ -4673,7 +4895,8 @@ class CoreViews:
                 "<button type='submit' style='margin-left:10px'>Snooze</button>"
                 "</form></div>")
 
-    def _view_door(self, view_url=None, view_title=None, links=False):
+    def _view_door(self, view_url=None, view_title=None, links=False,
+                   extra=""):
         """The universal View button (Jason 2026-10-25, build 'r',
         facelift item 3 — supersedes the 2026-10-24 'm' lone-door
         compromise and the 2026-10-20 every-page Done-View provision):
@@ -4691,12 +4914,15 @@ class CoreViews:
                     f"href=\"{html.escape(view_url, quote=True)}\">View</a></p>")
         return (f"<div class='viewrow'><button type='button' class='vbtn' "
                 f"data-audit=\"{html.escape(view_url, quote=True)}\" "
-                f"data-title=\"{html.escape(_vt)}\" data-viewpop=\"1\">View</button></div>")
+                f"data-title=\"{html.escape(_vt)}\" data-viewpop=\"1\">View</button>{extra}</div>")
 
-    def _view_row(self, view_url, view_title):
+    def _view_row(self, view_url, view_title, extra=""):
         """The universal View row for a form page that carried no door
-        before build 'r' — same button, same place (bottom left)."""
-        return self._view_door(view_url, view_title)
+        before build 'r' — same button, same place (bottom left).
+        `extra` rides inside the row after the View button (build
+        'ai': a summary's Payment navigation button — same .vbtn
+        size, same line, so the row stays one size throughout)."""
+        return self._view_door(view_url, view_title, extra=extra)
 
     # --- Universal summary pattern (build 'u', Jason 2026-10-25) -----
     # The third universal pattern, beside the universal form and the
@@ -4708,57 +4934,286 @@ class CoreViews:
     # exists), Print (the document's three-choice print), View (the
     # kind's list), plus that kind's working-popup doors. The work
     # stays on the forms and in the forms' popups; no working section
-    # stands on a summary.
+    # stands on a summary. (Build 'aa', 2026-10-26: the contract is
+    # now BUILT, not just stated — every kind flows through _sum_page
+    # and every door row through _sum_doors; the Invoice's hand-built
+    # page is folded in, and a standing census — checks/census_ui.py
+    # — diffs the eight door rows so the class cannot drift again.)
     _POP_STYLE = ("display:none;position:fixed;top:8%;left:8%;right:8%;"
                   "background:white;border:2px solid #333;padding:18px;"
                   "z-index:1000;max-height:84%;overflow:auto")
 
     def _pop_door(self, pop_id, label):
-        """A working-popup door: one vbtn in the summary's door row,
-        opening the inline popup _pop_wrap renders (the pattern the
-        Job Info / sale-confirm / quote popups established)."""
-        return (f"<button type=\"button\" class=\"vbtn\" "
+        """A working-popup door in the summary's door row, opening
+        the inline popup _pop_wrap renders (the pattern the Job
+        Info / sale-confirm / quote popups established). Build 'ac'
+        (Jason 2026-10-27): the door carries .sumdoor — the door
+        row is one line and renders at one size, the large
+        standard, like the row's Edit and Print."""
+        return (f"<button type=\"button\" class=\"vbtn sumdoor\" "
                 f"onclick=\"document.getElementById('{pop_id}')"
                 f".style.display='block'\">{html.escape(label)}</button> ")
 
-    def _pop_wrap(self, pop_id, title, inner):
-        """The working popup itself: fixed box, heading, Close at the
-        top right, the working form(s) inside. Same inline pattern as
-        #tktjobpop / #saleconfpop / #qstatpop."""
+    def _pop_furniture(self, pop_id, refresh_onclick=None):
+        """The universal popup furniture (Jason 2026-10-24: every
+        popup gets Close + Refresh + Print; build 'aa', 2026-10-26:
+        the same set on BOTH shells, in this order — Collapse,
+        Refresh, Print, Close — in the popup's heading). Print
+        prints the host document/page; Refresh re-fetches the
+        popup's content from the server (the Job Info popup's own
+        refresh, refreshJobInfo, may be named by the host)."""
+        _ref = refresh_onclick or f"wpopRefresh('{pop_id}')"
+        # Build 'af': the furniture buttons ride the one gap
+        # standard (flex gap:8px) rather than text spaces.
         return (
-            f"<div id=\"{pop_id}\" style=\"{self._POP_STYLE}\">"
-            f"<h3 style=\"margin-top:0\">{html.escape(title)} "
-            f"<span style=\"float:right\"><button type=\"button\" "
+            f"<span style=\"float:right;display:inline-flex;gap:8px\">"
+            f"<button type=\"button\" "
+            f"onclick=\"wpopCollapse('{pop_id}',this)\">Collapse</button>"
+            f"<button type=\"button\" onclick=\"{_ref}\">Refresh</button>"
+            f"<button type=\"button\" onclick=\"wpopPrint()\">Print</button>"
+            f"<button type=\"button\" "
             f"onclick=\"document.getElementById('{pop_id}')"
-            f".style.display='none'\">Close</button></span></h3>"
+            f".style.display='none'\">Close</button></span>")
+
+    def _pop_wrap(self, pop_id, title, inner):
+        """The working popup itself (Shell B): fixed box, heading
+        carrying the universal furniture, the working form(s)
+        inside. One builder for every working popup — the Job Info
+        popups and the few hand-built copies carry the same class,
+        the same heading, the same furniture."""
+        return (
+            f"<div id=\"{pop_id}\" class=\"wpop\" style=\"{self._POP_STYLE}\">"
+            f"<h3 class=\"wpop-h\" style=\"margin-top:0\">{html.escape(title)} "
+            f"{self._pop_furniture(pop_id)}</h3>"
             f"{inner}</div>")
 
+    @staticmethod
+    def _fact_empty(val):
+        """Whether a summary fact value is NO value (build 'af',
+        Jason 2026-10-28): None, blank, or the bare em dash a
+        builder writes for 'nothing here'. $0.00 is a value; '0'
+        is a value."""
+        if val is None:
+            return True
+        txt = re.sub(r"<[^>]+>", "", str(val)).strip()
+        return txt in ("", "—")
+
     def _sum_facts(self, pairs):
-        """The summary fact table: label/value rows, stated the same
-        way on every summary. Values are pre-rendered HTML; a value of
-        None — or an empty string — drops the row (the fact does not
-        apply to this document, or the record carries no value for
-        it; a labeled blank row states nothing)."""
+        """One fact block's table: label/value rows, stated the same
+        way on every summary. Values are pre-rendered HTML. Build
+        'af' (Jason 2026-10-28, superseding the fact-row half of
+        build 'ac''s anatomy rule FOR SUMMARIES): a fact with no
+        value is OMITTED — no row, no em dash — and a block whose
+        pairs all omit renders nothing. Doors, columns and sections
+        keep their anatomy; only empty fact rows drop."""
         rows = "".join(
-            f"<tr><th style='width:180px'>{html.escape(str(lab))}</th>"
-            f"<td>{val}</td></tr>"
-            for lab, val in pairs if val is not None and val != "")
+            f"<tr><th>{html.escape(str(lab))}</th><td>{val}</td></tr>"
+            for lab, val in pairs if not self._fact_empty(val))
         return f"<table>{rows}</table>" if rows else ""
+
+    def _sum_groups(self, groups):
+        """The grouped fact blocks of a summary (build 'af', Jason
+        2026-10-28): (heading, pairs) blocks in columns mimicking
+        the kind's creation form — customer block up-left, Job Info
+        block at right, the document's facts in their own block.
+        A block with no surviving facts does not render."""
+        out = []
+        for heading, pairs in groups:
+            tbl = self._sum_facts(pairs)
+            if tbl:
+                out.append(f"<div class='sumblk'><h3>"
+                           f"{html.escape(heading)}</h3>{tbl}</div>")
+        return (f"<div class='sumfacts'>{''.join(out)}</div>"
+                if out else "")
+
+    def _ji_pairs(self, triples):
+        """Job Info block pairs with print-inclusion markers
+        (build 'af', Jason 2026-10-28): (label, value, printed)
+        triples become fact pairs whose value carries a small
+        check when the field goes on the kind's printed document,
+        a no-check otherwise. MARKER ONLY — a plain span with a
+        title, never a link, button or handler. printed reflects
+        what the kind's print actually carries (verified per kind
+        in its summary builder); it is never a second setting."""
+        out = []
+        for lab, val, printed in triples:
+            if self._fact_empty(val):
+                continue
+            mark = ("<span class='jmark' title='On the printed "
+                    "document'>✓</span>" if printed else
+                    "<span class='jmark no' title='Not printed'>✗</span>")
+            out.append((lab, f"{val}{mark}"))
+        return out
+
+    def _job_att_list(self, kind, ref):
+        """The document's existing job attachments (build 'af'):
+        (stored_name, display_name) pairs from the shared document
+        folder — the same filename scan printpack's invoice
+        attachments use (fourth-from-last underscore segment is
+        the yyyymmdd stamp)."""
+        out = []
+        try:
+            import os
+            d = engine.doc_dir()
+            pref = f"{kind}_{ref}_"
+            for name in sorted(os.listdir(d)):
+                if not name.startswith(pref):
+                    continue
+                parts = name.rsplit("_", 3)
+                if (len(parts) == 4 and len(parts[1]) == 8
+                        and parts[1].isdigit()):
+                    out.append((name, parts[3]))
+        except Exception:
+            pass
+        return out
+
+    def _sum_paperwork(self, kind, ref, extra_links=(), ret=None):
+        """The Paperwork section at the foot of every summary
+        (build 'af', Jason 2026-10-28): the document's existing
+        attachments as plain links — add-only: no edit, replace or
+        delete control stands here — and ONE bare file field whose
+        form auto-submits on change (no button), posting to the
+        shared /summary/upload handler, which files the upload
+        through engine.save_job_attachment."""
+        links = [
+            f"<div><a href=\"/jobdoc/{html.escape(n, quote=True)}\">"
+            f"{html.escape(disp)}</a></div>"
+            for n, disp in self._job_att_list(kind, ref)]
+        links += [f"<div>{h}</div>" for h in extra_links]
+        ret = ret or (f"/invoice/{ref}" if kind == "invoice" else
+                      f"/ticket/{ref}" if kind == "ticket" else
+                      f"/sale/{ref}" if kind == "sale" else
+                      f"/summary/{kind}/{ref}")
+        return (
+            f"<div class='sumsec'>Paperwork</div>"
+            f"{''.join(links)}"
+            f"<form method=post action='/summary/upload' "
+            f"enctype='multipart/form-data'>"
+            f"<input type=hidden name=kind value='{html.escape(kind, quote=True)}'>"
+            f"<input type=hidden name=ref value='{html.escape(str(ref), quote=True)}'>"
+            f"<input type=hidden name=return value='{html.escape(ret, quote=True)}'>"
+            f"<input type=file name=attach onchange='this.form.submit()'>"
+            f"</form>")
+
+    def _sum_note_cell(self, kind, ref, line_id, note):
+        """The Note cell of a summary lines table (build 'ah', Jason
+        2026-10-28). A note that fits its cell stands as plain text.
+        A longer note stands truncated and clickable: clicking it
+        opens the temporary note box (see _sum_note_box_html /
+        SUM_NOTE_JS), where the full note edits in place and posts
+        with the summary's Print door. There is no per-line Read or
+        Save button — a note saves with the document."""
+        note = note or ""
+        if len(note) <= 80:
+            return html.escape(note)
+        seg = {"invoice": "invoice", "wo": "wo", "ticket": "ticket",
+               "sale": "sale", "quote": "quote",
+               "change": "change"}[kind]
+        return (f"<span class=\"notepop sumnote\" data-full=\""
+                f"{html.escape(note.replace(chr(10), '&#10;'), quote=True)}\" "
+                f"data-noteurl=\"/{seg}/{html.escape(str(ref), quote=True)}/linenote\" "
+                f"data-lineid=\"{int(line_id)}\">"
+                f"{html.escape(note[:80])}\u2026</span>")
+
+    def _sum_note_box_html(self):
+        """The temporary line-note box: one per summary page, opened
+        by a long note's cell (build 'ah', Jason 2026-10-28). It
+        carries exactly ONE control — Minimize. No Close, no Save:
+        Jason's explicit design for this box, a named exception to
+        the standing popup furniture; the edited note posts with
+        the summary's Print door (SUM_NOTE_JS)."""
+        return ("<div id=\"sumnotebox\"><div class=\"snb-card\">"
+                "<label>Line note</label>"
+                "<textarea maxlength=2000></textarea>"
+                "<div class=\"snb-row\">"
+                "<button type=button class=\"secondary snb-min\">"
+                "Minimize</button></div></div></div>")
+
+    def _sum_doors(self, working_html, edit_href=None, print_html=""):
+        """The summary door row, built one way for every kind
+        (build 'aa', Jason 2026-10-26 — the template contract the
+        _sum_page comment has always stated): the kind's working
+        popup doors first (in the kind's own order), then Edit
+        (present only where the kind has its own editor — WS5's
+        uniform rule), then ONE Print on every kind. Nothing else
+        stands in the row. Build 'ac' (Jason 2026-10-27): every
+        door in the row renders at the one large standard (see
+        _pop_door / .sumdoor)."""
+        tail = ""
+        if edit_href:
+            tail += (f"<a class=\"btn\" href=\""
+                     f"{html.escape(edit_href, quote=True)}\">Edit</a> ")
+        return working_html + tail + print_html
+
+    def _sum_lines(self, cols, rows, empty_text="No lines."):
+        """The one summary lines table (build 'ac', Jason
+        2026-10-27): every kind's lines area renders through this
+        builder — the same table classes (the Credit Memo's
+        grid sum-lines set) and one column vocabulary. cols is a
+        list of (header, numeric) pairs; rows are lists of
+        pre-rendered cell HTML in the same order (numeric cells
+        right-align, the family's standing figure style). A kind
+        with no lines renders the shell — headers standing, one
+        empty-state row — never a blank area: state changes
+        values, not anatomy."""
+        head = "".join(f"<th>{html.escape(h)}</th>" for h, _n in cols)
+        if rows:
+            body = ""
+            for r in rows:
+                cells = "".join(
+                    f"<td class=num style='text-align:right'>{c}</td>"
+                    if n else f"<td>{c}</td>"
+                    for c, (_h, n) in zip(r, cols))
+                body += f"<tr>{cells}</tr>"
+        else:
+            body = (f"<tr><td colspan={len(cols)}>"
+                    f"{html.escape(empty_text)}</td></tr>")
+        return (f"<table class='grid sum-lines'><tr>{head}</tr>"
+                f"{body}</table>")
 
     def _sum_page(self, kind_label, ref, facts_pairs, lines_html,
                   doors_html, popups_html, view_url, view_title,
-                  extra_top=""):
+                  extra_top="", sections_html="", fact_groups=None,
+                  paper_html="", pay_doc=None):
         """The one summary layout: title, fact table, lines, the
-        door row (working-popup doors, Edit, Print), the popups, and
-        the universal View row at the bottom left."""
+        standard sections (build 'ac': a kind's standing blocks
+        after its lines — totals, panels, payments — composed as
+        discrete sections, not glued inside the lines area), the
+        door row (working-popup doors, Edit, Print), the popups,
+        and the universal View row at the bottom left.
+        Build 'af' (Jason 2026-10-28): facts ride in grouped
+        blocks (fact_groups — see _sum_groups) instead of one
+        full-width table, and the Paperwork section (paper_html)
+        stands at the foot of the content, before the door row.
+        Build 'ai' (Jason 2026-10-28, REVERSING the 'ag'/'ah'
+        door removal at his word): pay_doc=(kind, ref) puts ONE
+        small Payment button in the bottom row beside View — a
+        NAVIGATION button to the Billing payment form with this
+        record prefilled as the allocation target. No money is
+        worked on the summary; the payment form governs from
+        there. Money summaries pass it; the Payment and Credit
+        Memo summaries do not."""
+        facts_html = (self._sum_groups(fact_groups)
+                      if fact_groups is not None
+                      else self._sum_facts(facts_pairs))
+        _pay_btn = ""
+        if pay_doc:
+            _pay_href = ("/money?tab=pay&doc="
+                         + quote(f"{pay_doc[0]}:{pay_doc[1]}",
+                                 safe=":"))
+            _pay_btn = (f"<a class='vbtn' href=\"{_pay_href}\">"
+                        f"Payment</a>")
         return f"""
         <h1>Summary of {html.escape(kind_label)}# {html.escape(str(ref))}</h1>
         {extra_top}
-        {self._sum_facts(facts_pairs)}
+        {facts_html}
         {lines_html}
+        {sections_html}
+        {paper_html}
         <div class="viewrow" style="align-items:center">{doors_html}</div>
         {popups_html}
-        {self._view_row(view_url, view_title)}
+        {self._sum_note_box_html()}
+        {self._view_row(view_url, view_title, extra=_pay_btn)}
         """
 
     def _assoc_co_fact(self, con, kind, ref):
@@ -4778,24 +5233,11 @@ class CoreViews:
             f"{html.escape(c, quote=True)}\">{html.escape(c)}</a>"
             for c in cos)
 
-    def _money_popup(self, con, kind, ref, customer_id, pop_id="paypop"):
-        """A summary's Payment popup door + popup: the document's
-        money panel (the _doc_money_html working surface — balance,
-        per-line states and note forms, money-in form, apply-credit
-        form) behind one door, so no working money section stands on
-        the summary itself. Returns (door, popup)."""
-        label = engine.DOC_LABELS[kind]
-        door = self._pop_door(pop_id, "Payment")
-        popup = self._pop_wrap(
-            pop_id, f"Payment — {label} {ref}",
-            self._doc_money_html(con, kind, ref, customer_id))
-        return door, popup
-
     def view_summary_route(self, con, rest):
         """The /summary/<kind>/<id> routes (build 'u', Jason
         2026-10-25): the kinds whose record page was a form or a
         print view get their summary here — Work Order, Quote,
-        Change Order, Payment, Credit Memo. Rental, Sale, and
+        Change Order, Payment, Credit Memo. Rental, Sales Ticket, and
         Invoice summaries live on their own record routes (/ticket/,
         /sale/, /invoice/), which ARE their summaries. Returns
         (title, body) for the prefix-route handler."""
@@ -4828,7 +5270,8 @@ class CoreViews:
         return (f"<div class=\"fh-job\"><div class=\"fh-job-h\">Job Info</div>"
                 f"{body}</div>")
 
-    def _form_head(self, con, doc_html, date_html, cust_html="", job_lines=None):
+    def _form_head(self, con, doc_html, date_html, cust_html="", job_lines=None,
+                   stacked=False):
         """The one header zone for every document form (Jason
         2026-10-25, build 'r', facelift items 4–6): Company block
         (left), Customer/Address block (middle), form # + Date
@@ -4843,9 +5286,20 @@ class CoreViews:
         rows — Row 1: Company (left), form # + Date (right); the
         bar; Row 2: Customer (left), Job Info box (right) — the
         layout his enumeration names and the printed sheet carries.
-        Callers without job_lines (the Payment and Cash entry forms,
-        whose bodies are their work) keep the one-row head."""
+        Callers without job_lines (whose bodies are their work)
+        keep the one-row head. Build 'ao' (Jason 2026-10-29): the
+        Payment form passes stacked=True — it carries no Job Info
+        lines, so its head renders the same two-row anatomy minus
+        the box: Row 1 Company (left), form # + Date (right); the
+        bar; Row 2 Customer (left) — the Customer below the
+        Company, like every other money form, not to its right."""
         if job_lines is None:
+            if stacked:
+                return (f"<div class=\"fhead fhead2\">"
+                        f"<div class=\"fh-row1\">{self._company_band(con)}"
+                        f"<div class=\"fh-doc\"><div class=\"fh-no\">{doc_html}</div>"
+                        f"<div class=\"fh-date\">{date_html}</div></div></div>"
+                        f"<div class=\"fh-row2\"><div class=\"fh-cust2\">{cust_html}</div></div></div>")
             return (f"<div class=\"fhead\">{self._company_band(con)}"
                     f"<div class=\"fh-cust\">{cust_html}</div>"
                     f"<div class=\"fh-doc\"><div class=\"fh-no\">{doc_html}</div>"
@@ -4922,7 +5376,7 @@ class CoreViews:
         <input type="hidden" name="back" value="{back}">
         <p><input name="text" placeholder="What got done?" size="40" maxlength="200" required></p>
         <p><input name="link" placeholder="Link to record (optional, e.g. /invoice/INV-1024)" size="40" maxlength="200"></p>
-        <p><button>Log it</button></p>
+        <p><button>Save</button></p>
         </form>
         """
 
@@ -5078,7 +5532,7 @@ class CoreViews:
           <input type=hidden name=chain_step value="admin">
           <div class="frow">
             <div style="flex:1">{folder_field("backup", b.get("folder") or "")}</div>
-            <div style="align-self:end"><button class="secondary">Save backup settings</button></div>
+            <div style="align-self:end"><button class="secondary">Save</button></div>
           </div>
         </form>
         <p class=hint>Last backup: <b>{last}</b> ({stale}). Folder: {folder}.</p>
@@ -5090,7 +5544,7 @@ class CoreViews:
         <p class="mute">When FleetSheet starts, it makes a backup automatically if the last one is older than this schedule.</p>
         <form method=post action="/backup/schedule" class="schedule-form">
           {sched_radios}
-          <button class="secondary">Save schedule</button>
+          <button class="secondary">Save</button>
         </form>
         <h2>Saved Copies</h2>
         {table}
@@ -5159,7 +5613,6 @@ class CoreViews:
         cur_s = html.escape(str(cur), quote=True)
         return tabs_admin("/setup/admin") + f"""
         <h2>Choose folder \u2014 {label}</h2>
-        <p class="mute" style="margin:4px 0">Browse to the folder FleetSheet should use for this setting, then choose it below. No path is typed.</p>
         <p style="margin:4px 0"><b>{html.escape(str(cur))}</b></p>
         {list_err}
         <div style="max-height:300px;overflow:auto;border:1px solid #d0d5dd;padding:6px 10px">{rows}</div>
@@ -5173,7 +5626,7 @@ class CoreViews:
           <input type=hidden name=path value="">
           <button class="secondary">Use default folder</button>
         </form>
-        <a class="btn secondary" href="{back}">Cancel</a>
+        <a class="btn secondary" href="{back}">Close</a>
         <form method=post action="/setup/folders/new" style="margin-top:10px">
           <input type=hidden name=target value="{target}">
           <input type=hidden name=path value="{cur_s}">
@@ -5273,10 +5726,6 @@ class CoreViews:
         <input name="text" placeholder="New sticky note&hellip;" size="40" maxlength="500">
         <button>Add</button></form>
         """
-
-    def _setup_progress(self, con):
-        """Chain progress keyed by step key (Batch 3 #3)."""
-        return {s["key"]: s["done"] for s in setup_chain(con)}
 
     def _empty_action(self, title, detail, href, label):
         return (f"<div class='empty-action'><strong>{html.escape(title)}</strong>"
@@ -5505,14 +5954,32 @@ class CoreViews:
         {body or "<p class='mute'>Nothing open.</p>"}
         """
 
-    def _print_menu(self, screen=None, pdf=None, page=False, compact=False):
+    def _print_menu(self, screen=None, pdf=None, page=False, compact=False,
+                    docs=None):
         """The Print button, globally (Jason 2026-10-18): one button, three
         choices — Print to Screen (the document on screen), Print to
         Location (filed into the operator's print folder), PRINT (the
         printer of their choice, via the browser's print dialog).
         page=True for form pages: the choices act on the current page,
-        live values included. Otherwise screen/pdf are /print/ paths."""
+        live values included. Otherwise screen/pdf are /print/ paths.
+        docs=[(label, screen, pdf), ...] (build 'aa', 2026-10-26,
+        JC-AA1): a kind whose printable papers are several documents
+        (the Rental's Work Ticket and Delivery Ticket) gets ONE Print
+        control whose menu carries one three-choice entry per
+        document — never a standalone print link per paper."""
         sumcls = "pmenu-link" if compact else "pmenu-sum"
+        if docs:
+            groups = ""
+            for _lab, _scr, _pdf in docs:
+                _sep = "&" if "?" in (_scr or "") else "?"
+                groups += (
+                    f'<span class="hint" style="display:block">'
+                    f'{html.escape(_lab)}</span>'
+                    f'<a href="{html.escape(_scr or "", quote=True)}" target="_blank" rel="noopener">Print to Screen</a>'
+                    f'<a href="{html.escape(_scr or "", quote=True)}{_sep}autoprint=1" target="_blank" rel="noopener">PRINT</a>'
+                    f'<button type=button data-doc="{html.escape(_pdf or _scr or "", quote=True)}" onclick="fsSaveLoc(this)">Print to Location</button>')
+            return (f'<details class="pmenu"><summary class="{sumcls}">Print</summary>'
+                    f'<div class="popts">{groups}<span class="pstat"></span></div></details>')
         if page:
             opts = ('<button type=button onclick="fsPrintScreen()">Print to Screen</button>'
                     '<button type=button onclick="window.print()">PRINT</button>'
@@ -5560,38 +6027,154 @@ class CoreViews:
             f"<div style='font-size:12px'>{body}</div></div>")
 
     def _btn_row(self, save_label="Save", jobpop=None, add_item=False, extra="",
-                 submit_name="", submit_value="", print_menu=None):
-        """Standard 4-button row (Jason 2026-10-07): right-justified, order always
-        Add Item, Job Info, Print, Save. Skip buttons that are useless, never reorder.
-        Print is the global print menu (2026-10-18).
-
-        Universal-row enforcement (Jason 2026-10-21): the row's submit reads
-        Save — the form's commit/finish action (Apply payment, Cash Out…)
-        never sits in this row; it lives in a right-aligned bar at the TOP
-        of the form (see _top_commit). The invoice form is the exception
-        that proves the grammar (Jason, later 2026-10-21): the door is
-        New Invoice and the only creation verb on the form is Save, so it
-        carries NO top commit at all; action=create stays accepted by
-        its POST handler for legacy posts only.
-        save_label=None omits the submit entirely, for forms whose only
-        action is that top commit (no draft state exists to Save).
-        submit_name/submit_value put a discriminator on the Save submit
-        when the form carries both Save and the top commit.
-        print_menu overrides the row's Print menu HTML — the invoice
-        editor passes the DOCUMENT menu in edit mode (the number exists,
-        so Print prints the invoice); everywhere else the row's Print
-        acts on the current page, live values included."""
-        btns = []
+                 submit_name="", submit_value="", print_menu=None,
+                 edit_pop=None):
+        """The universal form row (Jason 2026-10-26, void-and-revise
+        ruling): ONE row, split — LEFT cluster, the content doors
+        (Add Item, Job Info, Edit); RIGHT cluster, the action doors
+        (Print, Save). Edit stands only in the locked-open state of
+        a posted document's form and opens the revision prompt
+        (edit_pop names the prompt's element); new/draft forms
+        carry no Edit. The split governs placement, not which
+        doors a form has: a form whose row never carried Add Item
+        still lacks it.
+        save_label=None in the locked-open state (edit_pop set)
+        renders Save disabled — present per the template, inert
+        while locked (build 'am', Jason 2026-10-28); without
+        edit_pop it omits Save (forms whose commit is their own,
+        carried in extra by the form).
+        submit_name/submit_value put a discriminator on the Save
+        submit. print_menu overrides the row's Print menu HTML —
+        the invoice editor passes the DOCUMENT menu in edit mode;
+        everywhere else the row's Print acts on the current page,
+        live values included."""
+        left = []
         if add_item:
-            btns.append('<button type=button>Add Item</button>')
+            left.append('<button type=button>Add Item</button>')
         if jobpop:
-            btns.append(f'<button type=button onclick="document.getElementById(\'{jobpop}\').style.display=\'block\'">Job Info</button>')
-        btns.append(print_menu if print_menu is not None else self._print_menu(page=True))
+            left.append(f'<button type=button onclick="document.getElementById(\'{jobpop}\').style.display=\'block\'">Job Info</button>')
+        if edit_pop:
+            left.append(f'<button type=button onclick="document.getElementById(\'{edit_pop}\').style.display=\'block\'">Edit</button>')
+        right = []
+        right.append(print_menu if print_menu is not None else self._print_menu(page=True))
+        if save_label is None and edit_pop:
+            # Build 'am' (Jason 2026-10-28): Save stands on the
+            # locked form too — the universal row carries it in
+            # every state. Locked, it is inert (disabled): the
+            # record stands until Edit opens the revision, whose
+            # form carries the live Save. Presence is the template;
+            # the state governs whether it acts.
+            right.append('<button type=button disabled>Save</button>')
         if save_label is not None:
             attrs = (f' name="{submit_name}" value="{submit_value}"'
                      if submit_name else '')
-            btns.append(f'<button type=submit{attrs}>{save_label}</button>')
-        return f'<div style="text-align:right">{" ".join(btns)}{extra}</div>'
+            right.append(f'<button type=submit{attrs}>{save_label}</button>')
+        # Build 'ac' (Jason 2026-10-27, defect C-5): the two cluster
+        # spans carry the row's own text context (14px, no transform)
+        # inline. A row standing inside a .card — the Petty cards —
+        # otherwise inherits .card span's 12px uppercase context and
+        # its buttons render small; the row's size is the row's own,
+        # wherever the row stands.
+        # Build 'af' (Jason 2026-10-28): one gap standard — the tab
+        # strips' flex gap:8px — between the buttons WITHIN each
+        # cluster too (the clusters were single-space joins and
+        # `extra` rode glued to the last button): each cluster is an
+        # inline-flex row with gap:8px, and extra joins the right
+        # cluster as its last item.
+        _right = "".join(right) + extra
+        return (f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:center;gap:8px">'
+                f'<span style="display:inline-flex;gap:8px;align-items:center;'
+                f'font-size:14px;text-transform:none">{"".join(left)}</span>'
+                f'<span style="display:inline-flex;gap:8px;align-items:center;'
+                f'text-align:right;font-size:14px;text-transform:none">{_right}</span></div>')
+
+    # The locked-open revision model (Jason 2026-10-26, build 'ab'):
+    # a form opened on an existing posted/issued document renders
+    # LOCKED — the record: viewable, printable — and its Edit door
+    # opens the revision prompt; confirming voids the original and
+    # lands the operator on the revision's own form, unlocked,
+    # under the engine's session marker. The POST layer is the real
+    # lock: no in-place save of an existing document lands without
+    # that marker.
+    _LOCK_JS = (
+        "<script>(function(){var f=document.currentScript.closest('form')"
+        "||document.querySelector('form');if(!f)return;"
+        # Build 'al' (Jason 2026-10-28): the locked form SAYS it is
+        # locked — a red Locked box stands at the form's head
+        # (screen only; the print CSS removes .lockbanner). The
+        # banner is this script's furniture, like the disabling
+        # below: one seat, every locked form.
+        "if(!f.querySelector('.lockbanner')){var b=document.createElement('div');"
+        "b.className='lockbanner';b.textContent='LOCKED';"
+        "f.insertBefore(b,f.firstChild);}"
+        "f.querySelectorAll('input,select,textarea').forEach(function(el){"
+        "if(el.type==='hidden')return;"
+        "if(el.closest('.wpop'))return;"
+        "el.disabled=true;});})();</script>")
+
+    def _revto_line(self, con, kind, row):
+        """Build 'al' (Jason 2026-10-28): the voided original's
+        top line — *Revised to: <the revision's number> — for its
+        summary (the review surface). The printed document carries
+        the same line from printpack. Empty for a document that
+        was not revised away."""
+        if row is None:
+            return ""
+        try:
+            info = engine.revision_info(con, kind, row)
+        except Exception:
+            return ""
+        if not info.get("revised_by"):
+            return ""
+        return (f'<div class="revto">*Revised to: '
+                f'{html.escape(str(info["revised_by"]))}</div>')
+
+    def _revise_popup(self, con, kind, ref):
+        """The revision prompt (a form popup under the popup law):
+        Reason (required) and the operator's Name (required,
+        prefilled with the desk user). Its Confirm posts the host
+        form to /revise — in the locked render the only enabled
+        fields are the hidden kind/ref and these two, so the post
+        carries exactly the act. Confirming voids the original and
+        creates the revision (JC-AB0)."""
+        inner = (
+            f'<input type=hidden name=rev_kind value="{html.escape(kind, quote=True)}">'
+            f'<input type=hidden name=rev_ref value="{html.escape(str(ref), quote=True)}">'
+            f'<div><label>Reason</label>'
+            f'<input name=rev_reason style="width:100%" required></div>'
+            f'<div><label>Name</label>'
+            f'<input name=rev_name value="{html.escape(self.desk(con), quote=True)}" required></div>'
+            f'<p>Save voids this document and opens its revision. '
+            f'The record keeps the void, the reason, and the name.</p>'
+            f'<button type=submit formaction="/revise" formmethod="post">'
+            f'Save</button>')
+        return self._pop_wrap("revpop", f"Revise {ref}", inner)
+
+    def _chain_facts(self, con, kind, row, summary_url):
+        """The revision chain stated in a summary's fact table
+        (Jason 2026-10-26): a voided document shows Revised by +
+        the signed void (Reason, By); a revision shows Revision of
+        + the reason and name it was created with. summary_url maps
+        a document number to its summary URL for this kind."""
+        info = engine.revision_info(con, kind, row)
+        facts = []
+        if info["revised_by"]:
+            facts.append(("Status", "Void"))
+            facts.append(("Revised by",
+                          f'<a href="{summary_url(info["revised_by"])}">'
+                          f'{html.escape(info["revised_by"])}</a>'))
+        if info["revision_of"]:
+            facts.append(("Revision of",
+                          f'<a href="{summary_url(info["revision_of"])}">'
+                          f'{html.escape(info["revision_of"])}</a>'))
+        if info["revised_by"] or info["revision_of"]:
+            facts.append(("Reason", html.escape(info["reason"] or "")))
+            byline = info["by"] or ""
+            if info["at"]:
+                byline = (byline + " · " if byline else "") + info["at"]
+            facts.append(("By", html.escape(byline)))
+        return facts
 
     def _top_commit(self, label, name="", value=""):
         """The form's commit/finish button, up top (Jason 2026-10-21):
@@ -5613,17 +6196,9 @@ class CoreViews:
         spans = "".join(f"<span>{l}</span>" for l in labels)
         return f'<div class="linehead" aria-hidden="true">{spans}</div>'
 
-    def _line_head_flex(self):
-        """The same band for the flex PO-lines editor: the labels ride
-        the row's flex layout, Description taking the leftover width."""
-        return ('<div class="linehead flex" aria-hidden="true">'
-                '<span>Type</span><span>Item</span><span>PO Line</span>'
-                '<span style="flex:1">Description</span><span>Qty</span>'
-                '<span>Unit</span><span>Rate</span><span style="width:22px"></span></div>')
-
     def _job_info_popup(self, pid, vals=None, extra=""):
         """Universal job info popup with all 9 fields (Jason 2026-10-07).
-        Identical on Sale, Rental, Quote, Invoice, Credit Memo.
+        Identical on Sales Ticket, Rental, Quote, Invoice, Credit Memo.
         `extra` (build 'r', Jason 2026-10-25): the host form's own
         fields that used to stand above the line items — required
         fields especially — rendered at the top of the popup, inside
@@ -5631,9 +6206,10 @@ class CoreViews:
         they save with the form exactly as before."""
         v = vals or {}
         def g(k): return html.escape(str(v.get(k) or ''), quote=True)
+        _furn = self._pop_furniture(pid, f"refreshJobInfo('{pid}')")
         return f"""
-          <div id="{pid}" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
-            <h3 style="margin-top:0">Job info <span style="float:right"><button type=button onclick="refreshJobInfo('{pid}')">Refresh</button> <button type=button onclick="document.getElementById('{pid}').style.display='none'">Close</button></span></h3>
+          <div id="{pid}" class="wpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
+            <h3 class="wpop-h" style="margin-top:0">Job info {_furn}</h3>
             {extra}
             <div class="row"><div><label>Job Name</label><input name=job_name value="{g('job_name')}"></div><div><label>Job Location</label><input name=job_location value="{g('job_location')}"></div></div>
             <div class="row3"><div><label>PO #</label><input name=po value="{g('po')}" class=w-sm></div><div><label>Well #</label><input name=well_no value="{g('well_no')}" class=w-sm></div><div><label>AFE #</label><input name=afe value="{g('afe')}" class=w-sm></div></div>
@@ -5689,7 +6265,7 @@ class CoreViews:
         q = q or {}
         msg = (q.get("msg") or "").strip()
         banner = f"<p class='ok'>{html.escape(msg)}</p>" if msg else ""
-        return tabs_admin("/setup/vendors") + banner + self._vendor_block(con, q)
+        return tabs_admin("/setup/vendors", con=con) + banner + self._vendor_block(con, q)
 
     def view_setup_billing(self, con, q=None):
         c = self.company(con)
@@ -5730,8 +6306,7 @@ class CoreViews:
                 f'<fieldset style="margin-top:12px;padding:8px 12px 10px">'
                 f'<input type=hidden name=panel_{kind} value=1>'
                 f'<legend>{legend}</legend>'
-                f'<div class="jb-grid" style="max-height:7.5em;overflow-y:auto">{boxes}</div>'
-                f'<div style="margin-top:6px;display:flex;gap:14px;align-items:end;flex-wrap:wrap">'
+                f'<div style="margin-bottom:6px;display:flex;gap:14px;align-items:end;flex-wrap:wrap">'
                 f'<div><label>Add your own</label>'
                 f'<input name={new_name} class="w-md en-new" placeholder="New entry"></div>'
                 f'<div><button type=submit class=secondary name=add_{kind} value=1 '
@@ -5740,6 +6315,7 @@ class CoreViews:
                 f'formaction="/setup/billing/lookup/restore" formmethod=post '
                 f'onclick="return confirm(\'Restore the factory list? Factory entries come back, the factory-on set is restored, and your added entries stay.\')">Restore All</button></div>'
                 f'</div>'
+                f'<div class="jb-grid" style="max-height:7.5em;overflow-y:auto">{boxes}</div>'
                 f'</fieldset>')
         # Billing switch split (shop flow, Jason 2026-10-21): this page
         # mixes money-only settings with shared line vocabulary. Billing
@@ -5762,6 +6338,14 @@ class CoreViews:
         _p_uom = _en_panel("inv_uom", "Line Units", "new_inv_uom")
         _p_item = _en_panel("inv_item", "Line Items", "new_inv_item")
         _p_comp = _en_panel("comp_doc", "Compliance Documents", "new_comp_doc")
+        # Build 'af' (Jason 2026-10-28): every document kind's number
+        # stem stands in this card beside the invoice prefix — the
+        # invoice stem lives on the company record; the rest are
+        # options (prefix_<kind>) read at mint time by
+        # engine.doc_prefix, the field showing the effective stem.
+        _pfx = {k: engine.doc_prefix(con, k) for k in
+                ("quote", "wo", "sale", "ticket", "change", "cm",
+                 "pay", "batch", "cash", "petty")}
         # Build 'r': the defaults stack straight down their column —
         # class "brow", not the grid class "row" (a two-cell grid row
         # in a narrow column strands its second field alone).
@@ -5769,6 +6353,26 @@ class CoreViews:
           <div class="brow">
             <div><label>Invoice Number Prefix</label><input name=invoice_prefix class=w-xs maxlength=6 value="{html.escape(g('invoice_prefix'))}"></div>
             <div><label>Billing Email</label><input name=billing_email type=email class=w-md value="{html.escape(g('billing_email'))}"></div>
+          </div>
+          <div class="brow">
+            <div><label>Quote Number Prefix</label><input name=prefix_quote class=w-xs maxlength=6 value="{html.escape(_pfx['quote'])}"></div>
+            <div><label>Work Order Number Prefix</label><input name=prefix_wo class=w-xs maxlength=6 value="{html.escape(_pfx['wo'])}"></div>
+          </div>
+          <div class="brow">
+            <div><label>Sale Number Prefix</label><input name=prefix_sale class=w-xs maxlength=6 value="{html.escape(_pfx['sale'])}"></div>
+            <div><label>Rental Ticket Number Prefix</label><input name=prefix_ticket class=w-xs maxlength=6 value="{html.escape(_pfx['ticket'])}"></div>
+          </div>
+          <div class="brow">
+            <div><label>Change Order Number Prefix</label><input name=prefix_change class=w-xs maxlength=6 value="{html.escape(_pfx['change'])}"></div>
+            <div><label>Credit Memo Number Prefix</label><input name=prefix_cm class=w-xs maxlength=6 value="{html.escape(_pfx['cm'])}"></div>
+          </div>
+          <div class="brow">
+            <div><label>Payment Number Prefix</label><input name=prefix_pay class=w-xs maxlength=6 value="{html.escape(_pfx['pay'])}"></div>
+            <div><label>Payment Batch Number Prefix</label><input name=prefix_batch class=w-xs maxlength=6 value="{html.escape(_pfx['batch'])}"></div>
+          </div>
+          <div class="brow">
+            <div><label>Cash Entry Number Prefix</label><input name=prefix_cash class=w-xs maxlength=6 value="{html.escape(_pfx['cash'])}"></div>
+            <div><label>Petty Cash Entry Number Prefix</label><input name=prefix_petty class=w-xs maxlength=6 value="{html.escape(_pfx['petty'])}"></div>
           </div>
           <div class="brow">
             <div><label>Default Payment Terms</label>{lookup_select(con, "terms", "default_terms", current=g('default_terms','Net 30'))}</div>
@@ -5844,7 +6448,7 @@ class CoreViews:
             }});
           }})();
           </script>
-          <p class=actions style="justify-content:flex-end"><button>Save billing settings</button></p>
+          <p class=actions style="justify-content:flex-end"><button>Save</button></p>
         </form>
         """
 
@@ -5856,10 +6460,11 @@ class CoreViews:
                        and updater_winsparkle.available())
         # Menu-only updates (decision B): the check runs only when the
         # operator clicks the button below — never on its own.
-        # Update folded into Version (Jason 2026-10-21): one card
-        # answers "what am I running, and is there anything newer" —
-        # the standalone Software Updates card is gone; its hint and
-        # check control move into the Version card intact (below).
+        # Update folded into Version (Jason 2026-10-21), and build
+        # 'ac' (Jason 2026-10-27): the standalone Version card is
+        # gone too — the version line and the check control stand in
+        # the System Administration card's lower area, right of
+        # Backup Settings (below), behavior intact.
         updates_inner = """
           <form method=post action="/updater/check"><p class=actions><button>Check for Updates…</button></p></form>""" if _updater_on else """
           <p class='hint'>Update checks are not available in this install.</p>"""
@@ -5870,7 +6475,7 @@ class CoreViews:
         except OSError:
             _ver = "dev"
         # Readouts show the prose form (Item H renumber): the VERSION
-        # stamp is the three-number machinery form (1.1.0); the
+        # stamp is the three-number machinery form (1.1.1); the
         # display reads "1.1". Non-numeric stamps ("dev") pass through.
         _ver_parts = _ver.split(".")
         if len(_ver_parts) == 3 and _ver_parts[2] == "0":
@@ -5888,18 +6493,21 @@ class CoreViews:
           <form method=post action="/setup/admin">
             <input type=hidden name=backup_dir value="{html.escape(_bdir, quote=True)}">
             <input type=hidden name=chain_step value="layout">
-            <p class=actions><button>Save layout options</button></p>
+            <p class=actions><button>Save</button></p>
           </form>"""
+        # Build 'ac' (Jason 2026-10-27, Administration squeeze):
+        # the Layout and Collapsible Headers blocks merge into one
+        # compact control-row set under one one-line hint — every
+        # control keeps, the second block heading goes.
         layout_card = f"""
         <section class=card id="layout">
           <h2>Page Layout</h2>
-          <p class=mute>Two layouts: Main (the default) and Alternate (for another user). Each saves its own arrangement and locks on its own. Unlock to move, resize, or collapse them.</p>
+          <p class=mute>Two layouts: Main and Alternate — each saves its own arrangement and locks on its own.</p>
           <p>Layout: <b data-layout-slot>Main</b> <b data-layout-state>Locked</b>.
           <button type=button class="secondary" onclick="window.FSLayoutSlotSet&&window.FSLayoutSlotSet('Main')">Main</button>
           <button type=button class="secondary" onclick="window.FSLayoutSlotSet&&window.FSLayoutSlotSet('Alternate')">Alternate</button>
           <button type=button class="secondary" onclick="window.FSLayoutToggle&&window.FSLayoutToggle()">Lock / unlock layout</button></p>
           <script>try{{var _s=localStorage.getItem('fs-layout-slot');var _slot=(_s==='Alternate')?'Alternate':'Main';var _l=localStorage.getItem('fs-layout-locked:'+_slot);if(_l===null)_l=localStorage.getItem('fs-layout-locked');document.querySelectorAll('[data-layout-slot]').forEach(function(el){{el.textContent=_slot;}});document.querySelectorAll('[data-layout-state]').forEach(function(el){{el.textContent=(_l==='0')?'Unlocked':'Locked';}});}}catch(e){{}}</script>
-          <h3 style='margin:14px 0 4px'>Collapsible Headers</h3>
           <p>Collapsed headers: <b data-collapse-state>Unlocked</b>.
           <button type=button class="secondary" onclick="window.FSCollapseToggle&&window.FSCollapseToggle()">Lock / unlock collapsed headers</button></p>
           <script>try{{var _c=localStorage.getItem('fs-collapse-locked');document.querySelectorAll('[data-collapse-state]').forEach(function(el){{el.textContent=(_c==='1')?'Locked':'Unlocked';}});}}catch(e){{}}</script>
@@ -5916,7 +6524,7 @@ class CoreViews:
         shop_card = f"""
         <section class=card>
           <h2>What your shop does</h2>
-          <p class=mute>Each switch covers one kind of work. Switching one off hides that work's pages and tabs; records are never touched, and switching it back on restores every surface.</p>
+          <p class=mute>One switch per kind of work; off hides that work's pages and tabs. Records are never touched.</p>
           <form method=post action="/setup/admin">
             <input type=hidden name=backup_dir value="{html.escape(_bdir, quote=True)}">
             <input type=hidden name=modules value=1>
@@ -5933,7 +6541,7 @@ class CoreViews:
         printing_card = f"""
         <section class=card>
           <h2>Printing</h2>
-          <p class=mute>Print to Location files documents into this folder — a USB drive, another disk, a network path, or a Drive/OneDrive folder already mapped on this computer.</p>
+          <p class=mute>Print to Location files documents into this folder.</p>
           <form method=post action="/setup/admin">
             <input type=hidden name=backup_dir value="{html.escape(_bdir, quote=True)}">
             <input type=hidden name=chain_step value="admin">
@@ -5952,7 +6560,7 @@ class CoreViews:
         zoom_card = f"""
         <section class=card>
           <h2>Zoom</h2>
-          <p class=mute>Zoom scales every FleetSheet page up or down — like browser zoom, but built in, so the setting stays in place.</p>
+          <p class=mute>Zoom scales every page up or down; the setting stays in place.</p>
           <form method=post action="/setup/admin">
             <input type=hidden name=backup_dir value="{html.escape(_bdir, quote=True)}">
             <input type=hidden name=chain_step value="layout">
@@ -5984,28 +6592,38 @@ class CoreViews:
         # supersedes pack 'm''s standalone button below the row),
         # opening the drawer in the standard popup. The working
         # money tabs carry no trace of it.
+        # Build 'ac' (Jason 2026-10-27): the Administration squeeze —
+        # page-local tighter card padding/margins (the global card
+        # CSS is untouched), and the Version card folded into System
+        # Administration: one card answers for the book's machinery,
+        # its lower area two-part — Backup Settings left,
+        # Version/Update right.
         return tabs_admin("/setup/admin", petty_door=True) + chain_banner_admin(con, q) + f"""
-        <style>.admincols{{columns:2 340px;column-gap:10px}}.admincols>section{{break-inside:avoid;margin-bottom:10px}}</style>
+        <style>.admincols{{columns:2 340px;column-gap:10px}}.admincols>section{{break-inside:avoid;margin-bottom:10px;padding:10px 14px}}.admincols h2{{margin:0 0 6px}}.admincols h3{{margin:8px 0 4px}}.admincols p{{margin:4px 0}}</style>
         <div class="admincols">
         <section class=card>
           <h2>System Administration</h2>
-          <p class=mute>Data Health checks the book for record problems. The Operation Manual is the complete reference for setup and daily work.</p>
+          <p class=mute>Data Health checks the book for record problems. The Operation Manual is the complete reference.</p>
           <p class=actions><a class="btn secondary" href="/setup/devices">Manage devices</a> <a class="btn secondary" href="/setup/health">Data Health</a> <a class="btn secondary" href="/manual" target="_blank">Operation Manual (PDF)</a></p>
-          <h3 style='margin:10px 0 4px'>Backup Settings</h3>
-          <p>Backup status: <b>{status}</b>. Last backup: <b>{last}</b>.</p>
-          <p class=actions><a class="btn secondary" href="/backup">Manage backups →</a></p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px 24px;align-items:flex-start">
+            <div style="flex:1 1 220px;min-width:200px">
+              <h3>Backup Settings</h3>
+              <p>Backup status: <b>{status}</b>. Last backup: <b>{last}</b>.</p>
+              <p class=actions><a class="btn secondary" href="/backup">Manage backups →</a></p>
+            </div>
+            <div style="flex:1 1 220px;min-width:200px">
+              <h3>Version</h3>
+              <p>FleetSheet version <b>{html.escape(_ver)}</b>.</p>
+              <p class=mute>Update checks run only when the button is used.</p>
+              {updates_inner}
+            </div>
+          </div>
         </section>
         {shop_card}
         {self._setup_rerun_card(con)}
         {layout_card}
         {zoom_card}
         {printing_card}
-        <section class=card>
-          <h2>Version</h2>
-          <p>FleetSheet version <b>{html.escape(_ver)}</b>.</p>
-          <p class=mute>This is the version currently running. Update checks run only from this card, when the button is used.</p>
-          {updates_inner}
-        </section>
         </div>
         """
 
@@ -6044,7 +6662,7 @@ class CoreViews:
             f"{s['n']} {s['name']}{' (optional)' if s['optional'] else ''} "
             f"{'\u2713' if s['done'] else '\u25cb'}" for s in chain)
         status = f"<div class='hint'>Setup: {named}</div>"
-        return tabs_admin("/setup") + f"""
+        return tabs_admin("/setup", con=con) + f"""
         <div class="card" style="max-width:560px">
           <span>Company setup is saved.</span>
           <b style="font-size:20px">{html.escape(c["name"] or "—")}</b>
@@ -6060,7 +6678,7 @@ class CoreViews:
         # is still the seeded example, mark it so the footer JS wipes it.
         _cname = html.escape(c['name'])
         _cex = ' data-example="YOUR COMPANY LLC"' if (c['name'] or '').strip().upper() == "YOUR COMPANY LLC" else ""
-        return tabs_admin("/setup") + chain_banner(con, "company") + """
+        return tabs_admin("/setup", con=con) + chain_banner(con, "company") + """
         <p class="mute" style="max-width:70ch">DBA is an optional trade name; printed documents use it where a trade name applies, otherwise the legal name. County is collected for tax only, not for mailing. The company logo is optional and prints on documents.</p>
         """ + f"""
         <form method=post action="/setup" id="setup-form" enctype="multipart/form-data">
@@ -6157,7 +6775,7 @@ class CoreViews:
         </script>
         {self._phone_block(con)}
         {self._crew_block(con)}
-        <p style="margin-top:8px"><button form="setup-form" class="big">Save setup</button></p>
+        <p style="margin-top:8px"><button form="setup-form" class="big">Save</button></p>
         """
 
     def _phone_block(self, con):
@@ -6230,21 +6848,25 @@ class CoreViews:
             except Exception:
                 return ""
         if edit:
-            head = (f"<p style='margin:0 0 8px'><b>Edit vendor</b> "
-                    f"<a href='/setup/vendors'>Cancel</a></p>")
+            head = "<p style='margin:0 0 8px'><b>Edit vendor</b></p>"
             form_open = "<div id=\"vendform\">"
-            btn = "Save vendor"
             hid = (f"<input type=hidden name=vendor_id "
                    f"value='{edit['vendor_id']}'>")
         else:
-            head = ("""<p style="margin:0 0 8px"><a class="btn" href="#" onclick="document.getElementById('vendform').style.display=document.getElementById('vendform').style.display=='none'?'block':'none';return false">+ New vendor</a></p>""")
-            form_open = "<div id=\"vendform\" style=\"display:none\">"
-            btn = "Add vendor"
+            # Build 'ae' rebuild (Phase 2): the new-vendor form stands
+            # open blank, like every other master editor — the
+            # display:none toggle door is gone. The explanation
+            # paragraph is gone with it (page copy rule; the Setup
+            # tab caption above the block carries the register).
+            head = ""
+            form_open = "<div id=\"vendform\">"
             hid = ""
+        _vrow = self._btn_row(
+            "Save",
+            extra='<a class="btn secondary" href="/setup/vendors">Close</a>')
         return head + f"""
         {form_open}
         <form method=post action="/setup/vendors" style="margin-top:8px" class="card">
-          <p class="mute" style="margin:0 0 6px">Outside vendors and services for repairs, inspections, and rentals — record the name, the person to ask for, and what each vendor is for.</p>
           {hid}
           <div class="frow">
             <div style="flex:1 1 160px"><label>Name</label><input name=name maxlength=80 required placeholder="Acme Load Testing" value="{_ev('name')}"></div>
@@ -6255,8 +6877,8 @@ class CoreViews:
             <div style="flex:1 1 160px"><label>Email</label><input name=email maxlength=80 value="{_ev('email')}"></div>
             <div style="flex:2 1 200px"><label>What For</label><input name=specialties maxlength=120 placeholder="load tests, sling inspections" value="{_ev('specialties')}"></div>
             <div style="flex:2 1 200px"><label>Notes</label><input name=notes maxlength=200 value="{_ev('notes')}"></div>
-            <div style="align-self:end"><button class="secondary">{btn}</button></div>
           </div>
+          {_vrow}
         </form>
         </div>
         """ + self._view_door("/setup/vendors/all", "Vendors — all")
@@ -6281,7 +6903,7 @@ class CoreViews:
             f"<a class='btn secondary' style='padding:2px 8px' href='/setup/vendors?edit={v['vendor_id']}'>Edit</a> "
             f"<form method=post action='/setup/vendors/del' style='display:inline;margin:0'>"
             f"<input type=hidden name=vendor_id value='{v['vendor_id']}'>"
-            f"<button type=submit class='secondary'>Remove</button></form></td></tr>"
+            f"<button type=submit class='secondary' style='padding:2px 8px'>Remove</button></form></td></tr>"
             for v in rows)
         return f"""
         <p class="hint"><input id="auditq" placeholder="Filter" size="30"
@@ -6605,7 +7227,7 @@ class CoreViews:
           <div class="row" style="align-items:end">
             <div><label>Save this build <span class="hint">(name it to reuse later)</span></label>
               <input name=label maxlength=60 placeholder="e.g. Open Rental Tickets for the Monday meeting"></div>
-            <div><button type=submit formmethod=post formaction="/export/custom/save" class="secondary">Save build</button></div>
+            <div><button type=submit formmethod=post formaction="/export/custom/save" class="secondary">Save</button></div>
           </div>
         </form>
         """
@@ -6664,7 +7286,7 @@ class CoreViews:
           <p class="hint">Where</p>
           <p class="actions">
             <button type=submit formmethod=get formaction="/export/run" >Download</button>
-            <button type=submit formmethod=post formaction="/export/run" class="secondary" >Save to backup folder</button>
+            <button type=submit formmethod=post formaction="/export/run" class="secondary" >Save</button>
           </p>
           <div class="row" style="align-items:end">
             <div><label>Save these four choices as a preset <span class="hint">(optional — name it to reuse later)</span></label>

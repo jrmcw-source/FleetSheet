@@ -112,10 +112,12 @@ class AccountingViews(CoreViews):
     """FleetSheet views views mixed into Handler."""
 
     def _btn_row(self, save_label="Save", jobpop=None, add_item=False, extra="",
-                 submit_name="", submit_value="", print_menu=None):
+                 submit_name="", submit_value="", print_menu=None,
+                 edit_pop=None):
         from views_core import CoreViews
         return CoreViews._btn_row(self, save_label, jobpop, add_item, extra,
-                                  submit_name, submit_value, print_menu)
+                                  submit_name, submit_value, print_menu,
+                                  edit_pop)
 
     def _top_commit(self, label, name="", value=""):
         from views_core import CoreViews
@@ -141,11 +143,15 @@ class AccountingViews(CoreViews):
             inv = dict(inv)
             inv["customer_id"] = (engine.cust_code(con, inv["customer_id"])
                                   or "")
-            if engine.invoice_locked(con, edit_ino):
-                return (f"<p>Invoice {html.escape(edit_ino)} is locked (sent, paid, "
-                        f"or has payments) and can't be edited here. "
-                        f"<a href=\"/invoice/{html.escape(edit_ino, quote=True)}\">"
-                        f"Open the invoice</a>.</p>")
+            # Void-and-revise (build 'ab', Jason 2026-10-26): an
+            # existing invoice's form opens LOCKED — the record,
+            # viewable and printable, its Edit door starting the
+            # revision flow — unless it IS a fresh revision under
+            # its session marker, when it opens unlocked as the
+            # revision's own editor. The old invoice_locked refusal
+            # page is superseded by the locked render.
+            inv_mode = ("session" if engine.revision_pending(
+                con, "invoice", inv["id"]) else "locked")
         ready = con.execute(
             """SELECT t.ticket_id, t.customer_id, c.account_name, a.unit_no, t.in_condition
                FROM tickets t JOIN customers c ON c.id = t.customer_id
@@ -329,6 +335,10 @@ class AccountingViews(CoreViews):
             else:
                 pick_section = ""
             editing_hidden = '<input type=hidden name=editing value="1">'
+            if inv_mode == "session":
+                editing_hidden += (
+                    f'<input type=hidden name=edit_target '
+                    f'value="{html.escape(inv_no, quote=True)}">')
             tax_pct = f"{_invf('tax_rate') * 100:g}"
             job_vals = {"po": self._g(inv, "po"),
                         "contact_name": self._g(inv, "contact_name")}
@@ -389,6 +399,27 @@ class AccountingViews(CoreViews):
         # display-only Contact Name span is removed — it was never an
         # input; the popup's Contact Name field is the live one the
         # save reads.
+        # Build 'am' (Jason 2026-10-28): the Transport suggestions
+        # carry the haulers' own names — the company's dba/name,
+        # and the invoice's customer's name when one stands on the
+        # form. Free typing stands for any other carrier.
+        _ship_opts = ""
+        _co_tr = self.desk(con)
+        if _co_tr:
+            _ship_opts += (f'<option value="'
+                           f'{html.escape(_co_tr, quote=True)} Transport">'
+                           f'</option>')
+        if inv is not None:
+            # inv["customer_id"] carries the customer's CODE on
+            # this form (converted at load, build 'v').
+            _cr = con.execute(
+                "SELECT account_name FROM customers WHERE customer_id=?",
+                (inv["customer_id"],)).fetchone()
+            if _cr and _cr["account_name"]:
+                _ship_opts += (
+                    f'<option value="'
+                    f'{html.escape(_cr["account_name"], quote=True)} '
+                    f'Transport"></option>')
         _inv_extra = f"""
             <div class="row">
               <div><label>Reference Ticket</label><input name=ref_ticket class=w-sm placeholder="Optional"{ref_attr}></div>
@@ -396,10 +427,10 @@ class AccountingViews(CoreViews):
             </div>
             <div class="row">
               <div><label>Header bar note</label><input name=bar_text placeholder="Header note"{bar_attr}></div>
-              <div><label>Transport</label><input name=shipped_by list="inv-shipped-by" placeholder="Customer, company, or carrier…"{ship_attr}><datalist id="inv-shipped-by"><option value="Customer Transport"></option><option value="Company Transport"></option></datalist></div>
+              <div><label>Transport</label><input name=shipped_by list="inv-shipped-by" placeholder="Customer, company, or carrier…"{ship_attr}><datalist id="inv-shipped-by">{_ship_opts}</datalist></div>
             </div>"""
         _inv_doc = (f'Invoice # <a href="/invoice/{inv_no}">{inv_no}</a>'
-                    if inv is not None else
+                    if inv is not None and inv_mode == "locked" else
                     f'Invoice # <input name=invoice_no value="{inv_no}" class=w-xs>')
         _inv_date = f'<label>Date</label> <input type=date name=invoice_date value="{date_val}" class=w-sm>'
         _inv_cust = ('<div style="font-size:10px;color:#5C6B7A;'
@@ -444,9 +475,11 @@ class AccountingViews(CoreViews):
           </div>
           <div><label>Notes</label><input name=notes style="width:100%"></div>
           {pick_section}
-          {self._btn_row("Save", "invjobpop", add_item=True, submit_name="action", submit_value="save", print_menu=(self._print_menu(screen=f"/print/invoice/{inv_no}", pdf=f"/print/invoice/{inv_no}.pdf") if inv is not None else None))}
+          {self._btn_row(None, "invjobpop", add_item=False, edit_pop="revpop", print_menu=self._print_menu(screen=f"/print/invoice/{inv_no}", pdf=f"/print/invoice/{inv_no}.pdf")) if inv is not None and inv_mode == "locked" else self._btn_row("Save", "invjobpop", add_item=True, submit_name="action", submit_value="save", print_menu=(self._print_menu(screen=f"/print/invoice/{inv_no}", pdf=f"/print/invoice/{inv_no}.pdf") if inv is not None else None))}
           {self._job_info_popup('invjobpop', job_vals, _inv_extra)}
+          {self._revise_popup(con, "invoice", inv_no) if inv is not None and inv_mode == "locked" else ""}
         </form>
+        {self._LOCK_JS if inv is not None and inv_mode == "locked" else ""}
         {self._view_row("/money/invoices/audit", "Invoices")}
         <script>
         (function(){{var box=document.getElementById('inv-lines'); if(!box)return; var form=box.closest('form');
@@ -521,13 +554,13 @@ class AccountingViews(CoreViews):
 
     def _money_tab(self, con, tab, q):
         if tab == "pay":
-            body = self._money_pay(con)
+            body = self._money_pay(con, q)
             view_url, view_title = "/money/payments/audit", "Payments — audit"
         elif tab == "credit":
             body = self._money_credit(con, q)
             view_url, view_title = "/money/credits/audit", "Credit memos — audit"
         elif tab == "cash":
-            body = self._money_cash(con)
+            body = self._money_cash(con, q)
             view_url, view_title = "/money/cash/audit", "Cash — audit"
         else:
             body = self._money_picture(con)
@@ -579,9 +612,22 @@ class AccountingViews(CoreViews):
             "</div>")
         return ticker + picture
 
-    def _money_pay(self, con):
+    def _money_pay(self, con, q=None):
         ticker = ''
-        return ticker + self._frag_pay_form(con)
+        # Build 'ai' (Jason 2026-10-28): a money summary's Payment
+        # button lands here with doc=<kind>:<ref> — the form opens
+        # with that record prefilled as the allocation target.
+        # Kinds are the engine's payable kinds; anything else is
+        # ignored and the blank form stands.
+        _doc = ((q or {}).get("doc") or "").strip()
+        _pk, _, _pr = _doc.partition(":")
+        prefill = ((_pk, _pr.strip())
+                   if _pk in engine.PAYABLE_KINDS and _pr.strip()
+                   else None)
+        return ticker + self._frag_pay_form(
+            con, edit_batch=((q or {}).get("edit") or "").strip() or None,
+            rev_batch=((q or {}).get("rev") or "").strip() or None,
+            prefill=prefill)
 
     def _money_credit(self, con, q):
         ticker = ''
@@ -599,9 +645,10 @@ class AccountingViews(CoreViews):
         # it carries the Admin sub-tab row with Administration lit
         # (Jason 2026-10-24). The fragment is chrome-less by design.
         tabs = "" if frag else tabs_admin("/petty")
-        return tabs + self._money_petty(con, frag=frag)
+        return tabs + self._money_petty(
+            con, frag=frag, edit_no=(q or {}).get("edit"))
 
-    def _money_petty(self, con, frag=False):
+    def _money_petty(self, con, frag=False, edit_no=None):
         ticker = ''
         book = engine.petty_book(con)
         # Fragment mode (the Admin popup iframe) has no page bundle:
@@ -617,15 +664,16 @@ class AccountingViews(CoreViews):
             "onclick=\"document.getElementById('floatpop').style.display='none'\">Close</button>"
             if frag else
             "<button type='button' class='mini' onclick='refreshFloatpop()'>Refresh</button>"
+            "<button type='button' class='mini' onclick='wpopPrint()'>Print</button>"
             "<button type='button' class='mini' onclick='closeFloatpop()'>Close</button>")
         # Slim strip, no company band — the popup bar already titles
         # the drawer, and the full page's title does the same.
         header = (
             "<div style=\"display:flex;flex-wrap:wrap;gap:24px\">"
             + "<div style=\"margin-left:auto;text-align:right\">"
-            + ("<p class='actions' style='margin:0 0 6px'><a class='btn secondary' href='/print/petty' target='_blank' rel='noopener'>Print</a></p>" if not frag else "")
+            + (f"<p class='actions' style='margin:0 0 6px'>{self._print_menu(screen='/print/petty', pdf='/print/petty.pdf')}</p>" if not frag else "")
             + "<div style=\"font-size:10px;color:#5C6B7A;text-transform:uppercase\">Next entry</div>"
-            + f"<div style=\"font-size:20px;font-weight:700\">{html.escape(engine.next_pc_id(con))}</div>"
+            + f"<div style=\"font-size:20px;font-weight:700\">{html.escape(engine.peek_pc_id(con))}</div>"
             + f"<div>{html.escape(fmt_date(date.today()))}</div>"
             + "</div></div>")
         cards = (
@@ -646,21 +694,44 @@ class AccountingViews(CoreViews):
         # contents lived solely on the audit page. A drawer shows
         # what's in the drawer. Same rows as the audit register,
         # filterable + sortable like every audit table.
-        _reg_rows = "".join(
-            f"<tr><td>{html.escape(fmt_date(r['txn_date']))}</td>"
-            f"<td>{html.escape(r['direction'])}</td>"
-            f"<td>{html.escape(r['category'])}</td>"
-            f"<td>{html.escape(r['payee'])}</td>"
-            f"<td>${r['signed']:,.2f}</td><td>${r['running']:,.2f}</td>"
-            f"<td>{html.escape(r['ref_no'])}</td><td>{note_pop_html(r['notes'])}</td></tr>"
-            for r in book["rows"])
+        def _petty_row(r):
+            # Build 'ab' (redirect #2): the register shows the
+            # entry's number; live rows carry the Edit door to the
+            # entry's own form; a voided row shows the chain and no
+            # running figure (its money stands in its revision).
+            _run = (f"${r['running']:,.2f}"
+                    if r["running"] is not None else "—")
+            _door = ""
+            _state = ""
+            if r.get("revised_by_id"):
+                _head = con.execute(
+                    "SELECT pc_id FROM petty_cash WHERE id=?",
+                    (r["revised_by_id"],)).fetchone()
+                _state = (" — Void, revised by "
+                          + (_head[0] if _head else "")
+                          + (f": {r['void_reason']}" if r["void_reason"] else "")
+                          + (f" ({r['void_by']})" if r["void_by"] else ""))
+            else:
+                _door = (f"<br><a href='/petty?edit="
+                         f"{html.escape(r['pc_id'], quote=True)}'"
+                         f"{' target=_top' if frag else ''}>Edit</a>")
+            return (
+                f"<tr><td>{html.escape(fmt_date(r['txn_date']))}</td>"
+                f"<td>{html.escape(r['pc_id'])}{_door}</td>"
+                f"<td>{html.escape(r['direction'])}</td>"
+                f"<td>{html.escape(r['category'])}</td>"
+                f"<td>{html.escape(r['payee'])}</td>"
+                f"<td>${r['signed']:,.2f}</td><td>{_run}</td>"
+                f"<td>{html.escape(r['ref_no'])}</td>"
+                f"<td>{note_pop_html(r['notes'])}{html.escape(_state)}</td></tr>")
+        _reg_rows = "".join(_petty_row(r) for r in book["rows"])
         register = (
             "<h2 style=\"font-size:16px;color:var(--frame)\">Petty cash register</h2>"
             "<p class=\"hint\"><input id=\"auditq\" placeholder=\"Filter\" size=\"30\" "
             "oninput=\"document.querySelectorAll('table.audit').forEach(t=>auditFilter(t,this.value))\"></p>"
-            "<table class=\"audit\"><tr><th>Date</th><th>Dir</th><th>Category</th><th>Payee</th>"
+            "<table class=\"audit\"><tr><th>Date</th><th>No.</th><th>Dir</th><th>Category</th><th>Payee</th>"
             "<th>Amount</th><th>Running</th><th>Ref</th><th>Notes</th></tr>"
-            f"{_reg_rows or '<tr><td colspan=8>Empty box.</td></tr>'}</table>")
+            f"{_reg_rows or '<tr><td colspan=9>Empty box.</td></tr>'}</table>")
         done = self._view_door("/petty/audit", "Petty cash — audit",
                                links=frag)
         scripts = AUDIT_TABLE_JS
@@ -676,13 +747,50 @@ class AccountingViews(CoreViews):
             # the Phase 3/4 health-care walk, 2026-10-24). Any
             # fragment carrying data-combo inputs must carry it.
             scripts += AUDIT_POPUP_HTML + AUDIT_POPUP_JS + NOTE_POPUP_JS + COMBO_JS
-        return ticker + header + cards + self._frag_petty_form(con, frag=frag) + register + done + scripts
+        return ticker + header + cards + self._frag_petty_form(con, frag=frag, edit_no=edit_no) + register + done + scripts
 
-    def _money_cash(self, con):
-        return self._frag_cash_form(con) + self._cash_list_html(con)
+    def _money_cash(self, con, q=None):
+        return (self._frag_cash_form(con, (q or {}).get("edit"))
+                + self._cash_list_html(con))
 
-    def _frag_cash_form(self, con):
+    def _frag_cash_form(self, con, edit_no=None):
+        # Build 'ab' (redirect #2): a loaded cash entry opens LOCKED
+        # like every posted document; Edit starts its revision; the
+        # session Save completes it through record_cash_entry's own
+        # path (complete_cash_revision). A new entry's number field
+        # carries the generated default, overwritable.
         today = date.today().isoformat()
+        mode = "new"
+        vals = {}
+        erow = None
+        if edit_no:
+            erow = next(
+                (r for r in engine.list_cash_entries(con)
+                 if r.get("entry_no") == edit_no), None)
+            if erow is None:
+                return (f"<p class='card'>Cash entry {html.escape(edit_no)} "
+                        f"is not on record.</p>")
+            if erow.get("revised_by_id"):
+                _head = con.execute(
+                    "SELECT entry_no FROM cash_entries WHERE entry_id=?",
+                    (erow["revised_by_id"],)).fetchone()
+                _hn = _head[0] if _head else ""
+                return (
+                    f"<p class='card'>Cash entry {html.escape(edit_no)} was "
+                    f"voided — revised as "
+                    f"<a href='/money?tab=cash&edit={html.escape(_hn, quote=True)}'>"
+                    f"{html.escape(_hn)}</a>, the live entry at the head "
+                    f"of its chain.</p>")
+            vals = erow
+            mode = ("session" if engine.revision_pending(
+                con, "cash", erow["entry_id"]) else "locked")
+
+        def _mark(opts, value):
+            if value:
+                opts = opts.replace(
+                    f"value='{html.escape(str(value), quote=True)}'",
+                    f"value='{html.escape(str(value), quote=True)}' selected", 1)
+            return opts
         custs = con.execute(
             "SELECT customer_id, account_name FROM customers "
             "ORDER BY account_name").fetchall()
@@ -728,6 +836,19 @@ class AccountingViews(CoreViews):
         method_opts = "".join(
             f"<option>{html.escape(m)}</option>"
             for m in engine.CASH_ENTRY_METHODS)
+        if vals:
+            cust_opts = _mark(cust_opts, vals.get("customer_id"))
+            inv_opts = _mark(inv_opts, vals.get("invoice_no"))
+            wo_opts = _mark(wo_opts, vals.get("wo_no"))
+            tick_opts = _mark(tick_opts, vals.get("ticket_id"))
+            sale_opts = _mark(sale_opts, vals.get("sale_group"))
+            quote_opts = _mark(quote_opts, vals.get("quote_no"))
+            co_opts = _mark(co_opts, vals.get("co_no"))
+            asset_opts = _mark(asset_opts, vals.get("asset_id"))
+            if vals.get("method"):
+                method_opts = method_opts.replace(
+                    f"<option>{html.escape(vals['method'])}</option>",
+                    f"<option selected>{html.escape(vals['method'])}</option>", 1)
         # Optional line breakdown (Jason 2026-10-23; generalized the
         # same day): against any attachment, the entry may be broken
         # down by that document's lines — one hidden block per
@@ -772,8 +893,21 @@ class AccountingViews(CoreViews):
                 "ORDER BY co_no DESC"):
             _cash_block("change", r[0])
         cash_blocks_html = "".join(cash_blocks)
+        _eno_val = (vals.get("entry_no") if vals
+                    else engine.peek_cash_entry_no(con))
+        _dir_in = " selected" if vals.get("direction") == "in" else ""
+        _dir_out = " selected" if vals.get("direction") == "out" else ""
+        _row = (self._btn_row(None, edit_pop="revpop")
+                if mode == "locked" else self._btn_row("Save"))
+        _revpop = (self._revise_popup(con, "cash", vals["entry_no"])
+                   if mode == "locked" else "")
+        _hidden = (f"<input type=hidden name=edit_target "
+                   f"value=\"{html.escape(vals['entry_no'], quote=True)}\">"
+                   if mode == "session" else "")
+        _lock = self._LOCK_JS if mode == "locked" else ""
         return f"""
         <form method=post action="/cash/save">
+          {_hidden}
           <!-- Compact (Jason 2026-10-24, screenshot read): the old
                2-col .row grid gave every field half the screen — a
                3-character Direction select sat in a half-screen track.
@@ -781,28 +915,31 @@ class AccountingViews(CoreViews):
                whole entry form is three short rows, not a tall stack.
                Field order and names unchanged. -->
           <div class="frow">
-            <div><label>Date</label><input type=date name=entry_date value="{today}" required class=w-sm></div>
-            <div><label>Direction</label><select name=direction class=w-xs><option value="in">In</option><option value="out">Out</option></select></div>
+            <div><label>Entry #</label><input name=entry_no value="{html.escape(_eno_val or '', quote=True)}" class=w-sm></div>
+            <div><label>Date</label><input type=date name=entry_date value="{vals.get('entry_date') or today}" required class=w-sm></div>
+            <div><label>Direction</label><select name=direction class=w-xs><option value="in"{_dir_in}>In</option><option value="out"{_dir_out}>Out</option></select></div>
             <div><label>Method</label><select name=method class=w-sm>{method_opts}</select></div>
-            <div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div>
+            <div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm value="{vals.get('amount') or ''}"></div>
           </div>
           <div class="frow">
             <div style="flex:1 1 240px"><label>Customer</label><select name=customer_id><option value="">— From attachment —</option>{cust_opts}</select></div>
             <div><label>Asset</label><select name=asset_id class=w-sm><option value="">—</option>{asset_opts}</select></div>
-            <div style="flex:1 1 240px"><label>Notes</label><input name=notes></div>
+            <div style="flex:1 1 240px"><label>Notes</label><input name=notes value="{html.escape(vals.get('notes') or '', quote=True)}"></div>
           </div>
           <div class="frow">
             <div><label>Quote #</label><select name=quote_no class=w-sm><option value="">—</option>{quote_opts}</select></div>
             <div><label>Invoice #</label><select name=invoice_no class=w-sm><option value="">—</option>{inv_opts}</select></div>
-            <div><label>WO #</label><select name=wo_no class=w-sm><option value="">—</option>{wo_opts}</select></div>
+            <div><label>Work Order #</label><select name=wo_no class=w-sm><option value="">—</option>{wo_opts}</select></div>
             <div><label>Rental Ticket #</label><select name=ticket_id class=w-sm><option value="">—</option>{tick_opts}</select></div>
-            <div><label>Sale #</label><select name=sale_group class=w-sm><option value="">—</option>{sale_opts}</select></div>
+            <div><label>Sales Ticket #</label><select name=sale_group class=w-sm><option value="">—</option>{sale_opts}</select></div>
             <div><label>Change Order #</label><select name=co_no class=w-sm><option value="">—</option>{co_opts}</select></div>
           </div>
-          <p class="hint">Attach: one of Invoice / WO / Rental Ticket / Quote / Sale / Change Order</p>
+          <p class="hint">Attach: one of Invoice / WO / Rental Ticket / Quote / Sales Ticket / Change Order</p>
           {cash_blocks_html}
-          {self._btn_row("Save")}
+          {_row}
+          {_revpop}
         </form>
+        {_lock}
         <script>
         (function(){{
           var form = document.querySelector('form[action="/cash/save"]');
@@ -833,13 +970,26 @@ class AccountingViews(CoreViews):
 
     def _cash_list_html(self, con):
         entries = engine.list_cash_entries(con)
+        # Build 'ab' (redirect #2): totals read the chain heads — a
+        # voided entry's money stands in its revision, not twice.
         total_in = sum(float(e["amount"]) for e in entries
-                       if e["direction"] == "in")
+                       if e["direction"] == "in"
+                       and not e.get("revised_by_id"))
         total_out = sum(float(e["amount"]) for e in entries
-                        if e["direction"] == "out")
+                        if e["direction"] == "out"
+                        and not e.get("revised_by_id"))
         def _cash_row(e):
+            # The register's identifier is the entry's operator
+            # number (entry_no, build 'ab'); pre-'ab' the raw
+            # entry_id stood here. Live rows carry the Edit door to
+            # the entry's own form; voided rows show the chain.
+            _eno = e.get("entry_no") or str(e["entry_id"])
+            _door = ""
+            if not e.get("revised_by_id"):
+                _door = (f"<br><a href='/money?tab=cash&edit="
+                         f"{html.escape(_eno, quote=True)}'>Edit</a>")
             row = (
-                f"<tr><td>{e['entry_id']}</td>"
+                f"<tr><td>{html.escape(_eno)}{_door}</td>"
                 f"<td>{html.escape(fmt_date(e['entry_date']))}</td>"
                 f"<td>{html.escape(e['method'])}</td>"
                 f"<td>{html.escape(e['account_name'] or e['customer_id'] or '')}</td>"
@@ -855,6 +1005,21 @@ class AccountingViews(CoreViews):
             _al = engine.list_payment_allocations(
                 con, cash_entry_id=e["entry_id"], source="cash")
             _segs = []
+            # Chain state (build 'ab', redirect #2): a voided entry
+            # names its revision + the signed void; a revision names
+            # the entry it revises.
+            if e.get("revised_by_id") or e.get("revises_id"):
+                _ci = engine.revision_info(con, "cash", e)
+                if _ci["revised_by"]:
+                    _seg = f"Void — revised by {_ci['revised_by']}"
+                    if _ci["reason"]:
+                        _seg += f": {_ci['reason']}"
+                    if _ci["by"]:
+                        _seg += f" ({_ci['by']})"
+                    _segs.append(html.escape(_seg))
+                elif _ci["revision_of"]:
+                    _segs.append(html.escape(
+                        f"Revision of {_ci['revision_of']}"))
             if e.get("settle_pay_id"):
                 _segs.append(
                     f"Settles {html.escape(e['attached'] or '')} — "
@@ -925,9 +1090,17 @@ class AccountingViews(CoreViews):
         <h2 style="font-size:16px;color:var(--frame)">Also on record</h2>
         <table><tr><th>ID</th><th>Date</th><th>Method</th><th>Customer</th><th>Attached</th><th>Dir</th><th>Amount</th><th colspan=2>Source</th></tr>
         {''.join(also)}</table>"""
+        # Print (build 'aa', 2026-10-26, WS7 — Jason: "we need to
+        # print everything that can be seen"): the register carries
+        # the page print menu beside its heading, the universal
+        # position for a list on a page. The Cash ENTRY form above
+        # keeps its own button-row Print (the form grammar) — the
+        # two print different things: the form prints the entry
+        # being keyed, this menu prints the register page.
+        _reg_print = self._print_menu(page=True)
         return f"""
-        <h2 style="font-size:16px;color:var(--frame)">Cash entries</h2>
-        <table><tr><th>ID</th><th>Date</th><th>Method</th><th>Customer</th><th>Attached</th><th>Dir</th><th>Amount</th><th>Asset</th><th>Input by:</th></tr>
+        <h2 style="font-size:16px;color:var(--frame)">Cash entries <span style="float:right">{_reg_print}</span></h2>
+        <table><tr><th>Entry #</th><th>Date</th><th>Method</th><th>Customer</th><th>Attached</th><th>Dir</th><th>Amount</th><th>Asset</th><th>Input by:</th></tr>
         {rows or '<tr><td colspan=9>No cash entries yet.</td></tr>'}{total_row}</table>
         {also_html}
         """
@@ -1245,21 +1418,37 @@ class AccountingViews(CoreViews):
 
     def view_money_petty_audit(self, con):
         book = engine.petty_book(con)
-        rows = "".join(
-            f"<tr><td>{html.escape(fmt_date(r['txn_date']))}</td>"
-            f"<td>{html.escape(r['direction'])}</td>"
-            f"<td>{html.escape(r['category'])}</td>"
-            f"<td>{html.escape(r['payee'])}</td>"
-            f"<td>${r['signed']:,.2f}</td><td>${r['running']:,.2f}</td>"
-            f"<td>{html.escape(r['ref_no'])}</td><td>{note_pop_html(r['notes'])}</td></tr>"
-            for r in book["rows"])
+        def _arow(r):
+            # Build 'ab' (redirect #2): the audit register carries
+            # the entry number + the chain, same as the drawer.
+            _run = (f"${r['running']:,.2f}"
+                    if r["running"] is not None else "—")
+            _state = ""
+            if r.get("revised_by_id"):
+                _head = con.execute(
+                    "SELECT pc_id FROM petty_cash WHERE id=?",
+                    (r["revised_by_id"],)).fetchone()
+                _state = (" — Void, revised by "
+                          + (_head[0] if _head else "")
+                          + (f": {r['void_reason']}" if r["void_reason"] else "")
+                          + (f" ({r['void_by']})" if r["void_by"] else ""))
+            return (
+                f"<tr><td>{html.escape(fmt_date(r['txn_date']))}</td>"
+                f"<td>{html.escape(r['pc_id'])}</td>"
+                f"<td>{html.escape(r['direction'])}</td>"
+                f"<td>{html.escape(r['category'])}</td>"
+                f"<td>{html.escape(r['payee'])}</td>"
+                f"<td>${r['signed']:,.2f}</td><td>{_run}</td>"
+                f"<td>{html.escape(r['ref_no'])}</td>"
+                f"<td>{note_pop_html(r['notes'])}{html.escape(_state)}</td></tr>")
+        rows = "".join(_arow(r) for r in book["rows"])
         return f"""
         <p class="hint"><input id="auditq" placeholder="Filter" size="30"
         oninput="document.querySelectorAll('table.audit').forEach(t=>auditFilter(t,this.value))">
         </p>
         <h2>Petty Cash Register</h2>
-        <table class="audit"><tr><th>Date</th><th>Dir</th><th>Category</th><th>Payee</th><th>Amount</th><th>Running</th><th>Ref</th><th>Notes</th></tr>
-        {rows or '<tr><td colspan=8>Empty box.</td></tr>'}</table>
+        <table class="audit"><tr><th>Date</th><th>No.</th><th>Dir</th><th>Category</th><th>Payee</th><th>Amount</th><th>Running</th><th>Ref</th><th>Notes</th></tr>
+        {rows or '<tr><td colspan=9>Empty box.</td></tr>'}</table>
         """ + AUDIT_TABLE_JS
 
     def view_quote_form(self, con, qno, bare=False):
@@ -1274,8 +1463,16 @@ class AccountingViews(CoreViews):
         # preview is display-only; two open new-quote tabs can never
         # overwrite each other by submitting the same previewed number.
         if not qno:
-            qno = engine.peek_next_doc(con, "next_quote", "QT", "quotes", "quote_no")
+            qno = engine.peek_next_doc(con, "next_quote", engine.doc_prefix(con, "quote"), "quotes", "quote_no", floor=engine.doc_number_floor("quote"))
         q = pack["q"] if pack else {}
+        # Void-and-revise (build 'ab'): an existing quote's form
+        # opens LOCKED (the record) unless it is a fresh revision
+        # under its session marker — then it is the revision's own
+        # editor, its number an editable free-text field.
+        q_mode = None
+        if pack:
+            q_mode = ("session" if engine.revision_pending(
+                con, "quote", dict(q).get("id")) else "locked")
         lines = pack["lines"] if pack else []
         # New quotes default to ONE blank line row (2026-10-16); Add Item
         # adds more. Edits render every saved line (backend takes k0..k7).
@@ -1362,7 +1559,7 @@ class AccountingViews(CoreViews):
             convert = f"""<form method=post action="/quote/{html.escape(qno)}/convert">
               <label>On-Rent for New Reserved Rental Tickets</label>
               <input type=date name=on_rent value="{today}">
-              <p><button>Convert Rental Lines to Rental Tickets</button></p>
+              <p><button>Save</button></p>
             </form>"""
         status_form = (
             f"""<form method=post action="/quote/{html.escape(qno)}/status">{st_btns}</form>"""
@@ -1420,9 +1617,11 @@ class AccountingViews(CoreViews):
         )
         # Build 'u' (Jason 2026-10-25, universal summary pattern;
         # disposes of PHASET JC-T4): the money panel no longer stands
-        # below this form — a live quote's money is worked from its
-        # summary's Payment popup, and a closed quote's money block
-        # states there as a fact. The form keeps its own work only.
+        # below this form. Build 'ag' (Jason 2026-10-28) took the
+        # summary's Payment popup as well: a live quote's money is
+        # worked on the Cash tab and the Credit Memoranda tab, and
+        # its summary states the money block as a fact only. The
+        # form keeps its own work only.
         money_panel = ""
         # Header zone (build 'r', Jason 2026-10-25, facelift item 4;
         # two-row form build 't', same day, universal form law):
@@ -1437,10 +1636,11 @@ class AccountingViews(CoreViews):
         # site_id and silently cleared the quote's site; the popup
         # is its home under the law and the field works again. The
         # Input by line and the linked-documents block (information)
-        # ride in the popup as read-only lines. The status buttons
-        # and the convert form (actions) move into their own popups
-        # below the form (the universal off-form pattern); the money
-        # panel stays — a working section, flagged in PHASET-REPORT.
+        # ride in the popup as read-only lines. (Build 'ac',
+        # 2026-10-27: the status buttons and convert form that
+        # builds 't'–'ab' carried in popups below this form are
+        # removed — defect C-3; the work stands on the Quote
+        # summary's doors.)
         _q_extra = (
             f'<div class="row">'
             f'<div><label>Valid Until</label><input type=date name=valid_until value="{html.escape(valid_until)}" class=w-sm></div>'
@@ -1455,26 +1655,16 @@ class AccountingViews(CoreViews):
                         ("Job Name", q.get("job_name") or ""),
                         ("AFE #", q.get("afe") or ""),
                         ("Contact Name", q.get("contact_name") or "")]
-        _q_doors = ""
-        _q_popups = ""
-        if status_form or convert:
-            _doors = ""
-            if status_form:
-                _doors += ('<button type="button" class="vbtn" '
-                           'onclick="document.getElementById(\'qstatpop\').style.display=\'block\'">Status</button> ')
-                _q_popups += (
-                    f'<div id="qstatpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">'
-                    f'<h3 style="margin-top:0">Status <span style="float:right"><button type="button" onclick="document.getElementById(\'qstatpop\').style.display=\'none\'">Close</button></span></h3>'
-                    f'{status_form}</div>')
-            if convert:
-                _doors += ('<button type="button" class="vbtn" '
-                           'onclick="document.getElementById(\'qconvpop\').style.display=\'block\'">Convert</button> ')
-                _q_popups += (
-                    f'<div id="qconvpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">'
-                    f'<h3 style="margin-top:0">Convert <span style="float:right"><button type="button" onclick="document.getElementById(\'qconvpop\').style.display=\'none\'">Close</button></span></h3>'
-                    f'{convert}</div>')
-            _q_doors = f'<div class="viewrow">{_doors}</div>'
-        _q_doc = (f'Quote # <input value="{html.escape(qno)}" disabled class=w-xs>'
+        # Build 'ac' (Jason 2026-10-27, defect C-3): the under-form
+        # door row this block used to build (Status / Convert in a
+        # .viewrow after </form>, with its own copies of the two
+        # popups) is REMOVED — Status and Convert work stands on
+        # the Quote summary's doors, where it already stands. The
+        # status_form / convert forms above are no longer rendered
+        # here; the summary builds its own.
+        _q_doc = (f'Quote # <input name=quote_no value="{html.escape(qno)}" class=w-xs>'
+                  if q_mode == "session" else
+                  f'Quote # <input value="{html.escape(qno)}" disabled class=w-xs>'
                   if pack else
                   f'Quote # <input name=quote_no value="{html.escape(qno)}" class=w-xs>')
         _q_date = (f'<label>Date</label> <input type=date name=quote_date '
@@ -1483,7 +1673,8 @@ class AccountingViews(CoreViews):
                    'text-transform:uppercase">Billing Address</div>' + qcust_combo)
         return ("" if bare else tabs_quotes("/quotes")) + f"""
         <form method=post action="/quote/save" enctype="multipart/form-data">
-          {f'<input type=hidden name=quote_no value="{html.escape(qno)}">' if pack else ''}
+          {f'<input type=hidden name=quote_no value="{html.escape(qno)}">' if pack and q_mode != "session" else ''}
+          {f'<input type=hidden name=edit_target value="{html.escape(qno, quote=True)}">' if q_mode == "session" else ''}
           {self._form_head(con, _q_doc, _q_date, _q_cust, _q_job_lines)}
           <style>.lineitem-row label{{margin:4px 0 2px}}.lineitem-row{{margin-bottom:2px}}</style>
           <div id="quote-lines">
@@ -1496,11 +1687,11 @@ class AccountingViews(CoreViews):
             <div style="text-align:center">*taxes not included*</div>
             <div id="quote-total" style="text-align:right;font-weight:700;color:var(--frame)">Total: $0.00</div>
           </div>
-          {self._btn_row("Save", "qjobpop", add_item=True)}
+          {self._btn_row(None, "qjobpop", add_item=False, edit_pop="revpop") if q_mode == "locked" else self._btn_row("Save", "qjobpop", add_item=True)}
           {self._job_info_popup('qjobpop', {"po": q.get("po") or "", "job_name": q.get("job_name") or "", "afe": q.get("afe") or "", "contact_name": q.get("contact_name") or ""}, _q_extra)}
+          {self._revise_popup(con, "quote", qno) if q_mode == "locked" else ""}
         </form>
-        {_q_doors}
-        {_q_popups}
+        {self._LOCK_JS if q_mode == "locked" else ""}
         {"" if bare else self._view_row("/quotes/all", "Quotes")}
         <script>
         (function(){{var t=document.getElementById('quote-lines'); if(!t)return; function calc(){{var total=0; t.querySelectorAll('.qline').forEach(function(r){{var q=r.querySelector('.qqty'), rate=r.querySelector('.qrate'); if(!q||!rate)return; total+=(parseFloat(q.value)||0)*(parseFloat(rate.value)||0);}}); var el=document.getElementById('quote-total'); if(el)el.textContent='Total: $'+total.toFixed(2); }} t.addEventListener('input',calc); calc(); window.__quoteCalc=calc;}})();
@@ -1525,28 +1716,39 @@ class AccountingViews(CoreViews):
         quote totals (quoted = face, billed, variance — a quote's
         numbers are its own; build 'v' removed the change-order
         folding), its money figures, its linked documents — with
-        doors: Edit (to the form), Payment (the money panel in its
-        popup, while the quote's money is live), Status and Convert
+        doors: Edit (to the form), Status and Convert
         (the same popup forms the quote form carries), Print (the
-        quote's three-choice print), View (the Quotes list)."""
+        quote's three-choice print), View (the Quotes list).
+        Build 'ag' (Jason 2026-10-28): no Payment door stands on
+        this summary — money is worked on the Payment form.
+        Build 'ai' (Jason 2026-10-28, reversing 'ag'/'ah' at his
+        word): ONE small Payment button stands in the summary's
+        bottom row — navigation to the payment form with this
+        quote prefilled; no money is worked on the summary."""
         pack = engine.quote_pack(con, qno)
         if not pack:
             return tabs_quotes("/quotes") + "<p>Unknown quote.</p>"
         q = pack["q"]
         tot = pack["tot"]
-        lrows = "".join(
-            f"<tr><td>{html.escape(ln.get('kind') or '')}</td>"
-            f"<td>{html.escape(ln.get('item') or '')}</td>"
-            f"<td>{html.escape(ln.get('description') or '')}</td>"
-            f"<td>{float(ln.get('qty') or 0):g}</td>"
-            f"<td>{html.escape(ln.get('uom') or '')}</td>"
-            f"<td>${float(ln.get('rate') or 0):,.2f}</td>"
-            f"<td>${float(ln.get('amount') or 0):,.2f}</td></tr>"
-            for ln in pack["lines"])
-        lines_html = (
-            "<table><tr><th>Type</th><th>Item</th><th>Description</th>"
-            "<th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr>"
-            f"{lrows}</table>" if lrows else "")
+        # Build 'ac' (Jason 2026-10-27): the shared summary lines
+        # builder, the family vocabulary — the Note column stands
+        # (quote_lines carries line_note); no lines renders the
+        # shell, never a blank area.
+        lines_html = self._sum_lines(
+            [("Type", False), ("Item", False), ("Description", False),
+             ("Qty", True), ("Unit", False), ("Rate", True),
+             ("Amount", True), ("Note", False)],
+            [[html.escape(ln.get('kind') or ''),
+              html.escape(ln.get('item') or ''),
+              html.escape(ln.get('description') or ''),
+              f"{float(ln.get('qty') or 0):g}",
+              html.escape(ln.get('uom') or ''),
+              f"${float(ln.get('rate') or 0):,.2f}",
+              f"${float(ln.get('amount') or 0):,.2f}",
+              self._sum_note_cell("quote", qno, ln.get('line_id'),
+                                  ln.get('line_note'))]
+             for ln in pack["lines"]],
+            empty_text="No lines.")
         site_name = ""
         if q.get("site_id"):
             _sr = con.execute("SELECT site_name FROM sites WHERE site_id=?",
@@ -1570,22 +1772,38 @@ class AccountingViews(CoreViews):
                 f"Change Order <a href=\"/summary/change/{html.escape(c['header']['co_no'], quote=True)}\">"
                 f"{html.escape(c['header']['co_no'])}</a>")
         _blk = engine.quote_money_block(con, qno)
-        facts = [
+        # Build 'ac' (Jason 2026-10-27, state changes values, not
+        # anatomy): Settled/Balance stand in the fact list at their
+        # standing position on every quote — no state-conditional
+        # insertion. (Build 'ag': the Payment door that once stood
+        # beside these facts is off the summary; the Money fact
+        # still states a closed or carried quote's block.)
+        _set = engine.doc_settled(con, "quote", qno)
+        # Build 'af': grouped fact blocks. Job Info markers follow
+        # the quote's printed sheet (printpack.html_quote info
+        # rows): Job and PO # print; AFE # and Contact Name do not.
+        cust_pairs = [
             ("Customer", html.escape(q.get("account_name") or "")),
+            ("Site", html.escape(site_name) if site_name else None),
+        ]
+        job_pairs = self._ji_pairs([
+            ("Job Name", html.escape(q["job_name"]) if q.get("job_name") else None, True),
+            ("PO #", html.escape(q["po"]) if q.get("po") else None, True),
+            ("AFE #", html.escape(q["afe"]) if q.get("afe") else None, False),
+            ("Contact Name", html.escape(q["contact_name"])
+             if q.get("contact_name") else None, False),
+        ])
+        doc_pairs = [
             ("Date", html.escape(fmt_date(q.get("quote_date") or ""))),
             ("Status", html.escape(q.get("status") or "")),
             ("Valid Until", html.escape(fmt_date(q["valid_until"]))
              if q.get("valid_until") else None),
-            ("Site", html.escape(site_name) if site_name else None),
-            ("Job Name", html.escape(q["job_name"]) if q.get("job_name") else None),
-            ("AFE #", html.escape(q["afe"]) if q.get("afe") else None),
-            ("PO #", html.escape(q["po"]) if q.get("po") else None),
-            ("Contact Name", html.escape(q["contact_name"])
-             if q.get("contact_name") else None),
             ("Quoted", f"${tot['quoted']:,.2f}"),
             ("Face", f"${tot['face']:,.2f}"),
             ("Billed", f"${tot['billed']:,.2f}"),
             ("Variance", f"${tot['variance']:,.2f}"),
+            ("Settled", f"${float(_set['total']):,.2f}"),
+            ("Balance", f"${float(engine.doc_balance(con, 'quote', qno)):,.2f}"),
             ("Money", html.escape(_blk) + "." if _blk else None),
             ("Linked", " · ".join(linked) if linked else None),
             ("Notes", html.escape(q["notes"]) if q.get("notes") else None),
@@ -1593,16 +1811,10 @@ class AccountingViews(CoreViews):
         ]
         doors = ""
         popups = ""
-        if not _blk:
-            _set = engine.doc_settled(con, "quote", qno)
-            facts[13:13] = [
-                ("Settled", f"${float(_set['total']):,.2f}"),
-                ("Balance", f"${float(engine.doc_balance(con, 'quote', qno)):,.2f}"),
-            ]
-            pay_door, pay_popup = self._money_popup(
-                con, "quote", qno, q.get("customer_id"))
-            doors += pay_door
-            popups += pay_popup
+        # Build 'ag' (Jason 2026-10-28): the Payment door and its
+        # money popup are OFF this summary — summaries state facts;
+        # money work lives on the Payment form and the document's
+        # own form. The Money fact above still states the block.
         nxt = list(engine.QUOTE_NEXT.get(q.get("status"), ()))
         if nxt:
             st_btns = "".join(
@@ -1620,17 +1832,30 @@ class AccountingViews(CoreViews):
                 f"<label>On-Rent for New Reserved Rental Tickets</label>"
                 f"<input type=date name=on_rent "
                 f"value=\"{date.today().isoformat()}\">"
-                f"<p><button>Convert Rental Lines to Rental Tickets</button></p>"
+                f"<p><button>Save</button></p>"
                 f"</form>")
             doors += self._pop_door("qconvpop", "Convert")
             popups += self._pop_wrap("qconvpop", "Convert", convert)
-        doors += (f"<a class=\"btn\" href=\"/quote/"
-                  f"{html.escape(qno, quote=True)}\">Edit</a> ")
-        doors += self._print_menu(screen=f"/print/quote/{qno}",
-                                  pdf=f"/print/quote/{qno}.pdf")
-        return (tabs_quotes("/quotes")
-                + self._sum_page("Quote", qno, facts, lines_html,
-                                 doors, popups, "/quotes/all", "Quotes"))
+        doc_pairs += self._chain_facts(
+            con, "quote", q,
+            lambda n: f"/summary/quote/{html.escape(n, quote=True)}")
+        doors = self._sum_doors(
+            doors, None if (dict(q).get("revised_by_id")
+                            or (q.get("status") or "") == "Void")
+            else f"/quote/{qno}",
+            self._print_menu(screen=f"/print/quote/{qno}",
+                             pdf=f"/print/quote/{qno}.pdf"))
+        # Build 'ac': no family tab strip on a summary — bare
+        # under its title, like Rental/Sale.
+        return self._sum_page(
+            "Quote", qno, [], lines_html, doors, popups,
+            "/quotes/all", "Quotes",
+            extra_top=self._revto_line(con, "quote", q),
+            fact_groups=[("Customer", cust_pairs),
+                         ("Job Info", job_pairs),
+                         ("Quote", doc_pairs)],
+            paper_html=self._sum_paperwork("quote", qno),
+            pay_doc=("quote", qno))
 
     def view_change_summary(self, con, co_no):
         """Summary of Change Order# (build 'u' pattern; build 'v',
@@ -1640,9 +1865,14 @@ class AccountingViews(CoreViews):
         document (a fact, linked — it changes no totals anywhere),
         its lines with directions, the add/subtract/net totals, its
         money (total / settled / balance), notes, record stamps.
-        Doors: Payment (the money popup, while the CO is issued),
-        Edit (to the CO form — open only while nothing has settled
-        against it), Print, View (the Change orders list)."""
+        Doors: Edit (to the CO form — open only while nothing has settled
+        against it), Print, View (the Change orders list).
+        Build 'ag' (Jason 2026-10-28): no Payment door stands on
+        this summary — money is worked on the Payment form.
+        Build 'ai' (Jason 2026-10-28, reversing 'ag'/'ah' at his
+        word): ONE small Payment button stands in the summary's
+        bottom row — navigation to the payment form with this
+        change order prefilled; no money is worked here."""
         co = con.execute("SELECT * FROM change_orders WHERE co_no=?",
                          (co_no,)).fetchone()
         if not co:
@@ -1650,20 +1880,26 @@ class AccountingViews(CoreViews):
         lines = con.execute(
             "SELECT * FROM change_order_lines WHERE co_id=? ORDER BY line_id",
             (co["id"],)).fetchall()
-        lrows = "".join(
-            f"<tr><td>{html.escape(ln['kind'] or '')}</td>"
-            f"<td>{html.escape(ln['item'] or '')}</td>"
-            f"<td>{html.escape(ln['description'] or '')}</td>"
-            f"<td>{html.escape(ln['direction'] or '')}</td>"
-            f"<td>{float(ln['qty'] or 0):g}</td>"
-            f"<td>{html.escape(ln['uom'] or '')}</td>"
-            f"<td>${float(ln['rate'] or 0):,.2f}</td>"
-            f"<td>${float(ln['amount'] or 0):,.2f}</td></tr>"
-            for ln in lines)
-        lines_html = (
-            "<table><tr><th>Type</th><th>Item</th><th>Description</th>"
-            "<th>Direction</th><th>Qty</th><th>Unit</th><th>Rate</th>"
-            f"<th>Amount</th></tr>{lrows}</table>" if lrows else "")
+        # Build 'ac' (Jason 2026-10-27): the shared summary lines
+        # builder — Direction keeps (kind-real data), the Note
+        # column stands (change_order_lines carries line_note);
+        # no lines renders the shell, never a blank area.
+        lines_html = self._sum_lines(
+            [("Type", False), ("Item", False), ("Description", False),
+             ("Direction", False), ("Qty", True), ("Unit", False),
+             ("Rate", True), ("Amount", True), ("Note", False)],
+            [[html.escape(ln['kind'] or ''),
+              html.escape(ln['item'] or ''),
+              html.escape(ln['description'] or ''),
+              html.escape(ln['direction'] or ''),
+              f"{float(ln['qty'] or 0):g}",
+              html.escape(ln['uom'] or ''),
+              f"${float(ln['rate'] or 0):,.2f}",
+              f"${float(ln['amount'] or 0):,.2f}",
+              self._sum_note_cell("change", co_no, ln['line_id'],
+                                  ln['line_note'])]
+             for ln in lines],
+            empty_text="No lines.")
         adds = sum(float(ln["amount"] or 0) for ln in lines
                    if ln["direction"] == "add")
         subs = sum(float(ln["amount"] or 0) for ln in lines
@@ -1672,7 +1908,6 @@ class AccountingViews(CoreViews):
             "SELECT account_name, customer_id FROM customers WHERE id=?",
             (co["customer_id"],)).fetchone()
         _cust_name = _cust["account_name"] if _cust else ""
-        _cust_code = _cust["customer_id"] if _cust else ""
         _assoc = engine.change_order_assoc(con, co_no)
         _assoc_html = None
         if _assoc and _assoc[0]:
@@ -1687,12 +1922,18 @@ class AccountingViews(CoreViews):
         _total = float(engine.doc_total(con, "change", co_no))
         _settled = float(engine.doc_settled(con, "change", co_no)["total"])
         _balance = float(engine.doc_balance(con, "change", co_no))
-        facts = [
+        cust_pairs = [
             ("Customer", html.escape(_cust_name) if _cust_name else None),
+        ]
+        # Job Info markers: the printed Change Order sheet
+        # (printpack.html_change info rows) carries the PO #.
+        job_pairs = self._ji_pairs([
+            ("PO #", html.escape(self._g(co, "po")) if self._g(co, "po") else None, True),
+        ])
+        doc_pairs = [
             ("Date", html.escape(fmt_date(co["co_date"]))),
             ("Status", html.escape(co["status"] or "")),
             ("Reason", html.escape(co["reason"] or "")),
-            ("PO #", html.escape(self._g(co, "po")) if self._g(co, "po") else None),
             ("Associated", _assoc_html),
             ("Change Orders", self._assoc_co_fact(con, "change", co_no)),
             ("Adds", f"${adds:,.2f}"),
@@ -1704,23 +1945,40 @@ class AccountingViews(CoreViews):
             ("Input by:", f"{html.escape(co['clerk'] or '')} "
                           f"{html.escape(fmt_datetime(co['created_at']))}".strip()),
         ]
+        doc_pairs += self._chain_facts(
+            con, "change", co,
+            lambda n: f"/summary/change/{html.escape(n, quote=True)}")
         doors = ""
         popups = ""
-        if (co["status"] or "") == "Issued":
-            pay_door, pay_popup = self._money_popup(
-                con, "change", co_no, _cust_code)
-            doors += pay_door
-            popups += pay_popup
-            if _settled <= 0.009:
-                doors += (f"<a class=\"btn\" href=\"/ticket/new?kind=change"
-                          f"&co_no={html.escape(co_no, quote=True)}\">"
-                          f"Edit</a> ")
-        doors += self._print_menu(screen=f"/print/change/{co_no}",
-                                  pdf=f"/print/change/{co_no}.pdf")
-        return (tabs_quotes("/changes")
-                + self._sum_page("Change Order", co_no, facts, lines_html,
-                                 doors, popups, "/changes/all",
-                                 "Change orders — audit"))
+        _co_edit = None
+        # Build 'ag' (Jason 2026-10-28): the Payment door and its
+        # money popup are OFF this summary — summaries state facts;
+        # money work lives on the Payment form and the document's
+        # own form. Settled/Balance above still state the money.
+        if not dict(co).get("revised_by_id") \
+                and (co["status"] or "") != "Void":
+            # Void-and-revise (build 'ab'): the Edit door stands for
+            # every live Change Order — the form opens locked, and
+            # settled money no longer bars the door: a revision's
+            # chain carries the settlements to the head. (Build
+            # 'aa' verified the route; the settled-refusal inside
+            # the form is superseded by the locked render.)
+            _co_edit = f"/ticket/new?kind=change&co_no={co_no}"
+        doors = self._sum_doors(
+            doors, _co_edit,
+            self._print_menu(screen=f"/print/change/{co_no}",
+                             pdf=f"/print/change/{co_no}.pdf"))
+        # Build 'ac': no family tab strip on a summary — bare
+        # under its title, like Rental/Sale.
+        return self._sum_page(
+            "Change Order", co_no, [], lines_html, doors, popups,
+            "/changes/all", "Change orders — audit",
+            extra_top=self._revto_line(con, "change", co),
+            fact_groups=[("Customer", cust_pairs),
+                         ("Job Info", job_pairs),
+                         ("Change Order", doc_pairs)],
+            paper_html=self._sum_paperwork("change", co_no),
+            pay_doc=("change", co_no))
 
     def view_payment_summary(self, con, batch):
         """Summary of Payment# (build 'u', Jason 2026-10-25,
@@ -1729,8 +1987,16 @@ class AccountingViews(CoreViews):
         payments audit groups by) — stated as facts: date,
         customer, method, kind, ref, the amount, the documents it
         settled (links to their summaries), its line allocations,
-        record stamps. A payment is a record: no Edit door exists
-        anywhere for one. Print is the page print menu."""
+        record stamps. Build 'ab' (JC-AA3 + the void-and-revise
+        ruling, of which the payment correction model is the first
+        instance): the Edit door opens the Payment form LOCKED;
+        confirming its reason + name prompt voids this batch —
+        signed into the record — and names its replacement
+        '<batch> Rev. N'; the replacement's form posts the edited
+        splits at Apply. The void, the reason, the name, and the
+        link both ways stand as facts below. A blocked payment
+        (payment_edit_block) carries no Edit door. Print is the
+        page print menu."""
         inv_rows = []
         doc_rows = []
         try:
@@ -1763,42 +2029,81 @@ class AccountingViews(CoreViews):
                     + "<p>Unknown payment.</p>")
         head = rows[0]
         total = sum(float(r["amount"] or 0) for r in rows)
-        doc_links = []
-        for r in inv_rows:
-            doc_links.append(
-                f"Invoice <a href=\"/invoice/"
-                f"{html.escape(r['inv_no'], quote=True)}\">"
-                f"{html.escape(r['inv_no'])}</a>")
-        _doc_href = {"wo": "/summary/wo/", "ticket": "/ticket/",
-                     "sale": "/sale/", "quote": "/summary/quote/",
-                     "change": "/summary/change/"}
-        for r in doc_rows:
-            _dref = engine.doc_num(con, r["doc_kind"], r["doc_id"]) or ""
-            _href = _doc_href.get(r["doc_kind"], "/")
-            doc_links.append(
-                f"{engine.DOC_LABELS.get(r['doc_kind'], r['doc_kind'])} "
-                f"<a href=\"{_href}{html.escape(_dref, quote=True)}\">"
-                f"{html.escape(_dref)}</a>")
         _allocs = engine.list_payment_allocations(con, batch_id=batch)
         if not _allocs:
             _allocs = engine.list_payment_allocations(con, pay_id=batch)
-        alloc_html = ""
-        if _allocs:
-            _segs = []
-            for a in _allocs:
-                _seg = (f"{html.escape(a['doc_ref'])}: "
-                        f"{html.escape(a['line_label'])} "
-                        f"${float(a['amount']):,.2f}")
-                if a["source"] == "credit" and a["cm_no"]:
-                    _seg += f" (credit {html.escape(a['cm_no'])})"
-                if a["source"] == "cash":
-                    _seg += " (cash in)"
-                if a["line_note"]:
-                    _seg += f" — {note_pop_html(a['line_note'])}"
-                _segs.append(_seg)
-            alloc_html = ("<table><tr><th>Allocations</th></tr>"
-                          + "".join(f"<tr><td>{s}</td></tr>" for s in _segs)
-                          + "</table>")
+        # Build 'af' (Jason 2026-10-28): the allocations area is a
+        # real grid — one row per document the batch settled,
+        # Document (linked to its summary), Kind, Applied — with
+        # the allocation's line-detail segments and notes as a
+        # sub-line under their document's row (the invoice
+        # summary's payments-table shape, not a prose column). An
+        # unapplied leftover states as its own row; the totals row
+        # states the batch total.
+        _segs_by_ref = {}
+        for a in _allocs:
+            _seg = (f"{html.escape(a['line_label'])} "
+                    f"${float(a['amount']):,.2f}")
+            if a["source"] == "credit" and a["cm_no"]:
+                _seg += f" (credit {html.escape(a['cm_no'])})"
+            if a["source"] == "cash":
+                _seg += " (cash in)"
+            if a["line_note"]:
+                _seg += f" — {note_pop_html(a['line_note'])}"
+            _segs_by_ref.setdefault(a["doc_ref"], []).append(_seg)
+        _href_of = {"wo": "/summary/wo/", "ticket": "/ticket/",
+                    "sale": "/sale/", "quote": "/summary/quote/",
+                    "change": "/summary/change/"}
+        _grid = []
+        _applied_sum = 0.0
+        _seen_docs = set()
+        for r in inv_rows:
+            if r["inv_no"] in _seen_docs:
+                continue
+            _seen_docs.add(r["inv_no"])
+            _amt = sum(float(x["amount"] or 0) for x in inv_rows
+                       if x["inv_no"] == r["inv_no"])
+            _applied_sum += _amt
+            _grid.append([
+                f"Invoice <a href=\"/invoice/"
+                f"{html.escape(r['inv_no'], quote=True)}\">"
+                f"{html.escape(r['inv_no'])}</a>",
+                "Invoice", f"${_amt:,.2f}"])
+            for _seg in _segs_by_ref.get(r["inv_no"], []):
+                _grid.append([_seg, "", ""])
+            _segs_by_ref.pop(r["inv_no"], None)
+        for r in doc_rows:
+            _dref = engine.doc_num(con, r["doc_kind"], r["doc_id"]) or ""
+            if (r["doc_kind"], _dref) in _seen_docs:
+                continue
+            _seen_docs.add((r["doc_kind"], _dref))
+            _amt = sum(float(x["amount"] or 0) for x in doc_rows
+                       if x["doc_kind"] == r["doc_kind"]
+                       and (engine.doc_num(con, x["doc_kind"],
+                                           x["doc_id"]) or "") == _dref)
+            _applied_sum += _amt
+            _lbl = engine.DOC_LABELS.get(r["doc_kind"], r["doc_kind"])
+            _href = _href_of.get(r["doc_kind"], "/")
+            _grid.append([
+                f"{html.escape(_lbl)} <a href=\"{_href}"
+                f"{html.escape(_dref, quote=True)}\">"
+                f"{html.escape(_dref)}</a>",
+                html.escape(_lbl), f"${_amt:,.2f}"])
+            for _seg in _segs_by_ref.get(_dref, []):
+                _grid.append([_seg, "", ""])
+            _segs_by_ref.pop(_dref, None)
+        for _ref_left, _segs_left in _segs_by_ref.items():
+            for _seg in _segs_left:
+                _grid.append(
+                    [f"{html.escape(_ref_left)}: {_seg}", "", ""])
+        _leftover = round(total - _applied_sum, 2)
+        if _leftover > 0.005:
+            _grid.append(["Unapplied", "", f"${_leftover:,.2f}"])
+        if _grid:
+            _grid.append(["Total", "", f"${total:,.2f}"])
+        alloc_html = self._sum_lines(
+            [("Document", False), ("Kind", False), ("Applied", True)],
+            _grid, empty_text="No allocations.")
         _refs = []
         for r in rows:
             _ref = (r["cm_number"] if r["kind"] == "credit" and r["cm_number"]
@@ -1810,23 +2115,63 @@ class AccountingViews(CoreViews):
             _n = (r["notes"] or "").strip() if "notes" in r.keys() else ""
             if _n and _n not in _notes:
                 _notes.append(_n)
-        facts = [
+        # Correction facts (build 'ab'): a voided original names
+        # its replacement; a correction names what it corrects —
+        # inside the fact table, as facts.
+        _voided = any(int(dict(r).get("voided") or 0) for r in rows)
+        _replaced_by = next(
+            (dict(r).get("void_replaced_by") for r in rows
+             if dict(r).get("void_replaced_by")), None)
+        _corrects = next(
+            (dict(r).get("void_corrects") for r in rows
+             if dict(r).get("void_corrects")), None)
+        def _pay_link(b):
+            return (f"<a href=\"/summary/payment/"
+                    f"{html.escape(b, quote=True)}\">"
+                    f"{html.escape(b)}</a>")
+        _pinfo = engine.payment_batch_info(con, batch)
+        cust_pairs = [
             ("Customer", html.escape(head["cust"] or "")),
+        ]
+        doc_pairs = [
             ("Date", html.escape(fmt_date(head["pay_date"]))),
             ("Method", html.escape(head["method"] or "")),
             ("Kind", html.escape(head["kind"] or "")),
             ("Ref", html.escape(", ".join(_refs)) if _refs else None),
             ("Amount", f"${total:,.2f}"),
-            ("Documents", " · ".join(doc_links) if doc_links else None),
+            ("Status", "Void" if _voided else None),
+            ("Replaced by", _pay_link(_replaced_by)
+             if _replaced_by else None),
+            ("Correction of", _pay_link(_corrects)
+             if _corrects else None),
+            ("Reason", html.escape(_pinfo["void_reason"])
+             if _pinfo.get("void_reason") else None),
+            ("By", html.escape(
+                ((_pinfo.get("void_by") or "") + " · "
+                 + (_pinfo.get("void_at") or "")).strip(" ·"))
+             if _pinfo.get("void_by") else None),
             ("Notes", html.escape(" · ".join(_notes)) if _notes else None),
             ("Input by:", html.escape(
                 ", ".join(sorted({r["clerk"] for r in rows if r["clerk"]})))) ,
         ]
-        doors = self._print_menu(page=True)
-        return (tabs_money("pay", con)
-                + self._sum_page("Payment", batch, facts, alloc_html,
-                                 doors, "", "/money/payments/audit",
-                                 "Payments — audit"))
+        doors = self._sum_doors(
+            "",
+            None if engine.payment_edit_block(con, batch)
+            else f"/money?tab=pay&edit={batch}",
+            self._print_menu(page=True))
+        # Build 'ac': no family tab strip on a summary — bare
+        # under its title, like Rental/Sale.
+        # Build 'af': the batch's Paperwork section files under the
+        # batch's first pay row (the 'pay' attachment key the
+        # payment form itself uses).
+        _pay_ref = rows[0]["pay_id"] if rows else batch
+        return self._sum_page(
+            "Payment", batch, [], alloc_html, doors, "",
+            "/money/payments/audit", "Payments — audit",
+            fact_groups=[("Customer", cust_pairs),
+                         ("Payment", doc_pairs)],
+            paper_html=self._sum_paperwork(
+                "pay", _pay_ref, ret=f"/summary/payment/{batch}"))
 
     def view_credit_summary(self, con, cm_no):
         """Summary of Credit Memo# (build 'u', Jason 2026-10-25,
@@ -1834,9 +2179,13 @@ class AccountingViews(CoreViews):
         customer, date, reason, face, applied / unapplied, the
         documents it settled (links to their summaries), notes,
         record stamps — with doors: Edit (to the Credit Memo form
-        for the memo's customer, where its application work lives;
-        a posted memo's own fields never change), Print (the memo's
-        three-choice print), View (the Credit memos list)."""
+        with THIS MEMO loaded — build 'aa', 2026-10-26, WS5: the
+        form stands on the memo's customer with the memo selected
+        in its Apply Leftover popup, open, where its application
+        work lives; a posted memo's own fields never change), Print
+        (the memo's three-choice print), View (the Credit memos
+        list). Build 'aa' also gives the summary the memo's own
+        lines table — it carried none."""
         cm = con.execute(
             """SELECT m.*, c.account_name, c.customer_id AS cust_code
                FROM credit_memos m
@@ -1881,8 +2230,10 @@ class AccountingViews(CoreViews):
         _reason = cm["reason"] or ""
         if float(cm["face_amount"]) < 0:
             _reason = "Negative credit — " + _reason
-        facts = [
+        cust_pairs = [
             ("Customer", html.escape(cm["account_name"])),
+        ]
+        doc_pairs = [
             ("Date", html.escape(fmt_date(cm["cm_date"]))),
             ("Reason", html.escape(_reason)),
             ("Face", f"${float(cm['face_amount']):,.2f}"),
@@ -1893,15 +2244,44 @@ class AccountingViews(CoreViews):
             ("Input by:", f"{html.escape(cm['clerk'] or '')} "
                           f"{html.escape(fmt_datetime(cm['created_at']))}".strip()),
         ]
-        doors = (
-            f"<a class=\"btn\" href=\"/credit?customer_id="
-            f"{html.escape(cm['cust_code'], quote=True)}\">Edit</a> "
-            + self._print_menu(screen=f"/print/credit/{cm_no}",
-                               pdf=f"/print/credit/{cm_no}.pdf"))
-        return (tabs_money("credit", con)
-                + self._sum_page("Credit Memo", cm_no, facts, "",
-                                 doors, "", "/money/credits/audit",
-                                 "Credit memos audit"))
+        doc_pairs += self._chain_facts(
+            con, "credit", cm,
+            lambda n: f"/summary/credit/{html.escape(n, quote=True)}")
+        _cm_lines = con.execute(
+            "SELECT * FROM credit_memo_lines WHERE cm_id = ? "
+            "ORDER BY rowid", (cm["id"],)).fetchall()
+        # Build 'ac' (Jason 2026-10-27): the shared summary lines
+        # builder (its classes were this table's own). No Note
+        # column — credit_memo_lines carries no line_note. No lines
+        # renders the shell, never a blank area.
+        lines_html = self._sum_lines(
+            [("Type", False), ("Item", False), ("Description", False),
+             ("Qty", True), ("Unit", False), ("Rate", True),
+             ("Amount", True)],
+            [[html.escape(ln['category'] or 'Line'),
+              html.escape(ln['item'] or ''),
+              html.escape(ln['description'] or ''),
+              f"{float(ln['qty'] or 0):g}",
+              html.escape(ln['uom'] or ''),
+              f"${float(ln['rate'] or 0):,.2f}",
+              f"${float(ln['amount'] or 0):,.2f}"]
+             for ln in _cm_lines],
+            empty_text="No lines.")
+        doors = self._sum_doors(
+            "", None if dict(cm).get("revised_by_id") else
+            (f"/credit?customer_id={cm['cust_code']}"
+             f"&cm_no={cm_no}"),
+            self._print_menu(screen=f"/print/credit/{cm_no}",
+                             pdf=f"/print/credit/{cm_no}.pdf"))
+        # Build 'ac': no family tab strip on a summary — bare
+        # under its title, like Rental/Sale.
+        return self._sum_page(
+            "Credit Memo", cm_no, [], lines_html, doors, "",
+            "/money/credits/audit", "Credit memos audit",
+            extra_top=self._revto_line(con, "credit", cm),
+            fact_groups=[("Customer", cust_pairs),
+                         ("Credit Memo", doc_pairs)],
+            paper_html=self._sum_paperwork("credit", cm_no))
 
 
     def view_changes(self, con, q=None, bare=False):
@@ -1926,13 +2306,13 @@ class AccountingViews(CoreViews):
             if not co:
                 return ("" if bare else tabs_quotes("/changes")) + \
                     "<p>Unknown change order.</p>"
-            if float(engine.doc_settled(con, "change", co_no)["total"]) > 0.009:
-                return ("" if bare else tabs_quotes("/changes")) + (
-                    f"<p>Change Order {html.escape(co_no)} has payments "
-                    f"against it; its lines stand as issued. "
-                    f"<a href=\"/summary/change/"
-                    f"{html.escape(co_no, quote=True)}\">Open its "
-                    f"summary</a>.</p>")
+            # Void-and-revise (build 'ab', Jason 2026-10-26): the
+            # settled-refusal page is superseded — an existing CO's
+            # form opens LOCKED (its Edit door starts the revision
+            # flow; settlements ride the chain to the head), or
+            # unlocked as a fresh revision under its marker.
+            co_mode = ("session" if engine.revision_pending(
+                con, "change", co["id"]) else "locked")
             co_lines = con.execute(
                 "SELECT * FROM change_order_lines WHERE co_id=? "
                 "ORDER BY line_id", (co["id"],)).fetchall()
@@ -1975,8 +2355,8 @@ class AccountingViews(CoreViews):
                 f"</div>"
             )
         if not co_no:
-            co_no = engine.peek_next_doc(con, "next_co", "CO",
-                                         "change_orders", "co_no")
+            co_no = engine.peek_next_doc(con, "next_co", engine.doc_prefix(con, "change"),
+                                         "change_orders", "co_no", floor=engine.doc_number_floor("change"))
         today = date.today().isoformat()
         _co_date_v = (str(co["co_date"])[:10] if co else today)
         _reason = (co["reason"] or "") if co else ""
@@ -2020,19 +2400,25 @@ class AccountingViews(CoreViews):
             f"<select name=assoc_ref>{''.join(_doc_opts)}</select></div></div>"
         )
         _job_vals = {"po": _po}
-        _co_doc = f'CO # <input name=co_no value="{html.escape(co_no, quote=True)}" class=w-xs>'
+        _co_doc = (f'CO # <a href="/summary/change/{html.escape(co_no, quote=True)}">{html.escape(co_no)}</a>'
+                   if co is not None and co_mode == "locked" else
+                   f'Change Order # <input name=co_no value="{html.escape(co_no, quote=True)}" class=w-xs>')
         _co_date = f'<label>Date</label> <input type=date name=co_date value="{_co_date_v}" class=w-sm>'
         _job_lines = [("Reason", _reason), ("PO #", _po),
                       ("Associated", _assoc_label)]
         return ("" if bare else tabs_quotes("/changes")) + f"""
         <form method=post action="/change/save" enctype="multipart/form-data">
+          {f'<input type=hidden name=co_no value="{html.escape(co_no, quote=True)}">' if co is not None and co_mode == "locked" else ''}
+          {f'<input type=hidden name=edit_target value="{html.escape(co_no, quote=True)}">' if co is not None and co_mode == "session" else ''}
           {self._form_head(con, _co_doc, _co_date, cust_combo, _job_lines)}
           {self._line_head()}
           {''.join(line_rows)}
           <div><label>Notes</label><input name=notes value="{html.escape((co['notes'] or '') if co else '', quote=True)}"></div>
-          {self._btn_row("Save", "cojobpop", add_item=True)}
+          {self._btn_row(None, "cojobpop", add_item=False, edit_pop="revpop") if co is not None and co_mode == "locked" else self._btn_row("Save", "cojobpop", add_item=True)}
           {self._job_info_popup('cojobpop', _job_vals, _extra)}
+          {self._revise_popup(con, "change", co_no) if co is not None and co_mode == "locked" else ""}
         </form>
+        {self._LOCK_JS if co is not None and co_mode == "locked" else ""}
         <script>
         (function(){{
           // Change-order Add Item: clone the last line row, renumber
@@ -2076,11 +2462,15 @@ class AccountingViews(CoreViews):
         the change order's summary, the quote ref the quote's
         summary (record links land on summaries)."""
         rows = []
+        _co_filter = ("WHERE co.revised_by_id IS NULL "
+                      if engine.revision_cols_ready(con, "change_orders")
+                      else "")
         for r in con.execute(
-                """SELECT co.co_no, co.po, co.co_date, co.reason, co.status,
+                f"""SELECT co.co_no, co.po, co.co_date, co.reason, co.status,
                           c.account_name
                    FROM change_orders co
                    LEFT JOIN customers c ON c.id = co.customer_id
+                   {_co_filter}
                    ORDER BY co.co_date DESC, co.co_no DESC"""):
             _assoc = engine.change_order_assoc(con, r["co_no"])
             acell = ""
@@ -2145,121 +2535,132 @@ class AccountingViews(CoreViews):
                 "<th>Total</th><th>Paid</th><th>Apply $</th></tr>"
                 + "".join(rows) + "</table>")
 
-    def _doc_money_html(self, con, kind, ref, customer_id):
-        """Money panel for a work order, rental ticket, sale, or
-        quote (Jason 2026-10-23, universality): the document's balance line, its
-        lines with per-line covered state and dispute-note forms, a
-        money-in form (any tender, blanket or by line), and an
-        apply-open-credit form. The invoice's money rules, on every
-        money document — blanket money never touches lines; the
-        document balance above the lines is the governing figure."""
-        label = engine.DOC_LABELS[kind]
-        total = float(engine.doc_total(con, kind, ref))
-        settled = engine.doc_settled(con, kind, ref)
-        bal = total - float(settled["total"])
-        states = engine.doc_line_states(con, kind, ref)
-        q = html.escape(ref, quote=True)
-        seg = "wo" if kind == "wo" else kind
-        parts = [
-            f"<h3>Money — {label} {html.escape(ref)}</h3>",
-            f"<p>Total ${total:,.2f} · Settled "
-            f"${float(settled['total']):,.2f} (payments "
-            f"${float(settled['payment']):,.2f} · credits "
-            f"${float(settled['credit']):,.2f}) · Balance "
-            f"${bal:,.2f}</p>"]
-        if states:
-            rows = []
-            for s in states:
-                _lbl = s["item"] or s["description"] or s["category"]
-                if s["item"] and s["description"]:
-                    _lbl = f"{s['item']} — {s['description']}"
-                _segs = []
-                if s["credited"] > 0:
-                    _refs = ", ".join(html.escape(x)
-                                      for x in s["credit_refs"])
-                    _segs.append(f"credit {_refs} ${s['credited']:,.2f}")
-                if s["credited"] < 0:
-                    _refs = ", ".join(html.escape(x)
-                                      for x in s["credit_refs"])
-                    _segs.append(
-                        f"negative credit {_refs} −${-s['credited']:,.2f}")
-                if s["cash_paid"] > 0:
-                    _segs.append(f"cash ${s['cash_paid']:,.2f}")
-                _seg = (f" <span class=hint>({' · '.join(_segs)})</span>"
-                        if _segs else "")
-                _nv = html.escape(s["note"] or "", quote=True)
-                rows.append(
-                    f"<tr><td>{html.escape(_lbl)}</td>"
-                    f"<td>${s['total']:,.2f}</td>"
-                    f"<td>${s['allocated']:,.2f}{_seg}</td>"
-                    f"<td>${s['remaining']:,.2f}</td>"
-                    f"<td><form method=post action=\"/{seg}/{q}/linenote\">"
-                    f"<input type=hidden name=line_id "
-                    f"value=\"{s['line_id']}\">"
-                    f"<input name=note value=\"{_nv}\" class=w-sm> "
-                    f"<button class=secondary>Save</button></form></td></tr>")
-            parts.append(
-                "<table class='alloc-tbl'><tr><th>Line</th><th>Total</th>"
-                "<th>Paid</th><th>Open</th><th>Note</th></tr>"
-                + "".join(rows) + "</table>")
-        method_opts = "".join(
-            f"<option>{html.escape(m)}</option>"
-            for m in engine.CASH_METHODS)
-        alloc_tbl = (self._alloc_table_html(states, "dl", ref, "remaining")
-                     if states else "")
-        parts.append(f"""
-        <form method=post action="/docmoney">
-          <input type=hidden name=doc_kind value="{kind}">
-          <input type=hidden name=doc_ref value="{q}">
-          <div class="row">
-            <div><label>Date</label><input type=date name=pay_date value="{date.today().isoformat()}" required class=w-sm></div>
-            <div><label>Method</label><select name=method class=w-sm>{method_opts}</select></div>
-            <div><label>Ref</label><input name=ref class=w-sm></div>
-            <div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div>
-          </div>
-          {alloc_tbl}
-          {self._btn_row("Record payment")}
-        </form>""")
-        credits = (engine.list_open_credits(con, customer_id)
-                   if customer_id else [])
-        if credits:
-            cm_opts = "".join(
-                f"<option value=\"{html.escape(c['cm_no'], quote=True)}\">"
-                f"{html.escape(c['cm_no'])} — ${c['unapplied']:,.2f} open"
-                f"{' (negative)' if c['unapplied'] < 0 else ''}"
-                f"</option>" for c in credits)
-            parts.append(f"""
-        <form method=post action="/doccredit">
-          <input type=hidden name=doc_kind value="{kind}">
-          <input type=hidden name=doc_ref value="{q}">
-          <!-- row3, not row (density gate 2026-10-24): 3 fields in a
-               2-col row stranded Apply alone on row 2. -->
-          <div class="row3">
-            <div><label>Credit memo</label><select name=cm_no>{cm_opts}</select></div>
-            <div><label>Date</label><input type=date name=pay_date value="{date.today().isoformat()}" class=w-sm></div>
-            <div><label>Apply</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div>
-          </div>
-          {alloc_tbl}
-          {self._btn_row("Apply credit")}
-        </form>""")
-        if states:
-            parts.append("""
-        <script>
-        document.querySelectorAll(
-          'form[action="/docmoney"] .alloc-full, form[action="/doccredit"] .alloc-full'
-        ).forEach(function(cb){
-          cb.addEventListener('change', function(){
-            var inp = cb.closest('form').querySelector(
-              'input[name="' + cb.dataset.name + '"]');
-            if (inp) inp.value = cb.checked ? cb.dataset.rem : '';
-          });
-        });
-        </script>""")
-        return "".join(parts)
-
-    def _frag_pay_form(self, con):
+    def _frag_pay_form(self, con, edit_batch=None, rev_batch=None,
+                       prefill=None):
+        # Build 'ab' (void-and-revise): edit_batch loads an existing
+        # payment into this same form — its splits prefilled at
+        # their pre-payment balances. The form opens LOCKED (the
+        # record; Edit starts the revision). With rev_batch — the
+        # replacement batch minted at the revise confirm, its
+        # session marker standing — the form is the revision's own
+        # editor: Apply posts the splits into the minted batch and
+        # the original stands void, never rewritten. A blocked
+        # payment refuses here with the reason and a pointer to its
+        # summary (the revise gate states the same).
+        edit_info = None
+        pay_mode = None
+        if edit_batch:
+            # The session state is checked BEFORE the block gate:
+            # a revision session loads the original batch — by then
+            # voided and replaced, which is exactly the state the
+            # gate reports — under the marker the confirm set.
+            _session = bool(
+                rev_batch and engine.get_option(
+                    con, f"revtarget:payment:{rev_batch}") == edit_batch)
+            if not _session:
+                block = engine.payment_edit_block(con, edit_batch)
+                if block:
+                    return (f"<p class='hint'>{html.escape(block)} "
+                            f"<a href='/summary/payment/"
+                            f"{html.escape(edit_batch, quote=True)}'>"
+                            f"Summary of Payment# "
+                            f"{html.escape(edit_batch)}</a></p>")
+            edit_info = engine.payment_batch_info(con, edit_batch)
+            pay_mode = "session" if _session else "locked"
+        # Prefill maps (edit mode only): what the original applied,
+        # per document — the form renders the payment as it stood
+        # when posted.
+        e_inv_applied = {}
+        e_co_applied = {}
+        e_doc_applied = {}
+        if edit_info is not None:
+            for r in edit_info["crows"]:
+                ino = engine.doc_num(con, "invoice", r["invoice_id"])
+                if ino:
+                    e_inv_applied[ino] = (e_inv_applied.get(ino, 0.0)
+                                          + float(r["amount"] or 0))
+            for r in edit_info["drows"]:
+                ref = engine.doc_num(con, r["doc_kind"], r["doc_id"])
+                if not ref:
+                    continue
+                if r["doc_kind"] == "change":
+                    e_co_applied[ref] = (e_co_applied.get(ref, 0.0)
+                                         + float(r["amount"] or 0))
+                else:
+                    key = (r["doc_kind"], ref)
+                    e_doc_applied[key] = (e_doc_applied.get(key, 0.0)
+                                          + float(r["amount"] or 0))
+        # Build 'ai' prefill resolution (new payments only): the
+        # summary button's target document — its customer, date,
+        # and current balance, read once. An unknown reference
+        # resolves to nothing and the blank form stands.
+        _pf = None
+        if prefill is not None and edit_info is None:
+            _pk, _pr = prefill
+            try:
+                if _pk == "invoice":
+                    _irow = con.execute(
+                        "SELECT i.invoice_date, i.customer_id AS "
+                        "cust_key, c.account_name FROM invoices i "
+                        "JOIN customers c ON c.id = i.customer_id "
+                        "WHERE i.invoice_no=?", (_pr,)).fetchone()
+                    if _irow:
+                        _pf = {
+                            "kind": _pk, "ref": _pr,
+                            "cust": engine.cust_code(
+                                con, _irow["cust_key"]),
+                            "name": _irow["account_name"],
+                            "date": _irow["invoice_date"],
+                            "bal": float(engine.invoice_totals(
+                                con, _pr)["balance"])}
+                elif _pk == "change":
+                    _crow2 = con.execute(
+                        "SELECT co.co_date, co.customer_id AS "
+                        "cust_key, c.account_name FROM change_orders "
+                        "co JOIN customers c ON c.id = co.customer_id "
+                        "WHERE co.co_no=?", (_pr,)).fetchone()
+                    if _crow2:
+                        _pf = {
+                            "kind": _pk, "ref": _pr,
+                            "cust": engine.cust_code(
+                                con, _crow2["cust_key"]),
+                            "name": _crow2["account_name"],
+                            "date": _crow2["co_date"],
+                            "bal": float(engine.doc_balance(
+                                con, "change", _pr))}
+                else:
+                    _pf_tables = {
+                        "wo": ("work_orders", "wo_id", "open_date"),
+                        "ticket": ("tickets", "ticket_id", "on_rent"),
+                        "sale": ("sales", "sale_id", "sale_date"),
+                        "quote": ("quotes", "quote_no", "quote_date")}
+                    _tbl, _idc, _dc = _pf_tables[_pk]
+                    _drow2 = con.execute(
+                        f"SELECT {_dc} AS d, customer_id FROM {_tbl} "
+                        f"WHERE {_idc}=?", (_pr,)).fetchone()
+                    if _drow2:
+                        _ccode = engine.cust_code(
+                            con, _drow2["customer_id"])
+                        _cname2 = con.execute(
+                            "SELECT account_name FROM customers "
+                            "WHERE customer_id=?", (_ccode,)).fetchone()
+                        _pf = {
+                            "kind": _pk, "ref": _pr,
+                            "cust": _ccode,
+                            "name": (_cname2["account_name"]
+                                     if _cname2 else _ccode),
+                            "date": _drow2["d"],
+                            "bal": float(engine.doc_balance(
+                                con, _pk, _pr))}
+            except Exception:
+                _pf = None
+            if _pf is not None and not _pf["cust"]:
+                # A document with no customer (an internal work
+                # order) has no one to bill — its button still
+                # lands here, on the blank form; the form governs.
+                _pf = None
         open_inv = engine.list_open_invoices(con)
-        if not open_inv:
+        if not open_inv and edit_info is None and _pf is None:
             # A Change Order may still be open (build 'v'): it takes
             # its payment on its own summary or in Cash.
             try:
@@ -2282,11 +2683,19 @@ class AccountingViews(CoreViews):
             v = str(r["invoice_no"])
             d = f"{v} · {r['account_name']} · bal ${float(r['balance']):,.2f}"
             pay_inv_opts.append((v, d, v))
+        _pf_inv_val = ""
+        _pf_inv_hid = ""
+        if _pf is not None and _pf["kind"] == "invoice":
+            _pf_inv_val = (f"{_pf['ref']} · {_pf['name']} · bal "
+                           f"${_pf['bal']:,.2f}")
+            _pf_inv_hid = _pf["ref"]
         pay_inv_combo = (
             combo_field("f_pay_inv", "invoice_no_text", pay_inv_opts,
+                        value=_pf_inv_val,
                         label="Invoice",
                         placeholder="Type to search invoices…")
-            + '<input type=hidden id="f_pay_inv_id" name=invoice_no value="">'
+            + f'<input type=hidden id="f_pay_inv_id" name=invoice_no '
+              f'value="{html.escape(_pf_inv_hid, quote=True)}">'
         )
         # Customer picker (2026-10-15): a filter + reference, NOT a
         # standalone customer payment — payments still attach to
@@ -2302,17 +2711,46 @@ class AccountingViews(CoreViews):
                 cust_opts.append((r["customer_id"],
                                   f"{r['account_name']} ({r['customer_id']})",
                                   r["customer_id"]))
+        _cust_val = ""
+        _cust_hid = ""
+        _method_val = ""
+        _method_hid = ""
+        if edit_info is not None:
+            _ec = edit_info["customer_id"]
+            _erow = con.execute(
+                "SELECT account_name FROM customers WHERE customer_id=?",
+                (_ec,)).fetchone()
+            _ename = _erow["account_name"] if _erow else _ec
+            if _ec not in _seen_cust:
+                cust_opts.append((_ec, f"{_ename} ({_ec})", _ec))
+            _cust_val = f"{_ename} ({_ec})"
+            _cust_hid = _ec
+            _method_val = edit_info["method"] or ""
+            _method_hid = _method_val
+        elif _pf is not None:
+            # Build 'ai': the prefill sets the form's customer, the
+            # way an edit does — the splits filter then stands on
+            # that customer and the target's row shows.
+            _ec = _pf["cust"]
+            if _ec not in _seen_cust:
+                cust_opts.append((_ec, f"{_pf['name']} ({_ec})", _ec))
+            _cust_val = f"{_pf['name']} ({_ec})"
+            _cust_hid = _ec
         pay_cust_combo = (
             combo_field("f_pay_cust", "customer_id_text", cust_opts,
+                        value=_cust_val,
                         label="Customer",
                         placeholder="Type to search customers…")
-            + '<input type=hidden id="f_pay_cust_id" name=customer_id value="">'
+            + f'<input type=hidden id="f_pay_cust_id" name=customer_id '
+              f'value="{html.escape(_cust_hid, quote=True)}">'
         )
         pay_method_opts = [(m, m, m) for m in engine.CASH_METHODS]
         pay_method_combo = (
             combo_field("f_pay_method", "method_text", pay_method_opts,
+                        value=_method_val,
                         label="Method", placeholder="Type to search methods…")
-            + '<input type=hidden id="f_pay_method_id" name=method value="">'
+            + f'<input type=hidden id="f_pay_method_id" name=method '
+              f'value="{html.escape(_method_hid, quote=True)}">'
         )
         today = date.today().isoformat()
         _rp = con.execute("SELECT COALESCE(MAX(pay_id), 0) + 1 FROM collections").fetchone()[0]
@@ -2323,35 +2761,84 @@ class AccountingViews(CoreViews):
         # the table below narrows to that customer's open invoices,
         # one Apply $ per invoice. The total adds up as amounts are
         # typed. The backend enforces one customer per payment.
+        # Edit mode: the batch's invoices stand in the row set at
+        # their PRE-payment balances (today's balance plus what this
+        # payment applied), even when the payment closed them and
+        # they no longer count as open.
+        inv_rows = []
+        for r in open_inv:
+            r = dict(r)
+            if r["invoice_no"] in e_inv_applied:
+                r["balance"] = (float(r["balance"])
+                                + e_inv_applied[r["invoice_no"]])
+            inv_rows.append(r)
+        if edit_info is not None:
+            _have = {r["invoice_no"] for r in inv_rows}
+            for ino, amt in e_inv_applied.items():
+                if ino in _have:
+                    continue
+                # Build 'aj' (Jason 2026-10-28, JC-AI3): the key
+                # comes from the INVOICE's own customer_id — the
+                # customers table's customer_id column is the
+                # operator CODE, and feeding it to cust_code()
+                # resolved None (non-numeric codes) or another
+                # customer entirely (a code equal to some key).
+                # Rule for this whole form: documents give keys;
+                # codes come only from cust_code(key).
+                r = con.execute(
+                    "SELECT i.invoice_no, i.invoice_date, "
+                    "i.customer_id AS cust_key, c.account_name "
+                    "FROM invoices i JOIN customers c "
+                    "ON c.id = i.customer_id WHERE i.invoice_no=?",
+                    (ino,)).fetchone()
+                if not r:
+                    continue
+                inv_rows.append({
+                    "invoice_no": ino,
+                    "invoice_date": r["invoice_date"],
+                    "customer_id": engine.cust_code(con, r["cust_key"]),
+                    "account_name": r["account_name"],
+                    "balance": float(engine.invoice_totals(
+                        con, ino)["balance"]) + amt})
+        if _pf is not None and _pf["kind"] == "invoice" \
+                and _pf["ref"] not in {r["invoice_no"] for r in inv_rows}:
+            # Build 'ai': a prefilled invoice that is no longer
+            # open (settled) stands in the row set at its balance,
+            # the way an edited payment's closed invoices do.
+            inv_rows.append({
+                "invoice_no": _pf["ref"],
+                "invoice_date": _pf["date"],
+                "customer_id": _pf["cust"],
+                "account_name": _pf["name"],
+                "balance": _pf["bal"]})
         cust_map = json.dumps({r["invoice_no"]: r["customer_id"]
-                               for r in open_inv})
+                               for r in inv_rows})
         cust_name_map = json.dumps({r["customer_id"]: r["account_name"]
-                                    for r in open_inv})
+                                    for r in inv_rows})
+        # Build 'ak' (Jason 2026-10-28): the per-row "Lines" toggle
+        # button and its line-breakdown block are removed package-
+        # wide at his order — no buttons stand in line rows. The
+        # form allocates per document (the Apply column); the engine
+        # still honors line splits a post carries. Each split row
+        # carries the template's red line-del ✕ (class co-line: the
+        # global line-del machinery hides the first row's ✕, as on
+        # every line grid).
         def _apply_row(r):
             ino = r["invoice_no"]
-            q = html.escape(ino, quote=True)
-            states = engine.invoice_line_states(con, ino)
-            lines_btn = (" <button type=button class=pay-lines-btn "
-                         f"data-ino=\"{q}\">Lines</button>"
-                         if states else "")
-            main = (
-                f"<tr data-cust='{html.escape(r['customer_id'])}' style='display:none'>"
+            _val = (f" value='{e_inv_applied[ino]:.2f}'"
+                    if ino in e_inv_applied else "")
+            return (
+                f"<tr class=co-line data-cust='{html.escape(r['customer_id'])}' style='display:none'>"
                 f"<td><input type=checkbox class=pay-full data-bal='{r['balance']:.2f}' title='Pay this invoice in full'></td>"
                 f"<td>{html.escape(ino)}</td>"
                 f"<td>{html.escape(r['account_name'])}</td>"
                 f"<td>{html.escape(fmt_date(r['invoice_date']))}</td>"
                 f"<td>${r['balance']:,.2f}</td>"
                 f"<td><input name=p__{html.escape(ino)} class=pay-split type=number step=0.01 min=0 "
-                f"max='{r['balance']:.2f}' placeholder='0.00'>{lines_btn}</td></tr>")
-            if not states:
-                return main
-            return main + (
-                f"<tr class='pay-lines' data-cust='{html.escape(r['customer_id'])}' "
-                f"data-ino=\"{q}\" style='display:none'><td colspan=6>"
-                + self._alloc_table_html(states, "pl", ino, "remaining")
-                + f"<span class=hint id=\"plstat-{q}\"></span></td></tr>")
+                f"max='{r['balance']:.2f}' placeholder='0.00'{_val}>"
+                f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
 
-        apply_rows = "".join(_apply_row(r) for r in open_inv)
+        apply_rows = "".join(_apply_row(r) for r in inv_rows)
         # Split payment across an invoice and its Change Order
         # (build 'v', Jason 2026-10-25, the amended-PO exception):
         # an open Change Order of the same customer rides the same
@@ -2359,43 +2846,227 @@ class AccountingViews(CoreViews):
         # batch, per-document allocations recorded separately (the
         # documents never merge). The CO row posts pco__<co_no>.
         _co_rows = []
+        _co_data = []
+        _co_seen = set()
         try:
             for r in con.execute(
-                    """SELECT co.co_no, co.co_date, c.customer_id AS cust_code,
+                    """SELECT co.co_no, co.co_date, co.customer_id AS cust_key,
                               c.account_name
                        FROM change_orders co
                        JOIN customers c ON c.id = co.customer_id
                        WHERE co.status = 'Issued'
                        ORDER BY co.co_date, co.co_no"""):
                 _bal = float(engine.doc_balance(con, "change", r["co_no"]))
+                _ap = e_co_applied.get(r["co_no"])
+                if _ap is not None:
+                    _bal += _ap
                 if _bal <= 0.009:
                     continue
+                _co_seen.add(r["co_no"])
+                # Build 'aj': the CO's own key, converted — the
+                # same discipline as the invoice append above.
+                _ccode = engine.cust_code(con, r["cust_key"])
+                _co_data.append({"co_no": r["co_no"],
+                                 "cust": _ccode,
+                                 "name": r["account_name"],
+                                 "bal": _bal})
+                _val = f" value='{_ap:.2f}'" if _ap is not None else ""
                 _co_rows.append(
-                    f"<tr data-cust='{html.escape(r['cust_code'])}' style='display:none'>"
+                    f"<tr class=co-line data-cust='{html.escape(_ccode)}' style='display:none'>"
                     f"<td><input type=checkbox class=pay-full data-bal='{_bal:.2f}' title='Pay this change order in full'></td>"
                     f"<td>Change Order {html.escape(r['co_no'])}</td>"
                     f"<td>{html.escape(r['account_name'])}</td>"
                     f"<td>{html.escape(fmt_date(r['co_date']))}</td>"
                     f"<td>${_bal:,.2f}</td>"
                     f"<td><input name=pco__{html.escape(r['co_no'], quote=True)} class=pay-split type=number step=0.01 min=0 "
-                    f"max='{_bal:.2f}' placeholder='0.00'></td></tr>")
+                    f"max='{_bal:.2f}' placeholder='0.00'{_val}>"
+                    f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
+            if edit_info is not None:
+                # Change Orders this payment closed stand at their
+                # pre-payment balance too.
+                for _cno, _ap in e_co_applied.items():
+                    if _cno in _co_seen:
+                        continue
+                    r = con.execute(
+                        "SELECT co.co_date, co.customer_id AS cust_key, "
+                        "c.account_name FROM change_orders co "
+                        "JOIN customers c ON c.id = co.customer_id "
+                        "WHERE co.co_no=?", (_cno,)).fetchone()
+                    if not r:
+                        continue
+                    _bal = float(engine.doc_balance(
+                        con, "change", _cno)) + _ap
+                    # Build 'aj': the CO's own key, converted —
+                    # the same discipline as the invoice append.
+                    _ccode = engine.cust_code(con, r["cust_key"])
+                    _co_data.append({"co_no": _cno,
+                                     "cust": _ccode,
+                                     "name": r["account_name"],
+                                     "bal": _bal})
+                    _co_rows.append(
+                        f"<tr class=co-line data-cust='{html.escape(_ccode)}' style='display:none'>"
+                        f"<td><input type=checkbox class=pay-full data-bal='{_bal:.2f}' title='Pay this change order in full'></td>"
+                        f"<td>Change Order {html.escape(_cno)}</td>"
+                        f"<td>{html.escape(r['account_name'])}</td>"
+                        f"<td>{html.escape(fmt_date(r['co_date']))}</td>"
+                        f"<td>${_bal:,.2f}</td>"
+                        f"<td><input name=pco__{html.escape(_cno, quote=True)} class=pay-split type=number step=0.01 min=0 "
+                        f"max='{_bal:.2f}' placeholder='0.00' value='{_ap:.2f}'>"
+                        f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
         except Exception:
             _co_rows = []
+        if _pf is not None and _pf["kind"] == "change" \
+                and _pf["ref"] not in _co_seen:
+            # Build 'ai': a prefilled change order that is no
+            # longer open stands in the row set at its balance.
+            _co_data.append({"co_no": _pf["ref"], "cust": _pf["cust"],
+                             "name": _pf["name"], "bal": _pf["bal"]})
+            _co_rows.append(
+                f"<tr class=co-line data-cust='{html.escape(_pf['cust'])}' style='display:none'>"
+                f"<td><input type=checkbox class=pay-full data-bal='{_pf['bal']:.2f}' title='Pay this change order in full'></td>"
+                f"<td>Change Order {html.escape(_pf['ref'])}</td>"
+                f"<td>{html.escape(_pf['name'])}</td>"
+                f"<td>{html.escape(fmt_date(_pf['date']))}</td>"
+                f"<td>${_pf['bal']:,.2f}</td>"
+                f"<td><input name=pco__{html.escape(_pf['ref'], quote=True)} class=pay-split type=number step=0.01 min=0 "
+                f"max='{_pf['bal']:.2f}' placeholder='0.00'>"
+                f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
         apply_rows += "".join(_co_rows)
+        # Edit mode only: the payment's document splits (work order,
+        # rental, sale, quote) ride the same table in the Change
+        # Order row's shape, posting pd__<kind>__<ref> — parsed by
+        # the correction save through the credit side's own
+        # doc-split reader. Balances are pre-payment, as above.
+        if edit_info is not None:
+            _doc_dates = {"wo": ("work_orders", "wo_id", "open_date"),
+                          "ticket": ("tickets", "ticket_id", "on_rent"),
+                          "sale": ("sales", "sale_id", "sale_date"),
+                          "quote": ("quotes", "quote_no", "quote_date")}
+            _doc_rows = []
+            _cust = edit_info["customer_id"]
+            _cname_row = con.execute(
+                "SELECT account_name FROM customers WHERE customer_id=?",
+                (_cust,)).fetchone()
+            _cname = _cname_row["account_name"] if _cname_row else _cust
+            for (kind, ref), amt in sorted(e_doc_applied.items()):
+                _tbl, _idc, _dc = _doc_dates[kind]
+                _drow = con.execute(
+                    f"SELECT {_dc} AS d FROM {_tbl} WHERE {_idc}=?",
+                    (ref,)).fetchone()
+                _bal = float(engine.doc_balance(con, kind, ref)) + amt
+                _lab = f"{engine.DOC_LABELS[kind]} {ref}"
+                _qref = html.escape(ref, quote=True)
+                _doc_rows.append(
+                    f"<tr class=co-line data-cust='{html.escape(_cust)}' style='display:none'>"
+                    f"<td><input type=checkbox class=pay-full data-bal='{_bal:.2f}' title='Pay in full'></td>"
+                    f"<td>{html.escape(_lab)}</td>"
+                    f"<td>{html.escape(_cname)}</td>"
+                    f"<td>{html.escape(fmt_date(_drow['d'] if _drow else ''))}</td>"
+                    f"<td>${_bal:,.2f}</td>"
+                    f"<td><input name=pd__{kind}__{_qref} class=pay-split type=number step=0.01 min=0 "
+                    f"max='{_bal:.2f}' placeholder='0.00' value='{amt:.2f}'>"
+                    f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
+            apply_rows += "".join(_doc_rows)
+        if _pf is not None and _pf["kind"] in (
+                "wo", "ticket", "sale", "quote"):
+            # Build 'ai': the prefilled document's own split row —
+            # the same row shape an edited payment's document
+            # splits stand in (pd__<kind>__<ref>, Lines where the
+            # document carries line states). The form's filter
+            # stands on the document's customer (set above), so
+            # the row shows with the customer's other rows.
+            _kind = _pf["kind"]
+            _ref = _pf["ref"]
+            _qref = html.escape(_ref, quote=True)
+            _prow = (
+                f"<tr class=co-line data-cust='{html.escape(_pf['cust'])}' style='display:none'>"
+                f"<td><input type=checkbox class=pay-full data-bal='{_pf['bal']:.2f}' title='Pay in full'></td>"
+                f"<td>{html.escape(engine.DOC_LABELS[_kind])} {html.escape(_ref)}</td>"
+                f"<td>{html.escape(_pf['name'])}</td>"
+                f"<td>{html.escape(fmt_date(_pf['date']))}</td>"
+                f"<td>${_pf['bal']:,.2f}</td>"
+                f"<td><input name=pd__{_kind}__{_qref} class=pay-split type=number step=0.01 min=0 "
+                f"max='{_pf['bal']:.2f}' placeholder='0.00'>"
+                f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
+            apply_rows += _prow
         # Header zone (build 'r', Jason 2026-10-25, facelift item 4):
-        # Company block, the Customer picker in the middle block (it
-        # is this form's customer reference — a filter for the splits
-        # below, unchanged), RP # + Date, bar, then the form's work.
+        # Company block, the Customer picker (it is this form's
+        # customer reference — a filter for the splits below,
+        # unchanged), RP # + Date, bar, then the form's work.
         # The payment form has no line-item grid; its fields and the
         # splits table are the document's work, not above-the-lines
-        # fields.
-        _pay_doc = f'Payment # <input value="{rp_no}" disabled class=w-xs>'
-        _pay_date = f'<label>Date</label> <input type=date name=pay_date value="{today}" required class=w-sm>'
+        # fields. Build 'ao' (Jason 2026-10-29): the head stacks
+        # like every other money form's — the Customer picker stands
+        # on its own row BELOW the Company block, not to its right
+        # (stacked=True; the form carries no Job Info box).
+        if edit_info is not None:
+            if pay_mode == "session":
+                _pay_doc = (f'Payment # <input name=pay_no '
+                            f'value="{html.escape(rev_batch, quote=True)}" '
+                            f'class=w-xs>')
+                _pay_hiddens = (
+                    f'<input type=hidden name=revising value=1>'
+                    f'<input type=hidden name=target_batch '
+                    f'value="{html.escape(rev_batch, quote=True)}">')
+            else:
+                _pay_doc = (f'Payment # <input '
+                            f'value="{html.escape(edit_batch, quote=True)}" '
+                            f'disabled class=w-xs>')
+                _pay_hiddens = (
+                    f'<input type=hidden name=editing value=1>'
+                    f'<input type=hidden name=orig_batch '
+                    f'value="{html.escape(edit_batch, quote=True)}">')
+            _pay_date_val = edit_info["pay_date"] or today
+            _pay_ref = edit_info["ref_no"] or ""
+            _pay_notes = edit_info["notes"] or ""
+        else:
+            _pay_doc = f'Payment # <input value="{rp_no}" disabled class=w-xs>'
+            _pay_hiddens = f'<input type=hidden name=rp_no value="{rp_no}">'
+            _pay_date_val = today
+            _pay_ref = ""
+            _pay_notes = ""
+        _pay_date = f'<label>Date</label> <input type=date name=pay_date value="{_pay_date_val}" required class=w-sm>'
+        # Add Item (build 'af', Jason 2026-10-28): the picker's
+        # documents — the same open documents the splits table
+        # lists (open invoices + open Change Orders), as data for
+        # the form's addItemRow script.
+        _add_docs = []
+        for r in inv_rows:
+            _add_docs.append({
+                "v": f"invoice:{r['invoice_no']}",
+                "cust": r["customer_id"],
+                "label": (f"Invoice {r['invoice_no']} · "
+                          f"{r['account_name']} · bal "
+                          f"${float(r['balance']):,.2f}")})
+        for _cd in _co_data:
+            _add_docs.append({
+                "v": f"change:{_cd['co_no']}",
+                "cust": _cd["cust"],
+                "label": (f"Change Order {_cd['co_no']} · "
+                          f"{_cd['name']} · bal ${_cd['bal']:,.2f}")})
+        pay_add_docs = json.dumps(_add_docs)
         return f"""
         <form method=post action="/pay" enctype="multipart/form-data">
-          <input type=hidden name=rp_no value="{rp_no}">
-          {self._form_head(con, _pay_doc, _pay_date, pay_cust_combo)}
-          {self._top_commit("Apply payment")}
+          {_pay_hiddens}
+          {self._form_head(con, _pay_doc, _pay_date, pay_cust_combo, stacked=True)}
+          <!-- One apply (build 'aa', Jason 2026-10-26, WS6 / JC-AA2):
+               the form's single commit is Save (labeled "Apply
+               payment" until build 'ad', Jason 2026-10-27 — the
+               commit is named for the act only), and the
+               scope toggle says what it applies: the amounts as
+               entered (the default), or every shown split filled
+               to its full balance in the same action. The
+               standalone "Pay all shown in full" button is
+               deleted — two controls doing one thing is drift; one
+               button, toggle what you want to apply to. Build 'ab'
+               (form-row ruling, same day): the commit rides the
+               universal split row's RIGHT cluster with Print — the
+               top-commit bar is retired. Build 'ac' (Jason
+               2026-10-27): the toggle moves OUT of the button
+               cluster into the form body directly above the row —
+               the cluster is Print, then the one commit, last;
+               the toggle is form content, one control set,
+               unchanged names/values/behavior. -->
           <div class="row">
             <div>{pay_inv_combo}</div>
             <div><label>Total payment</label><b id="pay-total-display">$0.00</b><input type=hidden name=amount id="pay-total" value="0"></div>
@@ -2404,16 +3075,18 @@ class AccountingViews(CoreViews):
           <table id="pay-splits"><tr><th></th><th>Invoice</th><th>Customer</th><th>Date</th><th>Balance</th><th>Apply $</th></tr>
           <tr id="pay-hint"><td colspan=6 class="hint">No customer selected.</td></tr>
           {apply_rows}</table>
-          <p><button type=button id="pay-all-full">Pay all shown in full</button></p>
           <div class="row4">
-            <div><label>Payment Reference</label><input name=ref class=w-sm></div>
+            <div><label>Payment Reference</label><input name=ref class=w-sm value="{html.escape(_pay_ref, quote=True)}"></div>
             <div>{pay_method_combo}</div>
             <div><label>Upload(s)</label><input type=file name=pay_upload></div>
           </div>
-          <div><label>Notes</label><input name=notes style="width:100%"></div>
-          {self._btn_row(None, "payjobpop", add_item=False)}
+          <div><label>Notes</label><input name=notes style="width:100%" value="{html.escape(_pay_notes, quote=True)}"></div>
+          {"" if pay_mode == "locked" else '<div style="display:flex;justify-content:flex-end;gap:16px;margin:0 0 4px"><label style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><input type=radio name=pay_scope value="entered" checked> Amounts as entered</label><label style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><input type=radio name=pay_scope value="full"> All shown in full</label></div>'}
+          {self._btn_row(None, "payjobpop", add_item=False, edit_pop="revpop") if pay_mode == "locked" else self._btn_row("Save", "payjobpop", add_item=True)}
           {self._job_info_popup('payjobpop')}
+          {self._revise_popup(con, "payment", edit_batch) if pay_mode == "locked" else ""}
         </form>
+        {self._LOCK_JS if pay_mode == "locked" else ""}
         <script>
         (function(){{
           var form = document.querySelector('form[action="/pay"]');
@@ -2487,40 +3160,14 @@ class AccountingViews(CoreViews):
             var cust = pickedCust() || CUST[pickedInv()] || '';
             form.querySelectorAll('#pay-splits tr[data-cust]').forEach(function(tr){{
               var show = cust && tr.dataset.cust === cust;
-              if (tr.classList.contains('pay-lines')) show = show && tr.classList.contains('open');
+              // Add Item rows (build 'af'): a row whose document
+              // is not picked yet stands open so the pick can be
+              // made; once picked it follows the customer filter.
+              if (tr.classList.contains('pay-add-row')) show = !tr.dataset.cust || (cust && tr.dataset.cust === cust);
               tr.style.display = show ? '' : 'none';
             }});
             if (hint) hint.style.display = cust ? 'none' : '';
           }}
-          function lineStatus(block){{
-            var ino = block.dataset.ino;
-            var span = document.getElementById('plstat-' + ino);
-            var split = form.querySelector('input[name="p__' + ino + '"]');
-            var x = 0;
-            block.querySelectorAll('.alloc-amt').forEach(function(el){{ x += parseFloat(el.value) || 0; }});
-            var y = split ? (parseFloat(split.value) || 0) : 0;
-            if (span) span.textContent = 'Lines $' + x.toFixed(2) + ' of $' + y.toFixed(2) + (x > y + 0.004 ? ' — over the Apply amount' : '');
-          }}
-          form.querySelectorAll('.pay-lines-btn').forEach(function(btn){{
-            btn.addEventListener('click', function(){{
-              var block = form.querySelector('tr.pay-lines[data-ino="' + btn.dataset.ino + '"]');
-              if (block) {{ block.classList.toggle('open'); filter(); }}
-            }});
-          }});
-          form.querySelectorAll('.alloc-full').forEach(function(cb){{
-            cb.addEventListener('change', function(){{
-              var inp = form.querySelector('input[name="' + cb.dataset.name + '"]');
-              if (inp) inp.value = cb.checked ? cb.dataset.rem : '';
-              var block = cb.closest('tr.pay-lines');
-              if (block) lineStatus(block);
-            }});
-          }});
-          form.querySelectorAll('.alloc-amt').forEach(function(el){{
-            el.addEventListener('input', function(){{
-              var block = el.closest('tr.pay-lines');
-              if (block) lineStatus(block);
-            }});
-          }});
           function sum(){{
             var t = 0;
             form.querySelectorAll('.pay-split').forEach(function(el){{
@@ -2538,25 +3185,31 @@ class AccountingViews(CoreViews):
               sum();
             }});
           }});
-          var allBtn = document.getElementById('pay-all-full');
-          if (allBtn) allBtn.addEventListener('click', function(){{
-            form.querySelectorAll('#pay-splits tr[data-cust]').forEach(function(tr){{
-              if (tr.style.display === 'none') return;
-              var cb = tr.querySelector('.pay-full');
-              var amt = tr.querySelector('.pay-split');
-              if (cb) cb.checked = true;
-              if (amt && cb) amt.value = cb.dataset.bal;
-            }});
-            sum();
+          // Scope toggle (build 'aa'): "All shown in full" fills
+          // every shown split to its full balance as part of the
+          // Apply itself — one action, one button.
+          form.addEventListener('submit', function(){{
+            var sc = form.querySelector('input[name=pay_scope]:checked');
+            if (sc && sc.value === 'full') {{
+              form.querySelectorAll('#pay-splits tr[data-cust]').forEach(function(tr){{
+                if (tr.style.display === 'none') return;
+                var cb = tr.querySelector('.pay-full');
+                var amt = tr.querySelector('.pay-split');
+                if (cb) cb.checked = true;
+                if (amt && cb) amt.value = cb.dataset.bal;
+              }});
+              sum();
+            }}
           }});
           form.querySelectorAll('.pay-split').forEach(function(el){{
-            el.addEventListener('input', function(){{
-              sum();
-              var tr = el.closest('tr');
-              var nx = tr && tr.nextElementSibling;
-              if (nx && nx.classList.contains('pay-lines')) lineStatus(nx);
-            }});
+            el.addEventListener('input', function(){{ sum(); }});
           }});
+          // Build 'ak': the template's line-del ✕ removes a split
+          // row through the global handler, which fires an input
+          // event on the row's container — re-sum on it so the
+          // form's total follows the rows that stand.
+          var splitsTbl = document.getElementById('pay-splits');
+          if (splitsTbl) splitsTbl.addEventListener('input', function(){{ sum(); }});
           function onCust(){{
             rebuildInv(pickedCust());
             if (invText) invText.value = '';
@@ -2571,6 +3224,61 @@ class AccountingViews(CoreViews):
           if (custHid) custHid.addEventListener('change', function(){{ rebuildInv(pickedCust()); filter(); }});
           if (invText) {{ invText.addEventListener('input', onInv); invText.addEventListener('change', onInv); }}
           if (invHid) invHid.addEventListener('change', onInv);
+          // Add Item (build 'af', Jason 2026-10-28): adds an
+          // allocation row — a document picker over the same open
+          // documents the splits table lists, plus an amount. The
+          // row commits nothing; the batch's Save posts it
+          // (adddoc__N / addamt__N, merged by the post, which
+          // refuses a document that already holds a row).
+          var ADD_DOCS = {pay_add_docs};
+          var addN = 0;
+          function addItemRow(){{
+            addN += 1;
+            var n = addN;
+            var tbl = document.getElementById('pay-splits');
+            var tr = document.createElement('tr');
+            tr.className = 'pay-add-row';
+            tr.setAttribute('data-cust', '');
+            var td0 = document.createElement('td');
+            var del = document.createElement('button');
+            del.type = 'button'; del.className = 'line-del';
+            del.title = 'Remove row'; del.textContent = '✕';
+            del.addEventListener('click', function(){{ tr.remove(); sum(); }});
+            td0.appendChild(del);
+            var td1 = document.createElement('td');
+            td1.colSpan = 4;
+            var sel = document.createElement('select');
+            sel.name = 'adddoc__' + n;
+            var o0 = document.createElement('option');
+            o0.value = ''; o0.textContent = 'Pick a document';
+            sel.appendChild(o0);
+            ADD_DOCS.forEach(function(d){{
+              var o = document.createElement('option');
+              o.value = d.v; o.textContent = d.label;
+              o.setAttribute('data-cust', d.cust);
+              sel.appendChild(o);
+            }});
+            sel.addEventListener('change', function(){{
+              var o = sel.options[sel.selectedIndex];
+              tr.setAttribute('data-cust', o ? (o.getAttribute('data-cust') || '') : '');
+              filter();
+            }});
+            td1.appendChild(sel);
+            var td2 = document.createElement('td');
+            var amt = document.createElement('input');
+            amt.name = 'addamt__' + n;
+            amt.className = 'pay-split';
+            amt.type = 'number'; amt.step = '0.01'; amt.min = '0';
+            amt.placeholder = '0.00';
+            amt.addEventListener('input', sum);
+            td2.appendChild(amt);
+            tr.appendChild(td0); tr.appendChild(td1); tr.appendChild(td2);
+            (tbl.querySelector('tbody') || tbl).appendChild(tr);
+            filter();
+          }}
+          form.querySelectorAll('button[type=button]').forEach(function(b){{
+            if (b.textContent.trim().toLowerCase() === 'add item') b.addEventListener('click', addItemRow);
+          }});
           filter(); sum();
         }})();
         </script>
@@ -2579,6 +3287,33 @@ class AccountingViews(CoreViews):
     def _frag_credit_form(self, con, q):
         q = q or {}
         cid = q.get("customer_id") or ""
+        # Build 'aa' (2026-10-26, WS5): cm_no loads a SPECIFIC memo —
+        # the Credit Memo summary's Edit door lands here with the
+        # memo's customer AND its number; the memo stands selected in
+        # the Apply Leftover popup, which renders open. A memo with
+        # no unapplied credit left is not in the open list; the form
+        # then stands on the customer, as before.
+        load_cm = (q.get("cm_no") or "").strip()
+        # Void-and-revise (build 'ab', JC-AB17): the credit form is
+        # a working form, not the memo's document form. Build 'ac'
+        # (Jason 2026-10-27, defect C-1 — supersedes JC-AB17's
+        # no-lock arrangement): with a live memo loaded, the form
+        # takes the same locked/session split as the other seven
+        # kinds — it opens LOCKED, the row carries Edit alone, and
+        # no Save stands beside it; the working form (no memo
+        # loaded) keeps Save + Add Item. Confirming the revision
+        # voids the memo and clones it (credit's revision completes
+        # at the confirm act in the engine), and the form then
+        # stands on the clone — again locked, Edit alone. A
+        # revised-away memo carries no Edit.
+        _cm_live = None
+        if load_cm:
+            _cm_live = con.execute(
+                "SELECT * FROM credit_memos WHERE cm_no=?",
+                (load_cm,)).fetchone()
+            if _cm_live is not None and dict(_cm_live).get(
+                    "revised_by_id"):
+                _cm_live = None
         custs = con.execute("SELECT customer_id, account_name FROM customers ORDER BY account_name").fetchall()
         if not custs:
             return ("<p>No customers yet.</p>"
@@ -2607,31 +3342,31 @@ class AccountingViews(CoreViews):
 
         def _capply_row(r):
             ino = r["invoice_no"]
-            q = html.escape(ino, quote=True)
-            states = engine.invoice_line_states(con, ino)
-            lines_btn = (" <button type=button class=ca-lines-btn>Lines</button>"
-                         if states else "")
             # A settled invoice takes no positive credit, but a
             # NEGATIVE credit re-opens settled amount (Jason
             # 2026-10-23) — it stays listed, capped at what it has
-            # settled, its line table capped at each line's settled.
+            # settled.
+            # Build 'ak' (Jason 2026-10-28): the row's "Lines" toggle
+            # and its line-breakdown block are removed, as on the
+            # payment form — the form applies per document.
             _settled = r['balance'] <= 0.005
             _cap = r['paid'] if _settled else r['balance']
-            _ckey = "allocated" if _settled else "remaining"
-            main = (
-                f"<tr><td>{html.escape(ino)}"
+            # Build 'al' (Jason 2026-10-28): the invoice rows take
+            # the unified application grid's shape (Document / Date
+            # / Total / Settled / Balance / Apply — Settled carries
+            # cash + credit together, as the document rows state
+            # it) and the template's red line-del X, classed
+            # co-line like the payment form's split rows.
+            return (
+                f"<tr class=co-line><td>Invoice {html.escape(ino)}"
                 f"{' · settled' if _settled else ''}</td>"
                 f"<td>{html.escape(fmt_date(r['invoice_date']))}</td>"
-                f"<td>${r['total']:,.2f}</td><td>${r['cash']:,.2f}</td>"
-                f"<td>${r['credit']:,.2f}</td><td>${r['balance']:,.2f}</td>"
+                f"<td>${r['total']:,.2f}</td>"
+                f"<td>${r['cash'] + r['credit']:,.2f}</td>"
+                f"<td>${r['balance']:,.2f}</td>"
                 f"<td><input name=a__{html.escape(ino)} type=number step=0.01 min=0 "
-                f"max='{_cap:.2f}' placeholder='0.00'>{lines_btn}</td></tr>")
-            if not states:
-                return main
-            return main + (
-                f"<tr class='ca-lines' style='display:none'><td colspan=7>"
-                + self._alloc_table_html(states, "ca", ino, _ckey)
-                + "</td></tr>")
+                f"max='{_cap:.2f}' placeholder='0.00'>"
+                f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
 
         apply_rows = "".join(_capply_row(r) for r in open_inv)
         if cid:
@@ -2703,7 +3438,7 @@ class AccountingViews(CoreViews):
                 # Open documents take a credit up to their balance; a
                 # settled document takes a NEGATIVE credit up to what
                 # it has settled (re-opening) — same listing, the cap
-                # and the line table follow the direction that fits.
+                # follows the direction that fits.
                 if _bal > 0.005:
                     _cap, _ckey = _bal, "remaining"
                 elif _set > 0.005:
@@ -2711,44 +3446,49 @@ class AccountingViews(CoreViews):
                 else:
                     continue
                 _q = html.escape(_ref, quote=True)
-                _states = engine.doc_line_states(con, _kind, _ref)
-                _lbtn = (" <button type=button class=ca-lines-btn>"
-                         "Lines</button>" if _states else "")
                 _main = (
-                    f"<tr><td>{engine.DOC_LABELS[_kind]} {_q}"
+                    f"<tr class=co-line><td>{engine.DOC_LABELS[_kind]} {_q}"
                     f"{' · settled' if _ckey == 'allocated' else ''}</td>"
                     f"<td>{html.escape(fmt_date(_dt or ''))}</td>"
                     f"<td>${_tot:,.2f}</td><td>${_set:,.2f}</td>"
                     f"<td>${_bal:,.2f}</td>"
                     f"<td><input name=cd__{_kind}__{_q} type=number "
                     f"step=0.01 min=0 max='{_cap:.2f}' "
-                    f"placeholder='0.00'>{_lbtn}</td></tr>")
-                if _states:
-                    _main += (
-                        f"<tr class='ca-lines' style='display:none'>"
-                        f"<td colspan=6>"
-                        + self._alloc_table_html(
-                            _states, f"cdl__{_kind}", _ref, _ckey)
-                        + "</td></tr>")
+                    f"placeholder='0.00'>"
+                    f"<button type=button class=line-del title=\"Delete line item\">✕</button></td></tr>")
                 doc_rows.append(_main)
-        doc_block = (
-            f"""<h2 style="font-size:16px;color:var(--frame)">Documents</h2>
-            <table><tr><th>Document</th><th>Date</th><th>Total</th><th>Settled</th><th>Balance</th><th>Apply</th></tr>
-            {''.join(doc_rows)}</table>"""
-            if doc_rows else "")
+        # Build 'al' (Jason 2026-10-28): the two application
+        # tables (invoices here, "Documents" below) are ONE grid —
+        # the payment form's shape: one table of document rows,
+        # each carrying the template's red X (class co-line, the
+        # 'ak' payment-split pattern), the a__ / cd__ input names
+        # unchanged so both posts read it as before. One builder
+        # serves the form and the Apply Leftover popup (its own
+        # form, its own grid id).
+        def _apply_grid(gid):
+            _rows = apply_rows + "".join(doc_rows)
+            return (
+                f"""<table id="{gid}"><tr><th>Document</th><th>Date</th><th>Total</th><th>Settled</th><th>Balance</th><th>Apply</th></tr>
+                {_rows or '<tr><td colspan=6>No open documents.</td></tr>'}</table>"""
+                if cid else "")
         leftovers = engine.list_open_credits(con, cid or None)
         cm_opts = []
+        _cm_val = ""
+        _cm_hid = ""
         for r in leftovers:
             v = str(r["cm_no"])
             d = (f"{v} · {r['customer_id']} · unapplied "
                  f"${float(r['unapplied']):,.2f}"
                  f"{' (negative)' if float(r['unapplied']) < 0 else ''}")
             cm_opts.append((v, d, v))
+            if load_cm and v == load_cm:
+                _cm_val, _cm_hid = d, v
         cm_combo = (
-            combo_field("f_cm_no", "cm_no_text", cm_opts,
+            combo_field("f_cm_no", "cm_no_text", cm_opts, value=_cm_val,
                         label="Open credit memo", required=True,
                         placeholder="Type to search credit memos…")
-            + '<input type=hidden id="f_cm_no_id" name=cm_no value="">'
+            + f'<input type=hidden id="f_cm_no_id" name=cm_no '
+              f'value="{html.escape(_cm_hid, quote=True)}">'
         )
         leftovers_capped = leftovers[:5]
         left_table = "".join(
@@ -2760,26 +3500,22 @@ class AccountingViews(CoreViews):
         )
         if len(leftovers) > 5:
             left_table += f"<tr><td colspan=7><button type='button' class='vbtn' data-audit='/money/credits/audit' data-title='Credit memos audit'>View More ({len(leftovers)-5} More)</button></td></tr>"
-        apply_block = (
-            f"""<h2 style="font-size:16px;color:var(--frame)">Apply Now (Optional)</h2>
-            <table><tr><th>Invoice</th><th>Date</th><th>Total</th><th>Cash</th><th>Credit</th><th>Balance</th><th>Apply</th></tr>
-            {apply_rows or '<tr><td colspan=7>No open invoices.</td></tr>'}</table>
-            {doc_block}"""
-            if cid else
-            ""
-        )
+        # Build 'al': the "Apply Now (Optional)" section and its
+        # second table are gone; the one grid stands in the form
+        # below the memo's lines (see the form assembly) and in
+        # the leftover popup.
+        apply_block = _apply_grid("cm-apply")
+        apply_block_pop = _apply_grid("cm-apply-pop")
         leftover_popup = (
             f"""<div class="viewrow"><button type="button" class="vbtn" onclick="document.getElementById('cmleftpop').style.display='block'">Apply Leftover</button></div>
-            <div id="cmleftpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
-            <h3 style="margin-top:0">Apply Leftover <span style="float:right"><button type="button" onclick="document.getElementById('cmleftpop').style.display='none'">Close</button></span></h3>
+            <div id="cmleftpop" class="wpop" style="display:{'block' if _cm_hid else 'none'};position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
+            <h3 class="wpop-h" style="margin-top:0">Apply Leftover {self._pop_furniture("cmleftpop")}</h3>
             <p class="hint">Same customer only. A credit cannot exceed each balance; a negative credit cannot exceed what each document has settled.</p>
             <form method=post action="/credit/apply">
               {cm_combo}
               <label>Date</label><input type=date name=pay_date class=w-sm value="{today}">
-              <table><tr><th>Invoice</th><th>Date</th><th>Total</th><th>Cash</th><th>Credit</th><th>Balance</th><th>Apply</th></tr>
-              {apply_rows or '<tr><td colspan=7>No open invoices.</td></tr>'}</table>
-              {doc_block}
-              <p><button>Apply Leftover</button></p>
+              {apply_block_pop}
+              <p><button>Save</button></p>
             </form>
             </div>"""
             if leftovers and cid else
@@ -2794,7 +3530,7 @@ class AccountingViews(CoreViews):
             # it. Same form, same fields, same /credit/apply post.
             ""
         )
-        cm_no = engine.peek_next_doc(con, "next_cm", "CM", "credit_memos", "cm_no")
+        cm_no = engine.peek_next_doc(con, "next_cm", engine.doc_prefix(con, "cm"), "credit_memos", "cm_no", floor=engine.doc_number_floor("cm"))
         # Invoice dropdown for reference
         invs = con.execute("SELECT invoice_no, invoice_date FROM invoices ORDER BY invoice_date DESC LIMIT 20").fetchall()
         picked_inv = (q.get("invoice_no") or "").strip()
@@ -2863,23 +3599,22 @@ class AccountingViews(CoreViews):
         # Info; the engine enforces Reason itself, so the
         # requirement stands server-side, per the build 'r' F5
         # pattern). Below the lines only the Credit Total (the
-        # memo's totals) and Notes remain. Apply Now and the line
-        # pulls stay above the grid: they are the memo's application
-        # mechanism, not fields (flagged in PHASER-REPORT, carried
-        # in PHASET-REPORT).
+        # memo's totals) and Notes remain. Build 'al' (Jason
+        # 2026-10-28) settles the carried flag: nothing stands
+        # above the line rows but the header zone — the line pulls
+        # stand directly below the grid they feed, and the one
+        # application grid stands below Notes, above the row.
         _cm_extra = (f'<div class="row"><div><label>Invoice Ref</label>'
                      f'<select name=invoice_no id=cm_inv onchange="var d=this.options[this.selectedIndex].getAttribute(\'data-date\');if(d){{document.getElementById(\'cm_inv_date\').value=d}}if(this.value){{var hc=document.getElementById(\'f_cred_cust_id\');location=\'/money?tab=credit&invoice_no=\'+encodeURIComponent(this.value)+(hc&&hc.value?\'&customer_id=\'+encodeURIComponent(hc.value):\'\')}}">'
                      f'<option value="">— Pick or Type —</option>{inv_opts}</select></div></div>'
                      f'<div class="row"><div><label>Inv Date</label><input type=date name=inv_date id=cm_inv_date class=w-sm></div>'
                      f'<div><label>Reason</label><input name=reason maxlength=2000 placeholder="Billed twice / wrong dates / courtesy"></div></div>'
                      f'<div><label>Upload</label><input type=file name=cm_upload></div>')
-        _cm_doc = f'CM # <input name=cm_no value="{cm_no}" class=w-xs>'
+        _cm_doc = f'Credit Memo # <input name=cm_no value="{cm_no}" class=w-xs>'
         _cm_date = f'<label>Date</label> <input type=date name=cm_date value="{today}" required class=w-sm>'
         return f"""
         <form method=post action="/credit" enctype="multipart/form-data">
           {self._form_head(con, _cm_doc, _cm_date, issue_cust_combo, [("Invoice Ref", picked_inv)])}
-          {apply_block}
-          {pull_block}
           <input type=hidden name=tax_ui value="1">
           <div id="cm-lines">
             {self._line_head()}
@@ -2892,15 +3627,19 @@ class AccountingViews(CoreViews):
               <div><label>Rate $</label><span class="rate-x"><input name=rate class="irate w-sm" type=number step=0.01 value=0><button type=button class=line-del title="Delete line item">✕</button></span><label style="display:block;margin-top:4px"><input type=checkbox name=taxable value=1 checked class=itaxable> Tax</label></div>
             </div>
           </div>
+          {pull_block}
           <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;margin-top:8px">
             <div style="text-align:right;margin-left:auto">
               <div>Credit Total <b id="cm-total">$0.00</b></div>
             </div>
           </div>
           <div><label>Notes</label><input name=notes style="width:100%"></div>
-          {self._btn_row("Save", "cmjobpop", add_item=True)}
+          {apply_block}
+          {self._btn_row(None, "cmjobpop", add_item=False, edit_pop="revpop") if _cm_live is not None else self._btn_row("Save", "cmjobpop", add_item=True)}
           {self._job_info_popup('cmjobpop', None, _cm_extra)}
+          {self._revise_popup(con, "credit", load_cm) if _cm_live is not None else ""}
         </form>
+        {self._LOCK_JS if _cm_live is not None else ""}
         <script>
         (function(){{var box=document.getElementById('cm-lines'); if(!box)return; var form=box.closest('form');
         function num(v){{v=parseFloat(v); return isNaN(v)?0:v;}}
@@ -2929,28 +3668,10 @@ class AccountingViews(CoreViews):
         box.appendChild(c); calc();}});}});
         }})();
         </script>
-        <script>
-        (function(){{
-          document.querySelectorAll('.ca-lines-btn').forEach(function(btn){{
-            btn.addEventListener('click', function(){{
-              var tr = btn.closest('tr');
-              var nx = tr && tr.nextElementSibling;
-              if (nx && nx.classList.contains('ca-lines')) nx.style.display = (nx.style.display === 'none') ? '' : 'none';
-            }});
-          }});
-          document.querySelectorAll('.ca-lines .alloc-full').forEach(function(cb){{
-            cb.addEventListener('change', function(){{
-              var scope = cb.closest('form') || document;
-              var inp = scope.querySelector('input[name="' + cb.dataset.name + '"]');
-              if (inp) inp.value = cb.checked ? cb.dataset.rem : '';
-            }});
-          }});
-        }})();
-        </script>
         {leftover_popup}
         """ + _item_extras(con)
 
-    def _frag_petty_form(self, con, frag=False):
+    def _frag_petty_form(self, con, frag=False, edit_no=None):
         book = engine.petty_book(con)
         today = date.today().isoformat()
         desk = html.escape(self.desk(con), quote=True)
@@ -2966,6 +3687,98 @@ class AccountingViews(CoreViews):
             # header (bar) Print only — the formal drawer print stays
             # on the full page, not duplicated inside the popup.
             _pmenu = ""
+        if edit_no:
+            # Build 'ab' (redirect #2): a loaded petty entry renders
+            # as one revision card — LOCKED like every posted record,
+            # Edit starts its revision, the session Save completes
+            # the shell in the same log (complete_petty_revision).
+            erow = con.execute(
+                "SELECT * FROM petty_cash WHERE pc_id=?",
+                (edit_no,)).fetchone()
+            if erow is None:
+                return (f"<p class='card'>Petty cash entry "
+                        f"{html.escape(edit_no)} is not on record.</p>")
+            erow = dict(erow)
+            if erow.get("revised_by_id"):
+                _head = con.execute(
+                    "SELECT pc_id FROM petty_cash WHERE id=?",
+                    (erow["revised_by_id"],)).fetchone()
+                _hn = _head[0] if _head else ""
+                return (
+                    f"<p class='card'>Petty cash entry "
+                    f"{html.escape(edit_no)} was voided — revised as "
+                    f"<a href='/petty?edit={html.escape(_hn, quote=True)}'>"
+                    f"{html.escape(_hn)}</a>, the live entry at the "
+                    f"head of its chain.</p>")
+            emode = ("session" if engine.revision_pending(
+                con, "petty", erow["id"]) else "locked")
+            _cats = "".join(
+                f"<optgroup label='{lbl}'>" + "".join(
+                    f"<option{' selected' if c == erow['category'] else ''}>"
+                    f"{html.escape(c)}</option>" for c in cats)
+                + "</optgroup>"
+                for lbl, cats in (("In", engine.PC_IN_CATS),
+                                  ("Out", engine.PC_OUT_CATS)))
+            _din = " selected" if erow["direction"] == "in" else ""
+            _dout = " selected" if erow["direction"] == "out" else ""
+            _erow_btn = (self._btn_row(None, edit_pop="revpop",
+                                       print_menu=_pmenu)
+                         if emode == "locked" else
+                         self._btn_row("Save", print_menu=_pmenu))
+            _erev = (self._revise_popup(con, "petty", edit_no)
+                     if emode == "locked" else "")
+            if frag and emode == "locked":
+                # Inside the Admin popup's iframe the revise prompt
+                # cannot post (its redirect is a full page) — the
+                # door breaks out to the full drawer page instead,
+                # where the same locked card carries the prompt.
+                # Build 'ac' (Jason 2026-10-27, defect C-5): the
+                # door is the standard Edit door — the standard btn
+                # class at the standard size, in the LEFT cluster
+                # the row pattern puts Edit in (the old 'btnlink'
+                # anchor had no CSS rule and rode the right
+                # cluster). The row is built by hand here because
+                # _btn_row's Edit is a popup button; the fragment
+                # forces the anchor form of the same door.
+                _erow_btn = (
+                    f'<div style="display:flex;justify-content:'
+                    f'space-between;align-items:center;gap:8px">'
+                    f'<span style="font-size:14px;text-transform:none">'
+                    f"<a class='btn' target='_top' "
+                    f"href='/petty?edit="
+                    f"{html.escape(edit_no, quote=True)}'>"
+                    f"Edit</a></span>"
+                    f'<span style="text-align:right;font-size:14px;'
+                    f'text-transform:none"></span></div>')
+                _erev = ""
+            _ehid = (
+                f"<input type=hidden name=revising value=1>"
+                f"<input type=hidden name=target "
+                f"value=\"{html.escape(edit_no, quote=True)}\">"
+                if emode == "session" else "")
+            _elock = self._LOCK_JS if emode == "locked" else ""
+            return f"""
+        <div class="fgrid">
+          <div class="card" style="padding:10px">
+            <h2 style="font-size:14px;margin:0 0 6px">Petty Cash Entry {html.escape(edit_no)}</h2>
+            <form method=post action="/petty"{_ftarget} style="margin:0">
+              {_fhidden}
+              {_ehid}
+              <div class="row"><div><label>No.</label><input name=pc_id value="{html.escape(edit_no, quote=True)}" class=w-sm></div>
+              <div><label>Date</label><input type=date name=txn_date value="{html.escape(str(erow['txn_date'])[:10])}" required class=w-sm></div>
+              <div><label>Direction</label><select name=direction class=w-xs><option value="in"{_din}>In</option><option value="out"{_dout}>Out</option></select></div></div>
+              <div class="row"><div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm value="{float(erow['amount'])}"></div>
+              <div><label>Category</label><select name=category class=w-md>{_cats}</select></div></div>
+              <div class="row"><div><label>Payee / From</label><input name=payee value="{html.escape(erow['payee'] or '', quote=True)}" class=w-sm></div>
+              <div><label>Ref</label><input name=ref_no value="{html.escape(erow['ref_no'] or '', quote=True)}" class=w-xs></div></div>
+              <div><label>Notes</label><input name=notes value="{html.escape(erow['notes'] or '', quote=True)}"></div>
+              {_erow_btn}
+              {_erev}
+            </form>
+            {_elock}
+          </div>
+        </div>
+        """
         in_opts = "".join(f"<option>{html.escape(c)}</option>" for c in engine.PC_IN_CATS)
         out_cat_combo = (
             combo_field("f_petty_cat_out", "category_text",
@@ -2981,13 +3794,12 @@ class AccountingViews(CoreViews):
             <form method=post action="/petty"{_ftarget} style="margin:0">
               {_fhidden}
               <input type=hidden name=direction value="out">
-              {self._top_commit("Cash Out")}
-              <div class="row"><div><label>Date</label><input type=date name=txn_date value="{today}" required class=w-sm></div>
-              <div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div></div>
-              <div class="row"><div>{out_cat_combo}</div><div><label>Payee</label><input name=payee class=w-sm></div></div>
-              <div class="row"><div><label>Ref</label><input name=ref_no class=w-xs></div></div>
+              <div class="row"><div><label>No.</label><input name=pc_id value="{html.escape(engine.peek_pc_id(con), quote=True)}" class=w-sm></div>
+              <div><label>Date</label><input type=date name=txn_date value="{today}" required class=w-sm></div></div>
+              <div class="row"><div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div><div>{out_cat_combo}</div></div>
+              <div class="row"><div><label>Payee</label><input name=payee class=w-sm></div><div><label>Ref</label><input name=ref_no class=w-xs></div></div>
               <div><label>Notes</label><input name=notes></div>
-              {self._btn_row(None, "pettyoutjobpop", print_menu=_pmenu)}
+              {self._btn_row("Save", "pettyoutjobpop", print_menu=_pmenu)}
               {self._job_info_popup('pettyoutjobpop')}
             </form>
           </div>
@@ -2996,13 +3808,12 @@ class AccountingViews(CoreViews):
             <form method=post action="/petty"{_ftarget} style="margin:0">
               {_fhidden}
               <input type=hidden name=direction value="in">
-              {self._top_commit("Cash In")}
-              <div class="row"><div><label>Date</label><input type=date name=txn_date value="{today}" required class=w-sm></div>
-              <div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div></div>
-              <div class="row"><div><label>Category</label><select name=category class=w-sm>{in_opts}</select></div><div><label>From</label><input name=payee placeholder="Bank / owner" class=w-sm></div></div>
-              <div class="row"><div><label>Ref</label><input name=ref_no class=w-xs></div></div>
+              <div class="row"><div><label>No.</label><input name=pc_id value="{html.escape(engine.peek_pc_id(con), quote=True)}" class=w-sm></div>
+              <div><label>Date</label><input type=date name=txn_date value="{today}" required class=w-sm></div></div>
+              <div class="row"><div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div><div><label>Category</label><select name=category class=w-sm>{in_opts}</select></div></div>
+              <div class="row"><div><label>From</label><input name=payee placeholder="Bank / owner" class=w-sm></div><div><label>Ref</label><input name=ref_no class=w-xs></div></div>
               <div><label>Notes</label><input name=notes></div>
-              {self._btn_row(None, "pettyinjobpop", print_menu=_pmenu)}
+              {self._btn_row("Save", "pettyinjobpop", print_menu=_pmenu)}
               {self._job_info_popup('pettyinjobpop')}
             </form>
           </div>
@@ -3010,14 +3821,15 @@ class AccountingViews(CoreViews):
         """
 
     def view_customers(self, con):
-        # No inline index list (Jason 2026-10-21, look-see batch 2 —
-        # the universal form rule): Done Today below is the recent
-        # list, and the full filterable/sortable list lives behind
-        # the box's View button (/customers/all, rows open the
-        # customer). The inline table that used to sit here was
-        # neither filterable nor sortable.
-        return chain_banner_rerun(con, "customer") + tabs_admin("/customers") + """<p style="margin:0 0 8px"><a class="btn" href="/customer/new">+ New Customer</a></p>
-        """ + self._view_door("/customers/all", "All customers — audit")
+        # Build 'ai' (Jason 2026-10-28): the page opens on the
+        # standing blank form, like Vendors — the universal master
+        # pattern. The form carries its own chain banner, its Save
+        # row, and its View row at the bottom left (/customers/all).
+        # What stood here before — a "+ New Customer" door and a
+        # separate View door, no form (look-see batch 2, 2026-10-21)
+        # — is the form's own furniture now.
+        return tabs_admin("/customers", con=con) \
+            + self.view_customer_form(con, None)
 
     def view_customers_all(self, con):
         """Every customer — filterable, sortable audit popup."""
@@ -3066,42 +3878,119 @@ class AccountingViews(CoreViews):
             val = row[k]
             return "" if val is None else str(val)
         contacts=[]; locations=[]
-        if cid:
-            contacts=con.execute("SELECT * FROM customer_contacts WHERE customer_id=? ORDER BY is_primary DESC, name",(cid,)).fetchall()
-            locations=con.execute("SELECT * FROM customer_locations WHERE customer_id=? ORDER BY is_primary DESC, location_name",(cid,)).fetchall()
-        contacts_html="".join(
-            f"<tr><td>{html.escape(c['name'])}</td><td>{html.escape(c['role'] or '')}</td><td>{html.escape(format_phone(c['phone']))}</td><td>{html.escape(c['email'] or '')}</td>"
-            f"<td>{'Primary' if c['is_primary'] else ''}</td><td><form method=post action='/customer/contact/delete' style='display:inline'><input type=hidden name=contact_id value='{c['contact_id']}'><input type=hidden name=customer_id value='{html.escape(cid)}'><button class='secondary'>Remove</button></form></td></tr>"
-            for c in contacts) or '<tr><td colspan=6 class="hint">No contacts yet.</td></tr>'
-        loc_html="".join(
-            f"<tr><td>{html.escape(l['location_name'])}</td><td>{html.escape(l['street'] or '')}{('<br>'+html.escape(l['street2'])) if l['street2'] else ''}</td><td>{html.escape(', '.join(x for x in (l['city'],l['state'],l['zip']) if x))}</td><td>{'Primary' if l['is_primary'] else ''}</td><td><form method=post action='/customer/location/delete' style='display:inline'><input type=hidden name=location_id value='{l['location_id']}'><input type=hidden name=customer_id value='{html.escape(cid)}'><button class='secondary'>Remove</button></form></td></tr>"
-            for l in locations) or '<tr><td colspan=5 class="hint">No additional locations yet.</td></tr>'
-        contact_block = "" if not cid else f"""
-        <section class=card>
-          <h2>Contacts</h2>
-          <table><tr><th>Name</th><th>Role</th><th>Phone</th><th>Email</th><th></th><th></th></tr>{contacts_html}</table>
-          <form method=post action="/customer/contact/save" style="margin-top:8px">
-            <input type=hidden name=customer_id value="{html.escape(cid)}">
-            <div class=row><div><label>Contact Name</label><input name=name required></div><div><label>Role</label><select name=role><option>Main</option><option>Accounting / A/P</option><option>Purchasing</option><option>Service</option><option>Operations</option><option>Commercial / Terms</option><option>Other</option></select></div></div>
-            <div class=row><div><label>Phone</label><input name=phone placeholder="+1 (337) 555-0100"></div><div><label>Email</label><input name=email type=email></div></div>
-            <label><input type=checkbox name=is_primary value=1> Primary contact</label>
-            <p><button class=secondary>Add Contact</button></p>
-          </form>
-        </section>
-        <section class=card>
-          <h2>Locations</h2>
-          <table><tr><th>Location</th><th>Address</th><th>City / State / ZIP</th><th></th><th></th></tr>{loc_html}</table>
-          <form method=post action="/customer/location/save" style="margin-top:8px">
-            <input type=hidden name=customer_id value="{html.escape(cid)}">
-            <div class=row><div><label>Location Name</label><input name=location_name placeholder="Main office, Lafayette yard, Houston branch" required></div><div></div></div>
-            <label>Address</label><input name=street>
-            <input name=street2 placeholder="Suite, building, c/o…">
-            <div class=row><div><label>City</label><input name=city></div><div><label>State</label>{state_field("state", "", 'maxlength=20')}</div></div>
-            <div class=row><div><label>Zip</label><input name=zip maxlength=12></div><div></div></div>
-            <label><input type=checkbox name=is_primary value=1> Make primary location</label>
-            <p><button class=secondary>Add Location</button></p>
-          </form>
-        </section>
+        if row:
+            # Children key by the customer's ENGINE id (schema FK:
+            # customer_contacts.customer_id REFERENCES customers(id),
+            # enforced on the app connection) — the same key
+            # engine.save_customer's auto-location uses.
+            contacts=con.execute("SELECT * FROM customer_contacts WHERE customer_id=? ORDER BY is_primary DESC, name",(row["id"],)).fetchall()
+            locations=con.execute("SELECT * FROM customer_locations WHERE customer_id=? ORDER BY is_primary DESC, location_name",(row["id"],)).fetchall()
+        # Build 'ae' rebuild (Phase 3, Jason 2026-10-27 — one step, one form):
+        # Contacts and Locations are sections of THIS form, on create
+        # and edit alike (one anatomy). Rows mirror the money forms'
+        # line rows: existing entries render filled; an empty set
+        # renders one blank row; Add Contact / Add Location are
+        # ADD-ROW controls (Add family — they append a blank row and
+        # commit nothing); the form's one Save posts customer +
+        # contacts + locations together. The post-save cards and
+        # their separate POSTs are retired with the cards;
+        # the per-row remove control is the package's
+        # line-del ✕.
+        _ROLE_OPTS = ("Main", "Accounting / A/P", "Purchasing", "Service",
+                      "Operations", "Commercial / Terms", "Other")
+        def _ct_row(i, c=None):
+            def cv(k, default=""):
+                if c is None:
+                    return default
+                val = c[k]
+                return "" if val is None else str(val)
+            opts = "".join(
+                f'<option{" selected" if cv("role") == r else ""}>{r}</option>'
+                for r in _ROLE_OPTS)
+            return f"""
+            <div class="ctrow">
+              <input type=hidden name=ct_id_{i} value="{cv('contact_id')}">
+              <input type=hidden name=ct_del_{i} value="">
+              <div class=row3><div><label>Contact Name</label><input name=ct_name_{i} value="{html.escape(cv('name'), quote=True)}"></div><div><label>Role</label><select name=ct_role_{i}>{opts}</select></div><div style="align-self:end"><button type=button class="line-del" title="Remove contact">✕</button></div></div>
+              <div class=row><div><label>Phone</label><input name=ct_phone_{i} value="{html.escape(format_phone(cv('phone')), quote=True)}" placeholder="+1 (337) 555-0100"></div><div><label>Email</label><input name=ct_email_{i} type=email value="{html.escape(cv('email'), quote=True)}"></div></div>
+              <label><input type=checkbox name=ct_primary_{i} value=1 {"checked" if (c is not None and c["is_primary"]) else ""}> Main contact</label>
+            </div>"""
+        def _lc_row(i, l=None):
+            def lv(k, default=""):
+                if l is None:
+                    return default
+                val = l[k]
+                return "" if val is None else str(val)
+            return f"""
+            <div class="lcrow">
+              <input type=hidden name=lc_id_{i} value="{lv('location_id')}">
+              <input type=hidden name=lc_del_{i} value="">
+              <div class=row><div><label>Location Name</label><input name=lc_name_{i} value="{html.escape(lv('location_name'), quote=True)}" placeholder="Main office, Lafayette yard, Houston branch"></div><div style="align-self:end"><button type=button class="line-del" title="Remove location">✕</button></div></div>
+              <label>Address</label><input name=lc_street_{i} value="{html.escape(lv('street'), quote=True)}">
+              <input name=lc_street2_{i} value="{html.escape(lv('street2'), quote=True)}" placeholder="Suite, building, c/o…">
+              <div class=row><div><label>City</label><input name=lc_city_{i} value="{html.escape(lv('city'), quote=True)}"></div><div><label>State</label>{state_field(f"lc_state_{i}", lv('state'), 'maxlength=20')}</div></div>
+              <div class=row><div><label>Zip</label><input name=lc_zip_{i} maxlength=12 value="{html.escape(lv('zip'), quote=True)}"></div><div></div></div>
+              <label><input type=checkbox name=lc_primary_{i} value=1 {"checked" if (l is not None and l["is_primary"]) else ""}> Make main location</label>
+            </div>"""
+        _ct_rows = "".join(_ct_row(i, c) for i, c in enumerate(contacts)) \
+            or _ct_row(0)
+        _lc_rows = "".join(_lc_row(i, l) for i, l in enumerate(locations)) \
+            or _lc_row(0)
+        _ct_js = """
+        <script>
+        (function(){
+          function wire(boxId, addId, cls){
+            var box=document.getElementById(boxId), btn=document.getElementById(addId);
+            if(!box||!btn) return;
+            function bind(row){
+              var rm=row.querySelector('.line-del');
+              if(!rm) return;
+              rm.addEventListener('click', function(){
+                var hid=null, del=null;
+                row.querySelectorAll('input[type=hidden]').forEach(function(el){
+                  if(/_id_\\d+$/.test(el.name)) hid=el;
+                  if(/_del_\\d+$/.test(el.name)) del=el;
+                });
+                if(hid && hid.value){
+                  if(del) del.value='1';
+                  row.style.display='none';
+                } else if(box.querySelectorAll('.'+cls).length>1){
+                  row.remove();
+                } else {
+                  row.querySelectorAll('input,select').forEach(function(el){
+                    if(el.type==='checkbox') el.checked=false;
+                    else if(el.tagName==='SELECT') el.selectedIndex=0;
+                    else el.value='';
+                  });
+                }
+              });
+            }
+            box.querySelectorAll('.'+cls).forEach(bind);
+            btn.addEventListener('click', function(){
+              var rows=box.querySelectorAll('.'+cls);
+              var n=0;
+              rows.forEach(function(r){
+                r.querySelectorAll('[name]').forEach(function(el){
+                  var m=el.name.match(/_(\\d+)$/);
+                  if(m) n=Math.max(n, parseInt(m[1],10)+1);
+                });
+              });
+              var c=rows[rows.length-1].cloneNode(true);
+              c.querySelectorAll('[name]').forEach(function(el){
+                el.name=el.name.replace(/_\\d+$/, '_'+n);
+                if(el.type==='checkbox') el.checked=false;
+                else if(el.tagName==='SELECT') el.selectedIndex=0;
+                else el.value='';
+              });
+              c.style.display='';
+              box.appendChild(c);
+              bind(c);
+            });
+          }
+          wire('ct-rows','ct-add','ctrow');
+          wire('lc-rows','lc-add','lcrow');
+        })();
+        </script>
         """
         # PO register (Batch 3 #15): this customer's PO numbers with
         # their stored status. A PO carrying a scan links through to
@@ -3144,17 +4033,20 @@ class AccountingViews(CoreViews):
           <table><tr><th>PO #</th><th>Status</th><th>Expires</th><th>Invoice</th></tr>{_po_html}</table>
         </section>
         """
+        _crow = self._btn_row(
+            "Save",
+            extra='<a class="btn secondary" href="/customers">Close</a>')
         return chain_banner(con, "customer") + f"""
         <p class=hint>{'Customer ID: <b>'+html.escape(nxt)+'</b>' if row else 'Customer ID: auto.'}</p>
         <form method=post action="/customer/save">
           <input type=hidden name=customer_id value="{html.escape(nxt) if row else ''}">
           <section>
-            <h2>Business Information</h2>
+            <h2>Customer Information</h2>
             <div class=row><div><label>Business Name</label><input name=account_name required value="{html.escape(v('account_name'))}"></div><div><label>DBA / trade name <span class=hint>(optional)</span></label><input name=short_name value="{html.escape(v('short_name'))}"></div></div>
-            <div class=row><div><label>Primary Phone</label><input name=phone value="{html.escape(format_phone(v('phone')))}" placeholder="+1 (337) 555-0100"></div><div><label>General Email</label><input name=email type=email value="{html.escape(v('email'))}"></div></div>
+            <div class=row><div><label>Main Phone</label><input name=phone value="{html.escape(format_phone(v('phone')))}" placeholder="+1 (337) 555-0100"></div><div><label>General Email</label><input name=email type=email value="{html.escape(v('email'))}"></div></div>
           </section>
           <section>
-            <h2>Primary / Billing Address</h2>
+            <h2>Main / Billing Address</h2>
             <label>Address</label><input name=bill_street value="{html.escape(v('bill_street'))}">
             <input name=bill_street2 value="{html.escape(v('bill_street2'))}" placeholder="Suite, building, c/o…">
             <div class=row><div><label>City</label><input name=bill_city value="{html.escape(v('bill_city'))}"></div><div><label>State</label>{state_field("bill_state", v('bill_state'), 'maxlength=20')}</div></div>
@@ -3166,11 +4058,21 @@ class AccountingViews(CoreViews):
             <label><input type=checkbox name=waiver_default value=1 {"checked" if (not row) or row["waiver_default"] else ""}> Damage waiver on by default</label>
           </section>
           <section><label>Internal Notes</label><input name=notes value="{html.escape(v('notes'))}"></section>
-          <p><button>Save Customer</button> <a class="btn secondary" href="/customers">Cancel</a></p>
+          <section>
+            <h2>Contacts</h2>
+            <div id="ct-rows">{_ct_rows}</div>
+            <p><button type=button id="ct-add" class=secondary>Add Contact</button></p>
+          </section>
+          <section>
+            <h2>Locations</h2>
+            <div id="lc-rows">{_lc_rows}</div>
+            <p><button type=button id="lc-add" class=secondary>Add Location</button></p>
+          </section>
+          {_crow}
         </form>
-        {contact_block}
         {po_block}
         {self._view_row("/customers/all", "Customers")}
+        {_ct_js}
         """
 
     def view_reports(self, con, days=14, period="mtd", stay_from="", stay_to="", board="avail", show_all=False):
@@ -3535,10 +4437,14 @@ class AccountingViews(CoreViews):
     def view_quotes_all(self, con):
         """Quotes list fragment — the universal View popup's content
         for the Quote pages (build 'r', Jason 2026-10-25)."""
+        _q_filter = ("WHERE q.revised_by_id IS NULL "
+                     if engine.revision_cols_ready(con, "quotes")
+                     else "")
         rows = con.execute(
-            """SELECT q.quote_no, q.quote_date, q.status, c.account_name
+            f"""SELECT q.quote_no, q.quote_date, q.status, c.account_name
                FROM quotes q
                LEFT JOIN customers c ON c.id = q.customer_id
+               {_q_filter}
                ORDER BY q.quote_date DESC, q.quote_no DESC""").fetchall()
         def _qtot(qno):
             try:
@@ -3561,7 +4467,15 @@ class AccountingViews(CoreViews):
                 + AUDIT_TABLE_JS)
 
     def view_invoices(self, con):
+        # Void-and-revise (build 'ab'): the register shows chain
+        # heads — a revised-away invoice is paper, reached through
+        # its chain from the head's summary.
         rows = con.execute(
+            """SELECT i.invoice_no, i.invoice_date, i.status, i.customer_id, c.account_name
+               FROM invoices i JOIN customers c ON c.id=i.customer_id
+               WHERE i.revised_by_id IS NULL
+               ORDER BY i.invoice_date DESC"""
+        ).fetchall() if engine._chain_ready(con) else con.execute(
             """SELECT i.invoice_no, i.invoice_date, i.status, i.customer_id, c.account_name
                FROM invoices i JOIN customers c ON c.id=i.customer_id
                ORDER BY i.invoice_date DESC"""
@@ -3598,170 +4512,66 @@ class AccountingViews(CoreViews):
             return tabs_invoice("/invoices", con) + "<p>Unknown invoice.</p>"
         tot = engine.invoice_totals(con, ino)
         locked = engine.invoice_locked(con, ino)
+        _inv_row = inv
+        _inv_revised_away = bool(dict(inv).get("revised_by_id"))
         lines = con.execute(
             "SELECT * FROM invoice_lines WHERE invoice_id=? ORDER BY line_id", (inv["id"],)
         ).fetchall()
-        # Display table in the printed invoice's columns (Invoice
-        # Round Part B): ITEM | DESCRIPTION | QTY | UNIT | UNIT PRICE
-        # | LINE TOTAL. The description cell is the description text
-        # only — category / PO line / clerk are NOT folded into it;
-        # PO line data stays on the line itself.
-        # ITEM type defaults (tweak round 4, mirroring print): a
-        # line with no stored Item text falls back to its category's
-        # default — Labor / Part / Freight (asset lines carry their
-        # equipment number as the stored item or show blank here and
-        # resolve it in printpack's pack builder).
-        def _detail_item(r):
-            _it = (r["item"] if "item" in r.keys() and r["item"] else "")
-            _it = str(_it).strip()
-            if not _it:
-                try:
-                    _cat = r["category"] if "category" in r.keys() else ""
-                except Exception:
-                    _cat = ""
-                _c = str(_cat or "").strip().lower()
-                if _c == "labor" or "labor" in _c:
-                    _it = "Labor"
-                elif _c in ("part", "parts") or "part" in _c:
-                    _it = "Part"
-                elif _c == "freight" or "freight" in _c:
-                    _it = "Freight"
-            return _it
         # Per-line paid state (Jason 2026-10-23): the Paid / Open
-        # columns appear only when payments have been broken down by
-        # line against this invoice. They read allocations only — a
-        # blanket-paid line still reads open here; the balance governs.
+        # figures read allocations only — a blanket-paid line still
+        # reads open here; the balance governs. Build 'ac' (Jason
+        # 2026-10-27, state changes values, not anatomy): the Paid /
+        # Open / Note columns stand on EVERY invoice — they used to
+        # appear only once line allocations existed (Paid/Open) or a
+        # note did (Note). A line with no allocation state reads
+        # $0.00 paid and its full amount open.
         _states = {s["line_id"]: s
                    for s in engine.invoice_line_states(con, ino)}
-        _has_alloc = engine.invoice_has_line_allocations(con, ino)
-        # The Note column (the short-pay marker) rides with the paid
-        # columns, or stands alone once any line carries a note, so a
-        # note can always be edited or cleared where it is read.
-        _show_note = _has_alloc or any(
-            s["note"] for s in _states.values())
 
-        def _line_row(r):
-            _paid_cells = ""
-            if _has_alloc:
-                _st = _states.get(int(r["line_id"]))
-                _cred_seg = ""
-                if _st and _st["credited"] > 0:
-                    _refs = ", ".join(html.escape(x)
-                                       for x in _st["credit_refs"])
-                    _cred_seg = (f" <span class=hint>(credit {_refs} "
-                                 f"${_st['credited']:,.2f})</span>")
-                if _st and _st.get("cash_paid", 0) > 0:
-                    _cred_seg += (f" <span class=hint>(cash "
-                                  f"${_st['cash_paid']:,.2f})</span>")
-                if _st and _st.get("carried", 0) > 0:
-                    _cred_seg += (f" <span class=hint>(carried "
-                                  f"${_st['carried']:,.2f})</span>")
-                _paid_cells = (
-                    f"<td>${(_st['allocated'] if _st else 0):,.2f}{_cred_seg}</td>"
-                    f"<td>${(_st['remaining'] if _st else 0):,.2f}</td>")
-            _note_cell = ""
-            if _show_note:
-                _st = _states.get(int(r["line_id"]))
-                _note_cell = (
-                    f"<td>{note_pop_html(_st['note']) if _st else ''}</td>")
-            return (
-                f"<tr><td>{html.escape(_detail_item(r))}</td>"
-                f"<td>{html.escape(r['description'])}</td>"
-                f"<td>{float(r['qty']):g}</td>"
-                f"<td>{html.escape(r['uom'] or '')}</td>"
-                f"<td>${float(r['rate']):,.2f}</td>"
-                f"<td>${float(r['amount']):,.2f}</td>"
-                f"{_paid_cells}{_note_cell}</tr>")
-
-        body = "".join(_line_row(r) for r in lines)
-        _paid_head = "<th>Paid</th><th>Open</th>" if _has_alloc else ""
-        if _show_note:
-            _paid_head += "<th>Note</th>"
-        _lines_colspan = 6 + (2 if _has_alloc else 0) + (1 if _show_note else 0)
-        # Line work (build 'u', Jason 2026-10-25, universal summary
-        # pattern): the summary's lines state as facts — the per-line
-        # note forms and the per-line delete that stood in the table
-        # ride in the Edit Lines popup with the Add a Line form. Same
-        # posts (/linenote, /linedel, /line), same lock rules: note
-        # forms render whenever the Note column does (a short-pay note
-        # is written after payment, on a locked invoice too); delete
-        # and Add a Line only while the invoice is unlocked.
-        def _work_row(r):
+        def _line_cells(r):
             _st = _states.get(int(r["line_id"]))
-            _nv = html.escape(_st["note"] if _st else "", quote=True)
-            _note_form = (
-                f"<form method=post "
-                f"action=\"/invoice/{html.escape(ino, quote=True)}/linenote\">"
-                f"<input type=hidden name=line_id value=\"{int(r['line_id'])}\">"
-                f"<input name=note value=\"{_nv}\" class=w-sm> "
-                f"<button class=secondary>Save</button></form>"
-                if _show_note else "")
-            _del = ("" if locked else
-                    '<form method=post action=/invoice/' + html.escape(ino)
-                    + '/linedel>'
-                    + '<input type=hidden name=invoice_no value=' + html.escape(ino)
-                    + '><input type=hidden name=line_id value=' + str(r['line_id'])
-                    + '><button class=line-del-submit title="Delete line item">✕</button></form>')
-            return (
-                f"<tr><td>{html.escape(_detail_item(r))}</td>"
-                f"<td>{html.escape(r['description'])}</td>"
-                f"<td>{_note_form}</td><td>{_del}</td></tr>")
-        line_work_rows = "".join(_work_row(r) for r in lines)
-        if locked and not _show_note:
-            # Nothing in the popup would be workable: no Add a Line,
-            # no delete, no note forms. The door drops with it.
-            line_work_rows = ""
-        # Add-a-Line Tax toggle default (Invoice Round Part C):
-        # UNCHECKED when the invoice's customer is exempt
-        # (customers.tax_exempt), a tax-exempt certificate is on file
-        # for THIS invoice (invoice_docs kind='tax_exempt'), or the
-        # invoice already carries an operator exemption
-        # (invoices.tax_exempt_op — guarded, the column may not exist
-        # yet); CHECKED otherwise.
-        _line_tax_checked = " checked"
-        try:
-            _cr = con.execute(
-                "SELECT tax_exempt FROM customers WHERE id=?",
-                (inv["customer_id"],)).fetchone()
-            _cust_exempt_line = bool(_cr and _cr[0])
-        except Exception:
-            _cust_exempt_line = False
-        try:
-            _cert_exempt_line = con.execute(
-                "SELECT 1 FROM invoice_docs WHERE invoice_id=? "
-                "AND kind='tax_exempt' LIMIT 1", (inv["id"],)).fetchone() is not None
-        except Exception:
-            _cert_exempt_line = False
-        _op_exempt_line = False
-        try:
-            if "tax_exempt_op" in inv.keys():
-                _op_exempt_line = bool(inv["tax_exempt_op"])
-        except Exception:
-            _op_exempt_line = False
-        if _cust_exempt_line or _cert_exempt_line or _op_exempt_line:
-            _line_tax_checked = ""
-        # One universal line-item row (Jason 2026-10-24, 'm' look-see
-        # item 10): the same .iline row the invoice editor and every
-        # other form use — not a stacked mini-form of its own.
-        add = "" if locked else f"""
-        <form method=post action="/invoice/{html.escape(ino)}/line">
-          <input type=hidden name=tax_ui value="1">
-          {self._line_head()}
-          <div class="iline">
-            <div><label>Type</label>{lookup_select(con, "inv_cat", "category", blank=True)}<label>PO Line #</label><input name=po_line placeholder="10" class=w-xs></div>
-            <div><label>Item</label><input class="iitem" name=item list="fs_item_list"></div>
-            <div><label>Description</label><textarea class="ldesc" name=description required rows=2></textarea></div>
-            <div><label>Qty</label><input class="iqty" name=qty type=number step=0.01 min=0.01 value=1 required></div>
-            <div><label>Unit</label>{lookup_select(con, "inv_uom", "uom", blank=True, vals=enabled_values(con, "inv_uom"), add_option=False)}</div>
-            <div><label>$ Rate</label><input class="irate" name=rate type=number step=0.01 value=0 required>
-            <label class="hint" style="display:block;font-weight:400"><input type=checkbox class="itaxable" name=taxable value=1{_line_tax_checked}> Tax</label></div>
-          </div>
-          <p><button>Add Line</button></p>
-        </form>
-        <script>
-        (function(){{var cat=document.querySelector('select[name=category]'); if(!cat)return; var form=cat.closest('form'); var tax=form?form.querySelector('input[name=taxable]'):null; if(!tax)return; var dflt=tax.checked; function sync(){{var v=cat.value.trim().toLowerCase(); tax.checked=(v.indexOf('freight')===0)?false:dflt;}} cat.addEventListener('change',sync);}})();
-        </script>
-        """
+            _cred_seg = ""
+            if _st and _st["credited"] > 0:
+                _refs = ", ".join(html.escape(x)
+                                  for x in _st["credit_refs"])
+                _cred_seg = (f" <span class=hint>(credit {_refs} "
+                             f"${_st['credited']:,.2f})</span>")
+            if _st and _st.get("cash_paid", 0) > 0:
+                _cred_seg += (f" <span class=hint>(cash "
+                              f"${_st['cash_paid']:,.2f})</span>")
+            if _st and _st.get("carried", 0) > 0:
+                _cred_seg += (f" <span class=hint>(carried "
+                              f"${_st['carried']:,.2f})</span>")
+            # Build 'ah' (Jason 2026-10-28): the per-line note form
+            # (and its Save button, and the Read button the note
+            # script injected beside it) is off — the note stands
+            # in the one summary note seat: plain text when it fits
+            # its cell, the click-to-open temporary box when it
+            # runs long, posting with the summary's Print door.
+            _note_cell = self._sum_note_cell(
+                "invoice", ino, int(r["line_id"]),
+                (_st["note"] if _st else (r["line_note"] or "")))
+            return [
+                html.escape(r['category'] or ''),
+                html.escape(r['item'] or ''),
+                html.escape(r['description']),
+                f"{float(r['qty']):g}",
+                html.escape(r['uom'] or ''),
+                f"${float(r['rate']):,.2f}",
+                f"${float(r['amount']):,.2f}",
+                (f"${(_st['allocated'] if _st else 0):,.2f}"
+                 f"{_cred_seg}"),
+                (f"${(_st['remaining'] if _st else 0):,.2f}"
+                 if _st else f"${float(r['amount']):,.2f}"),
+                _note_cell,
+            ]
+
+        _inv_line_cols = [("Type", False), ("Item", False),
+                          ("Description", False), ("Qty", True),
+                          ("Unit", False), ("Rate", True),
+                          ("Amount", True), ("Paid", True),
+                          ("Open", True), ("Note", False)]
+        body = [_line_cells(r) for r in lines]
         po = inv["po"] if "po" in inv.keys() and inv["po"] else ""
         # Q6: PO detail reads through the shared PO record — one PO, one
         # expiry, across every invoice carrying it.
@@ -3825,7 +4635,6 @@ class AccountingViews(CoreViews):
             _pack = None
         _jb_rows = ""
         _totals_col = ""
-        doc_header = ""
         if _pack is not None:
             _jb_rows = "".join(
                 f"<div>{html.escape(label)} <b>{html.escape(str(value))}</b></div>"
@@ -3888,88 +4697,37 @@ class AccountingViews(CoreViews):
               <div style="flex:1 1 240px;min-width:220px;border:1px solid #c5cdd6;padding:10px"><div style="font-size:10px;color:#5C6B7A;text-transform:uppercase">Ship To</div>
                 {'<br>'.join(_sblocks)}
               </div>"""
-            _terms_line = ""
-            if _pinv["terms"]:
-                _terms_line = f"<div style=\"font-size:12px\">Terms: {html.escape(_pinv['terms'])}</div>"
-            job_box = f"""
-        <div style="border:1px solid #1B2A4A;padding:10px 14px;min-width:230px;font-size:14px">
-          <div style="font-weight:700;color:#1B2A4A;margin-bottom:6px">Job Info</div>
-          {_jb_rows}
-        </div>""" if _jb_rows else ""
-            _job_col = f"""
-              <div style="flex:1 1 240px;min-width:220px">{job_box}</div>""" if job_box else ""
-            doc_header = f"""
-        <div style="display:flex;flex-wrap:wrap;gap:24px;border-bottom:3px solid var(--frame);padding-bottom:10px">
-          <div style="flex:1 1 240px;min-width:220px">
-            <div style="font-size:10px;color:#5C6B7A;text-transform:uppercase">Remit To:</div>
-            <div style="font-weight:700;color:var(--frame)">{html.escape(_pco['name'])}</div>
-            <div style="font-size:12px">{_remit_html}<br>{html.escape(_pco['phone'] or '')}<br>{html.escape(_pco['billing_email'] or '')}</div>
-          </div>{_dist_html}
-          <div style="margin-left:auto;text-align:right">
-            <div style="font-size:20px;font-weight:700">Invoice # {html.escape(ino)}</div>
-            <div>Date: {html.escape(fmt_date(_pinv['invoice_date']))}</div>
-            {_terms_line}
-          </div>
-        </div>
-        <div style="display:flex;flex-wrap:wrap;gap:16px;margin-top:8px">
-          <div style="flex:1 1 240px;min-width:220px;border:1px solid #c5cdd6;padding:10px"><div style="font-size:10px;color:#5C6B7A;text-transform:uppercase">Billing Address:</div>
-            <b>{html.escape(_pinv['account_name'])}</b><br>{_bill_html}
-          </div>{_ship_html}{_job_col}
-        </div>"""
-        job_totals_row = f"""
-        <div style="display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start;margin:10px 0">
-          <div style="margin-left:auto">{_totals_col}</div>
-        </div>""" if _totals_col else ""
-        # No extra write-in row here (Invoice Round Part C): printpack's
-        # totals column (job_totals_row above) now carries the write-in
-        # row itself, so the Part B block that mirrored it under the
-        # totals zone would duplicate it.
-        # Paperwork scan-in slots (Part D: four typed slots): the PO scan,
-        # the tax-exempt certificate, shipping paperwork, and one custom
-        # slot the operator names (doc_title on its upload form). All
-        # attach to the invoice and travel with it (print + PDF pack);
-        # an occupied slot also carries its Print-with-invoice toggle —
-        # an empty slot shows no toggle, there is nothing to print.
+            # Build 'aa' (2026-10-26): the printed-template header
+            # block (doc_header) that used to head this page is not
+            # built anymore — the summary's fact table states its
+            # facts now. The block's inputs above (the remit /
+            # distribution lines, the billing lines) still feed the
+            # fact table and the totals column.
+        # Build 'af' (Jason 2026-10-28): the totals ride INSIDE
+        # the lines block — compact rows directly under the lines
+        # table. The old free-standing flex row (totals floated
+        # right, a void at left) dies. No extra write-in row here
+        # (Invoice Round Part C): printpack's totals column carries
+        # the write-in row itself.
+        totals_html = (
+            f"<div style='display:flex;justify-content:flex-end'>"
+            f"{_totals_col}</div>" if _totals_col else "")
+        # Paperwork (build 'af'): the summary's Paperwork section
+        # lists the invoice's four slot documents as plain links —
+        # the slots themselves stay managed on the invoice form
+        # side exactly as before; nothing on a summary alters an
+        # existing upload.
         _slot_docs = {"po": _jb.get("po_doc"), "tax_exempt": _jb.get("tax_doc"),
                       "shipping": _jb.get("shipping_doc"),
                       "custom": _jb.get("custom_doc")}
-        def _slot(kind, label):
-            d = _slot_docs.get(kind)
-            heading = label
-            if kind == "custom" and d and (d.get("title") or "").strip():
-                heading = d["title"]
-            cur = ""
-            if d:
-                _pw_on = d.get("print_with", 1)
-                _pw_checked = " checked" if _pw_on is None or _pw_on else ""
-                cur = (f"<div><a href='/invoicedoc/{html.escape(ino, quote=True)}/{kind}'>"
-                       f"{html.escape(d['filename'])}</a> "
-                       f"<span class='hint'>{d['bytes']/1024:.0f} KB · {html.escape(fmt_date(d['uploaded_at']))}</span> "
-                       f"<form method=post action='/invoice/{html.escape(ino, quote=True)}/docdel' style='display:inline'>"
-                       f"<input type=hidden name=kind value='{kind}'>"
-                       f"<button class=secondary>Remove</button></form></div>"
-                       f"<form method=post action='/invoice/{html.escape(ino, quote=True)}/docprint' class='actions'>"
-                       f"<input type=hidden name=kind value='{kind}'>"
-                       f"<label><input type=checkbox name=print_with value=1{_pw_checked}> Print with invoice</label> "
-                       f"<button class=secondary>Save</button></form>")
-            else:
-                cur = "<div class='hint'>None attached.</div>"
-            title_in = (f"<div><label>Document name</label>"
-                        f"<input name=doc_title placeholder=\"Name this document\""
-                        f" value=\"{html.escape(d['title'], quote=True) if d and (d.get('title') or '').strip() else ''}\"></div>"
-                        if kind == "custom" else "")
-            return f"""
-          <div><b>{html.escape(heading)}</b>{cur}
-            <form method=post action="/invoice/{html.escape(ino, quote=True)}/doc"
-                  enctype="multipart/form-data" class="actions">
-              {title_in}
-              <input type=file name=doc_file accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.csv">
-              <input type=hidden name=kind value="{kind}">
-              <button class=secondary>Attach{' New' if d else ''}</button>
-            </form>
-          </div>"""
-        paperwork = f"""
-        <div class="row">{_slot("po", "PO scan")}{_slot("tax_exempt", "Tax-exempt certificate")}{_slot("shipping", "Shipping paperwork")}{_slot("custom", "Custom document")}</div>"""
+        _slot_links = []
+        for _sk in ("po", "tax_exempt", "shipping", "custom"):
+            _sd = _slot_docs.get(_sk)
+            if _sd:
+                _slot_links.append(
+                    f"<a href='/invoicedoc/"
+                    f"{html.escape(ino, quote=True)}/{_sk}'>"
+                    f"{html.escape(_sd['filename'])}</a>")
         pays = con.execute(
             "SELECT c.*, cm.cm_no AS cm_number FROM collections c "
             "LEFT JOIN credit_memos cm ON cm.id = c.cm_id "
@@ -4025,115 +4783,148 @@ class AccountingViews(CoreViews):
             return row
 
         pay_rows = "".join(_pay_row(p) for p in pays)
+        # Build 'af': the section heading is a .sumsec div, not an
+        # h2 — the shell's section wrapper starts a new card at an
+        # h2, and Payments & Credits is a section INSIDE the one
+        # summary card (Jason 2026-10-28).
         payments_html = f"""
-        <h2 style="font-size:16px;color:var(--frame)">Payments &amp; Credits</h2>
-        <table><tr><th>Date</th><th>Method</th><th>Ref / CM #</th><th>Amount</th><th>Applied</th><th>Input by:</th></tr>
+        <div class="sumsec">Payments &amp; Credits</div>
+        <table><tr><th>Date</th><th>Method</th><th>Ref / Credit Memo #</th><th>Amount</th><th>Applied</th><th>Input by:</th></tr>
         {pay_rows or '<tr><td colspan=6>No payments or credits applied yet.</td></tr>'}</table>
         """
-        invpay_method_combo = (
-            combo_field("f_invpay_method", "method_text",
-                        [(m, m, m) for m in engine.CASH_METHODS],
-                        label="Method", placeholder="Type to search methods…")
-            + '<input type=hidden id="f_invpay_method_id" name=method value="">'
-        )
         engine.stamp_module_seen(con, "billing")
-        # Billing OFF (shop flow, Jason 2026-10-21): the Payment
-        # section steps aside — the invoice itself, its payments
-        # history and its print stay exactly as they are (records,
-        # not doors). The heading is the noun "Payment" (Jason
-        # 2026-10-24, build 'o' — the noun grammar of Invoice /
-        # Payment / Credit Memo / Work Order); the #record-payment
-        # anchor id stands, as the ticker and task links target it.
-        pay_section = ("" if not engine.module_on(con, "billing") else f"""
-        <h2 id="record-payment" style="font-size:16px;color:var(--frame)">Payment</h2>
-        <form method=post action="/pay">
-          <input type=hidden name=invoice_no value="{html.escape(ino, quote=True)}">
-          <div class="row">
-            <div><label>Amount</label><input name=amount type=number step=0.01 min=0.01 required class=w-sm></div>
-            <div><label>Date</label><input type=date name=pay_date class=w-sm value="{date.today().isoformat()}" required></div>
-          </div>
-          <div class="row">
-            <div><label>Ref / Check #</label><input name=ref></div>
-            <div>{invpay_method_combo}</div>
-          </div>
-          <p><button>Apply Payment</button></p>
-        </form>""")
         # Summary of Invoice# (build 'u', Jason 2026-10-25,
-        # universal summary pattern): the existing view page becomes
-        # the pattern — the printed-template header states the facts
-        # (company, billing, ship-to, the Job Info box), the lines
-        # and totals state as facts, the payments history states as
-        # facts, and every act rides behind a popup door: Payment
-        # (the payment form), Edit Lines (Add a Line + the per-line
-        # note and delete forms), Job Info (the PO form — the
-        # invoice's Job Info values), Paperwork (the four slots).
-        # Edit and Print keep their places in the door row.
-        po_form = f"""
-        <form method=post action="/invoice/{html.escape(ino)}/po" id="po-form">
-          <label>Customer PO</label>
-          <input name=po value="{html.escape(po)}" {"readonly" if locked else ""}>
-          <div class="frow">
-            <div><label>PO Expires (Optional)</label><input type=date name=po_expire value="{html.escape(po_expire)}" {"readonly" if locked else ""}></div>
-            <div><label>Cost Code (Optional)</label><input name=po_cost_code value="{html.escape(po_cost_code)}" placeholder="their cost code" {"readonly" if locked else ""}></div>
-            <div><label>PO Total (Optional)</label><input name=po_total type=number step=0.01 value="{html.escape(po_total_val)}" placeholder="PO total" {"readonly" if locked else ""} class=w-sm></div>
-            {po_status_sel}
-          </div>
-          <label>Other PO Requirements (Optional)</label>
-          <input name=po_notes value="{html.escape(po_notes)}" placeholder="anything else their PO demands" {"readonly" if locked else ""}>
-          {"" if locked else "<p><button>Save PO</button></p>"}
-        </form>"""
-        # The standard wrap, not a hand-built box: the wrap leads
-        # with its <h3>, so the shell's section wrapper makes the
-        # popup its own box and the collapse restore leaves its
-        # display alone. A leading <span> instead gets the popup
-        # absorbed into the Payments & Credits box, whose expanded
-        # restore clears display:none — the popup stood open on
-        # load (found in the build 'u' screenshot pass). The
-        # #record-payment anchor rides at the top of the body.
-        pay_popup = (self._pop_wrap(
-            "invpay", "Payment",
-            pay_section.replace(
-                '<h2 id="record-payment" style="font-size:16px;'
-                'color:var(--frame)">Payment</h2>',
-                '<span id="record-payment"></span>'))
-            if pay_section else "")
-        lines_popup = (self._pop_wrap(
-            "invlines", "Edit Lines",
-            add + (f"<table><tr><th>Item</th><th>Description</th>"
-                   f"<th>Note</th><th></th></tr>{line_work_rows}</table>"
-                   if line_work_rows else ""))
-            if (add or line_work_rows) else "")
-        doors = (
-            (self._pop_door("invpay", "Payment") if pay_section else "")
-            + ((self._pop_door("invlines", "Edit Lines"))
-               if (add or line_work_rows) else "")
-            + self._pop_door("invjob", "Job Info")
-            + self._pop_door("invpaper", "Paperwork")
-            + ("" if locked else
-               f"<a class=\"btn\" href=\"/invoice/new?edit={html.escape(ino, quote=True)}\">Edit</a> ")
-            + self._print_menu(screen=f"/print/invoice/{ino}",
-                               pdf=f"/print/invoice/{ino}.pdf"))
-        popups = (
-            pay_popup + lines_popup
-            + self._pop_wrap("invjob", "Job Info", po_form)
-            + self._pop_wrap("invpaper", "Paperwork", paperwork))
+        # universal summary pattern; build 'aa' fold into the
+        # shared template; build 'ac' sections composition — the
+        # history stands in git). Build 'af' (Jason 2026-10-28):
+        # the Edit Lines, Job Info and Paperwork doors AND their
+        # popups are OFF this summary — Edit Lines was never asked
+        # for (line add/delete is the invoice form's work), the
+        # summary states the job info itself, and paperwork is
+        # attached at creation or through Edit. The PO form's post
+        # and the slot paperwork posts stay routed — the invoice
+        # FORM side uses them.
+        # Build 'ag' (Jason 2026-10-28): the Payment door and its
+        # popup are OFF this summary too — the quick-pay form it
+        # carried duplicated the Payment form, and money work
+        # lives there and on the invoice form. Build 'ai' (Jason
+        # 2026-10-28, reversing 'ag'/'ah' at his word): ONE small
+        # Payment button stands in the summary's bottom row —
+        # navigation to the payment form with this invoice
+        # prefilled; no money is worked on the summary. The Payments &
+        # Credits section above is a record and stands. The
+        # #record-payment anchor died with the popup; the Today
+        # and ticker links that targeted it now land on the
+        # summary itself (engine_today / engine_alerts).
+        # Build 'ah' (Jason 2026-10-28): the per-line note forms
+        # 'af' stood in this lines table are off — the note stands
+        # in the one summary note seat (_sum_note_cell): plain
+        # text when it fits, the click-to-open temporary box when
+        # it runs long, posting with this summary's Print door.
+        doors = self._sum_doors(
+            "",
+            None if _inv_revised_away else f"/invoice/new?edit={ino}",
+            self._print_menu(screen=f"/print/invoice/{ino}",
+                             pdf=f"/print/invoice/{ino}.pdf"))
+        popups = ""
         _assoc_co = self._assoc_co_fact(con, "invoice", ino)
-        _assoc_line = (f"<p>Associated: {_assoc_co}</p>"
-                       if _assoc_co else "")
-        return tabs_invoice("/invoices", con) + f"""
-        <h1>Summary of Invoice# {html.escape(ino)}</h1>
-        {doc_header}
-        {task_nudge(con, f"/invoice/{ino}")}
-        <p>Status: {html.escape(inv['status'])}</p>
-        {_assoc_line}
-        <div style="clear:both"></div>
-        <table><tr><th>ITEM</th><th>DESCRIPTION</th><th>QTY</th><th>UNIT</th><th>UNIT PRICE</th><th>LINE TOTAL</th>{_paid_head}</tr>
-        {body or f'<tr><td colspan={_lines_colspan}>No extra lines.</td></tr>'}</table>
-        {job_totals_row}
-        {po_panel}
-        {quote_panel}
-        {payments_html}
-        <div class="viewrow" style="align-items:center">{doors}</div>
-        {popups}
-        {self._view_row("/money/invoices/audit", "Invoices")}
-        """ + _item_extras(con)
+        # Build 'af' (Jason 2026-10-28): grouped fact blocks —
+        # Customer up-left, Job Info at right, the invoice's own
+        # facts in their block; facts with no value are omitted.
+        # The Job Info block states ALL provided job info fields
+        # (not only the print-selected subset the old flat list
+        # carried), each with its print-inclusion marker: printed
+        # = the field is in the inv_jobinfo_fields selection AND
+        # inside printpack's first-seven cap, exactly what
+        # _jobinfo_lines puts on the printed invoice.
+        cust_pairs = [("Customer", html.escape(inv["account_name"] or ""))]
+        job_pairs = []
+        doc_pairs = [("Date", html.escape(fmt_date(inv["invoice_date"]))),
+                     ("Status", html.escape(inv["status"] or ""))]
+        if _pack is not None:
+            cust_pairs.append(("Billing Address", _bill_html or None))
+            _ship_txt = ""
+            if _pack.get("ship_to"):
+                _sb = []
+                for s in _pack["ship_to"]:
+                    _cl = ", ".join(x for x in (
+                        s.get("city"),
+                        " ".join(y for y in (s.get("state"),
+                                             s.get("zip")) if y)) if x)
+                    _bits = [s.get("site_name"), s.get("operator"),
+                             s.get("rig_name"), s.get("street"),
+                             s.get("street2"), _cl]
+                    _sb.append("<br>".join(
+                        html.escape(x) for x in _bits if x))
+                _ship_txt = "<br>".join(x for x in _sb if x)
+            cust_pairs.append(("Ship To", _ship_txt or None))
+            cust_pairs.append(("Terms", html.escape(_pinv["terms"])
+                               if _pinv["terms"] else None))
+            # Values and the printed set follow printpack's own
+            # _jobinfo_lines exactly (the same pack["job"] map and
+            # the same first-seven cap) — the marker states what
+            # the printed invoice carries, never a second reading.
+            from printpack import JOBINFO_FIELDS as _PP_JF
+            _jb2 = _pack.get("job") or {}
+            _fields = _pack.get("job_fields")
+            if _fields is None:
+                _fields = ["po", "job", "well", "location",
+                           "taxexempt"]
+            _sel = [k for k, _l in _PP_JF if k in set(_fields)][:7]
+            if "tax_exempt_source" in _jb2:
+                _src = (_jb2.get("tax_exempt_source") or "").strip()
+                _taxv = {"cert": "Cert on file", "customer": "Yes",
+                         "operator": "Yes"}.get(_src, "No")
+            else:
+                _taxv = ("Cert on file" if _jb2.get("tax_exempt")
+                         else "No")
+            _raw = {
+                "po": _jb2.get("po") or "",
+                "well": ", ".join(_jb2.get("wells") or []),
+                "afe": (_jb2.get("afe")
+                        or ", ".join(_jb2.get("afes") or [])),
+                "cost_code": _jb2.get("cost_code") or "",
+                "job": ", ".join(_jb2.get("jobs") or []),
+                "contact_name": _jb2.get("contact_name") or "",
+                "contact_phone": _jb2.get("contact_phone") or "",
+                "contact_email": _jb2.get("contact_email") or "",
+                "ticket_ref": (_jb2.get("ticket_ref") or ", ".join(
+                    _jb2.get("ticket_refs") or [])),
+                "job_notes": _jb2.get("job_notes") or "",
+                "location": ", ".join(_jb2.get("locations") or []),
+                "taxexempt": _taxv,
+            }
+            _triples = []
+            for _k, _lab in _PP_JF:
+                if _k == "taxexempt":
+                    _triples.append((_lab, _taxv, _k in _sel))
+                elif _raw.get(_k):
+                    _triples.append((_lab,
+                                     html.escape(str(_raw[_k])),
+                                     _k in _sel))
+            job_pairs = self._ji_pairs(_triples)
+        doc_pairs.append(("Associated", _assoc_co))
+        doc_pairs += self._chain_facts(
+            con, "invoice", _inv_row,
+            lambda n: f"/invoice/{html.escape(n, quote=True)}")
+        # Build 'ac': the lines render through the shared builder.
+        # Build 'af': the totals ride inside the lines block (see
+        # totals_html above), and the PO panel, quote panel and
+        # Payments & Credits ride as sections after the lines.
+        lines_html = (self._sum_lines(
+            _inv_line_cols, body, empty_text="No extra lines.")
+            + totals_html)
+        sections_html = f"{po_panel}{quote_panel}{payments_html}"
+        return (self._sum_page(
+                    "Invoice", ino, [], lines_html, doors, popups,
+                    "/money/invoices/audit", "Invoices",
+                    extra_top=(self._revto_line(con, "invoice", _inv_row)
+                               + task_nudge(con, f"/invoice/{ino}")),
+                    sections_html=sections_html,
+                    fact_groups=[("Customer", cust_pairs),
+                                 ("Job Info", job_pairs),
+                                 ("Invoice", doc_pairs)],
+                    paper_html=self._sum_paperwork(
+                        "invoice", ino, extra_links=_slot_links),
+                    pay_doc=("invoice", ino))
+                + _item_extras(con))

@@ -343,9 +343,7 @@ class ComplianceViews(CoreViews):
             )
             rows.append(f"""
             <tr>
-              <td><input type=checkbox class=psel data-k=c data-id="{eid}"
-                   title="Tick to include this check in a selective print">
-                  <b>{html.escape(it['display_name'])}</b><br><span class="hint">{pack}</span>{warn}</td>
+              <td><b>{html.escape(it['display_name'])}</b><br><span class="hint">{pack}</span>{warn}</td>
               <td>{html.escape(trig)}</td><td>{iv}</td><td>{bs}</td>
               <td>{html.escape(fmt_date(it['last_done'], '—'))}</td><td>{nd}</td>
               <td>{_cstat(it['status'])}</td>
@@ -372,7 +370,7 @@ class ComplianceViews(CoreViews):
                   <label>Notes</label><input name=notes value="{html.escape(it['notes'] or '')}">
                   {perf_combo}
                   <p class="hint">Performer: "call them" when due. Blank = yard.</p>
-                  <p><button>Save Changes</button></p>
+                  <p><button>Save</button></p>
                 </form>
                 <p class="hint" style="margin:8px 0 4px"><b>History</b></p>
                 <table><tr><th>Date</th><th>Result</th><th>Evidence</th><th>Notes</th><th>Input by:</th></tr>
@@ -399,6 +397,13 @@ class ComplianceViews(CoreViews):
                    f"next due {html.escape(fmt_date(focused['next_due_live'], '—'))}, "
                    f"last done {html.escape(fmt_date(focused['last_done'], '—'))}.</p>")
         fixit = self._fixit_form(con, aid, focused, today) if focused else ""
+        # Build 'ae' rebuild (Phase 4): ONE Print menu for the full
+        # pack — the four standalone print controls and the tick-box
+        # selective-print machinery are gone (selection printing
+        # lives in the Paperwork popup, whose menu carries it).
+        pmenu = self._print_menu(
+            f"/print/compliance/{html.escape(aid)}",
+            f"/print/compliance/{html.escape(aid)}.pdf")
         return f"""
         <h1>Compliance · {html.escape(a['unit_no'])}</h1>
         <p class="hint">{html.escape(a['description'] or '')} — {badge} ({summ['total']} checks).
@@ -406,34 +411,14 @@ class ComplianceViews(CoreViews):
         {why}
         {fixit}
         <p class="actions">
-          <a class="btn" href="/print/compliance/{html.escape(aid)}">Print Pack</a>
-          <a class="btn secondary" href="/print/compliance/{html.escape(aid)}.pdf">Pack Pdf</a>
-          <button class="btn secondary" onclick="selPrint(false)">Print Selected</button>
-          <button class="btn secondary" onclick="selPrint(true)">Selected Pdf</button>
-          <button type="button" class="vbtn" data-audit="/unit/paperwork?unit={html.escape(aid, quote=True)}" data-title="Paperwork — {html.escape(a['unit_no'])}">Paperwork</button>
+          {pmenu}
         </p>
         <p class="actions">
-          <button class="secondary" onclick="selAll(true)" style="padding:4px 10px">Tick All</button>
-          <button class="secondary" onclick="selAll(false)" style="padding:4px 10px">Clear</button>
+          <button type="button" class="vbtn" data-audit="/unit/paperwork?unit={html.escape(aid, quote=True)}" data-title="Paperwork — {html.escape(a['unit_no'])}">Paperwork</button>
         </p>
-        <script>
-        function selPrint(pdf){{
-          var c=[],d=[];
-          document.querySelectorAll('.psel:checked').forEach(function(el){{
-            (el.dataset.k=='c'?c:d).push(el.dataset.id);}});
-          if(!c.length&&!d.length){{alert('No check or document ticked.');return;}}
-          window.open('/print/compliance/{html.escape(aid)}/sel'+(pdf?'.pdf':'')+'?c='+c.join(',')+'&d='+d.join(','),'_blank');
-        }}
-        function selAll(on){{
-          document.querySelectorAll('.psel').forEach(function(el){{el.checked=on;}});
-        }}
-        </script>
-        <h2 style="font-size:16px;color:var(--frame)">Assign a Pack</h2>
+        <h2>Assign a Pack</h2>
         {assign}
-        <h2 style="font-size:16px;color:var(--frame)">Checklist</h2>
-        <table><tr><th>Check</th><th>Trigger</th><th>Interval</th><th>Backstop</th><th>Last done</th><th>Next due</th><th>Status</th><th>Who</th><th></th></tr>
-        {''.join(rows) or '<tr><td colspan=9>No checks yet — assign a pack or add one below.</td></tr>'}</table>
-        <h2 style="font-size:16px;color:var(--frame);margin-top:20px">Add Check</h2>
+        <h2>Add Check</h2>
         <form method=post action="/compliance/custom">
           <input type=hidden name=asset_id value="{html.escape(aid)}">
           <label>Check Name</label><input name=name required placeholder="e.g. Yard function test">
@@ -445,6 +430,9 @@ class ComplianceViews(CoreViews):
           <label>Notes</label><input name=notes>
           <p><button>Add Check</button></p>
         </form>
+        <h2>Checklist</h2>
+        <table><tr><th>Check</th><th>Trigger</th><th>Interval</th><th>Backstop</th><th>Last done</th><th>Next due</th><th>Status</th><th>Who</th><th></th></tr>
+        {''.join(rows) or '<tr><td colspan=9>No checks yet — assign a pack or add one.</td></tr>'}</table>
         {self._cert_section(con, aid)}
         """
 
@@ -495,14 +483,14 @@ class ComplianceViews(CoreViews):
                 sup_btn = f"""
                     <form method=post action="/compliance/cert/supersede" style="display:inline">
                       <input type=hidden name=cert_id value="{cid}">
-                      <button class="secondary" data-tip="Keeps this record as history, but it no longer drives expiry alerts.">Mark Superseded</button>
+                      <button class="secondary">Mark Superseded</button>
                     </form>"""
             else:
                 sup_btn = f"""
                     <form method=post action="/compliance/cert/supersede" style="display:inline">
                       <input type=hidden name=cert_id value="{cid}">
                       <input type=hidden name=restore value="1">
-                      <button class="secondary" data-tip="Makes this record live again.">Restore</button>
+                      <button class="secondary">Restore</button>
                     </form>"""
             doc_combo_opts = [(str(d["doc_id"]),
                                str(d["title"] or d["filename"] or d["doc_id"]),
@@ -541,7 +529,7 @@ class ComplianceViews(CoreViews):
                   <div><label>Expires</label><input type=date class="w-sm" name=expiry_date value="{html.escape(c['expiry_date'] or '')}"></div>
                 </div>
                 <label>Notes</label><input name=notes value="{html.escape(c['notes'] or '')}">
-                <p><button data-tip="Saves changes to this certificate record.">Save</button>
+                <p><button>Save</button>
                 {sup_btn}
                 </p>
               </form>
@@ -549,18 +537,16 @@ class ComplianceViews(CoreViews):
                 <input type=hidden name=cert_id value="{cid}">
                 <div class="row">
                   <div>{doc_combo}</div>
-                  <div style="align-self:end"><button data-tip="Ties this data-book document to the certificate record above.">Attach</button></div>
+                  <div style="align-self:end"><button>Attach</button></div>
                 </div>
-                <p class="hint">Only documents from <b>this unit's</b> data book can attach — the evidence always names its unit.</p>
               </form>
               <form method=post action="/compliance/cert/delete">
                 <input type=hidden name=cert_id value="{cid}">
-                <button class="secondary" data-tip="Removes the record. Attached paperwork stays in the unit's data book.">Delete Record</button>
+                <button class="secondary">Delete Record</button>
               </form>
             </details>""")
         return f"""
-        <h2 style="font-size:16px;color:var(--frame);margin-top:20px">Certifications &amp; Calibrations</h2>
-        {''.join(cards) or '<p class="hint">No cert records yet — migrated expiries land here too.</p>'}
+        <h2>Certifications &amp; Calibrations</h2>
         <details style="margin:8px 0"><summary><b>Add a Certificate Record</b></summary>
         <form method=post action="/compliance/cert/save" enctype="multipart/form-data" style="margin-top:8px">
           <input type=hidden name=asset_id value="{html.escape(aid)}">
@@ -582,6 +568,7 @@ class ComplianceViews(CoreViews):
           <p><button>Add Certificate</button></p>
         </form>
         </details>
+        {''.join(cards) or '<p class="hint">No cert records yet — migrated expiries land here too.</p>'}
         """
         """Unit paperwork print (build 'o', Jason 2026-10-24): "make a
         toggle popup on a unit that shows what paperwork is attached

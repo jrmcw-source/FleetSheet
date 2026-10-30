@@ -65,10 +65,12 @@ class AssetViews(CoreViews):
         return CoreViews._job_info_popup(self, pid, vals, extra)
 
     def _btn_row(self, save_label="Save", jobpop=None, add_item=False, extra="",
-                 submit_name="", submit_value="", print_menu=None):
+                 submit_name="", submit_value="", print_menu=None,
+                 edit_pop=None):
         from views_core import CoreViews
         return CoreViews._btn_row(self, save_label, jobpop, add_item, extra,
-                                  submit_name, submit_value, print_menu)
+                                  submit_name, submit_value, print_menu,
+                                  edit_pop)
 
     def _top_commit(self, label, name="", value=""):
         from views_core import CoreViews
@@ -80,7 +82,7 @@ class AssetViews(CoreViews):
         # Strip order (Jason, 2026-10-25, build 'v'): Sale, Rental,
         # Quote, Work Order, Change Order, Check In/Out — the Change
         # Order is the last of the money forms; Assets stays far right.
-        _entries = (("sale", "Sale", True),
+        _entries = (("sale", "Sales Ticket", True),
                     ("rental", "Rental", engine.module_on(con, "rentals")),
                     ("quote", "Quote", engine.module_on(con, "quotes")),
                     ("workorder", "Work Order", engine.module_on(con, "work_orders")),
@@ -145,7 +147,7 @@ class AssetViews(CoreViews):
         if kind == "sale":
             body = self.view_sale(con, None)
             # view_sale returns full page; extract just the form portion for sub-tab
-            return bar + body + self._rentals_done(con, "sale", "Sale") + done
+            return bar + body + self._rentals_done(con, "sale", "Sales Ticket") + done
         if kind == "quote":
             body = self.view_quote_form(con, None, bare=True)
             return bar + body + self._rentals_done(con, "quote", "Quote") + done
@@ -157,6 +159,9 @@ class AssetViews(CoreViews):
             return bar + body + self._rentals_done(con, "workorder", "Work order") + done
         if kind == "checkinout":
             return bar + self._new_ticket_checkinout(con) + self._rentals_done(con, "checkinout", "Check in/out") + done
+        edit_tid = ((q or {}).get("edit") or "").strip()
+        if edit_tid:
+            return bar + self._ticket_editor(con, edit_tid) + self._rentals_done(con, "rental", "Rental") + done
         return bar + self._new_ticket_delivery(con, q) + self._rentals_done(con, "rental", "Rental") + done
 
     def _soft_conflict_page(self, con, pending_id):
@@ -264,9 +269,14 @@ class AssetViews(CoreViews):
         <script>document.querySelectorAll('.cio-pick').forEach(function(a){{a.addEventListener('click',function(e){{e.preventDefault();document.getElementById('cio_tid').value=a.dataset.tid;document.getElementById('cio_pick').value=a.dataset.label;document.getElementById('cio_dir').value=a.dataset.dir;document.getElementById('cioform').scrollIntoView({{behavior:'smooth',block:'start'}});}});}});</script>
         """
 
-    def _new_ticket_form_data(self, con):
+    def _new_ticket_form_data(self, con, keep_asset_id=None,
+                              sel_cust="", sel_unit=""):
         # Data for the new-rental-ticket form: options, rates, ticket #.
         # Returns None when no rentable equipment exists yet.
+        # Build 'ab': the rental editor reuses this data — keep_asset_id
+        # keeps the ticket's own unit in the picker (it stands on an
+        # open ticket: its own), and sel_cust/sel_unit preselect the
+        # ticket's customer and unit.
         cust = con.execute("SELECT customer_id, account_name FROM customers ORDER BY account_name").fetchall()
         # only assets not blocking
         assets = con.execute(
@@ -279,17 +289,38 @@ class AssetViews(CoreViews):
                  SELECT asset_id FROM tickets WHERE status IN ('Reserved','Dispatched','On Rent','Standby')
                ) ORDER BY a.unit_no"""
         ).fetchall()
+        if keep_asset_id and keep_asset_id not in {a["asset_id"] for a in assets}:
+            own = con.execute(
+                """SELECT a.asset_id, a.unit_no || ' · ' || COALESCE(a.description,'') AS label,
+                          COALESCE(a.rate_unit,'Day') AS rate_unit, COALESCE(a.rate_value,0) AS rate_value
+                   FROM assets a WHERE a.asset_id=?""",
+                (keep_asset_id,)).fetchall()
+            assets = list(assets) + list(own)
         unit_rates = {a["asset_id"]: [a["rate_unit"], float(a["rate_value"] or 0)] for a in assets}
-        cust_opts, _ = combo_opts(cust, "customer_id", "account_name", "")
-        unit_opts, _ = combo_opts(assets, "asset_id", "label", "")
+        cust_opts, cust_current = combo_opts(cust, "customer_id", "account_name", sel_cust)
+        unit_opts, unit_current = combo_opts(assets, "asset_id", "label", sel_unit)
         today = date.today().isoformat()
         if not assets:
             return None
+        # Build 'am' (Jason 2026-10-28): the Transport presets are
+        # offered under the hauler's own name — the company's
+        # dba/name, the selected customer's name — never the bare
+        # categories. Any other typed hauler stands (third party).
+        _co_tr = self.desk(con)
+        _cust_tr = ""
+        for _r in cust:
+            if str(_r["customer_id"]) == str(sel_cust):
+                _cust_tr = _r["account_name"] or ""
+                break
+        _we_lbl = (f"{_co_tr} Transport" if _co_tr
+                   else engine.HAUL_LABELS["we"])
+        _cust_lbl = (f"{_cust_tr} Transport" if _cust_tr
+                     else engine.HAUL_LABELS["customer"])
         haul_combo = combo_field(
             "f_haul", "haul_text",
-            [("customer", engine.HAUL_LABELS["customer"], "customer"),
-             ("we", engine.HAUL_LABELS["we"], "we")],
-            value=engine.HAUL_LABELS["we"], label="Transport",
+            [("customer", _cust_lbl, "customer"),
+             ("we", _we_lbl, "we")],
+            value=_we_lbl, label="Transport",
             placeholder="Company, customer, or type a hauler…")
         deliver_combo = combo_field(
             "f_deliver", "deliver_text",
@@ -307,9 +338,12 @@ class AssetViews(CoreViews):
             "ticket_no": ticket_no,
             "haul_combo": haul_combo,
             "deliver_combo": deliver_combo,
+            "cust_current": cust_current,
+            "unit_current": unit_current,
         }
 
-    def _new_ticket_form_script(self, unit_rates):
+    def _new_ticket_form_script(self, unit_rates, draft_key="draft:/ticket/new",
+                                preserve_rate=False):
         # Client-side JS for the new-rental-ticket form.
         return f"""
         <script>
@@ -388,7 +422,12 @@ class AssetViews(CoreViews):
             if (tag) tag.textContent = val;
           }}
           // Draft: keep what was typed if the page is left and returned to.
-          var DK = 'draft:/ticket/new';
+          // Build 'ab': the rental editor drafts under its own key, so a
+          // half-typed booking never overwrites a loaded ticket (and the
+          // reverse); preserve_rate keeps a loaded ticket's own rate —
+          // the unit-default sync must not clobber it on open.
+          var DK = {json.dumps(draft_key)};
+          var PRESERVE_RATE = {json.dumps(bool(preserve_rate))};
           function saveDraft(){{
             var d = {{}};
             Array.prototype.forEach.call(form.elements, function(el){{
@@ -575,7 +614,7 @@ class AssetViews(CoreViews):
           }});
           var hadDraft = loadDraft(); upd();
           document.querySelectorAll('.lineitem-row').forEach(function(r){{
-            if (hadDraft) {{
+            if (hadDraft || PRESERVE_RATE) {{
               // The draft already holds the rate + unit; refresh only the
               // rate-type tag so a drafted manual rate is never clobbered.
               var tag = r.querySelector('.ratetype-tag');
@@ -662,6 +701,181 @@ class AssetViews(CoreViews):
         </form>
         """ + self._new_ticket_form_script(unit_rates)
 
+    def _ticket_editor(self, con, tid):
+        """The rental editor (build 'ab', Jason's JC-AA3 ruling:
+        every document edits on its own form; the void-and-revise
+        redirect is the save model). The booking form itself, loaded
+        with the ticket — same fields, same Job Info popup — reached
+        as /ticket/new?kind=rental&edit=<ticket#>, the invoice
+        editor's ?edit= idiom on this form's own route. A posted
+        rental opens LOCKED (the record); its Edit door starts the
+        revision (reason + name, the original voids, the form
+        becomes the revision under its session marker). A rental
+        already revised away names its chain head here; an invoiced
+        rental and a plain-Void rental refuse — their paper is the
+        invoice's / the record stands. Build 'ac' (Jason
+        2026-10-27, defect C-2 — supersedes JC-AB14): Add Item
+        stands in the editor's session state, matching the new
+        form and every other editor."""
+        t = con.execute(
+            """SELECT t.*, c.account_name, a.unit_no,
+                      a.description AS unit_desc, s.site_name
+               FROM tickets t JOIN customers c ON c.id = t.customer_id
+               JOIN assets a ON a.id = t.asset_id
+               LEFT JOIN sites s ON s.id = t.site_id
+               WHERE t.ticket_id=?""", (tid,)).fetchone()
+        if not t:
+            return ("<h2>Rental Ticket</h2><p class='hint'>No such "
+                    "rental ticket. <a href='/tickets'>Rental "
+                    "Tickets</a></p>")
+        # Void-and-revise (build 'ab', Jason 2026-10-26): the
+        # editor opens in one of three states. A revised-away
+        # ticket is paper — the refusal names its head. An invoiced
+        # ticket's paper is the invoice's (the engine gate states
+        # the same) and a plain-void ticket stands as its record.
+        # Anything else opens LOCKED — the record, its Edit door
+        # starting the revision flow — or unlocked as a fresh
+        # revision under its session marker.
+        if dict(t).get("revised_by_id"):
+            _head = engine.num_of(con, "tickets", t["revised_by_id"])
+            return (f"<h2>Rental Ticket {html.escape(tid)}</h2>"
+                    f"<p class='hint'>This rental was revised — the "
+                    f"live document is "
+                    f"<a href='/ticket/{html.escape(_head or '', quote=True)}'>"
+                    f"{html.escape(_head or '')}</a>.</p>")
+        if t["invoice_id"] or t["status"] in ("Billed", "Closed", "Void"):
+            reason = ("it has been invoiced"
+                      if t["invoice_id"] else f"it is {t['status']}")
+            return (f"<h2>Rental Ticket {html.escape(tid)}</h2>"
+                    f"<p class='hint'>This rental is locked — {reason}. "
+                    f"<a href='/ticket/{html.escape(tid, quote=True)}'>"
+                    f"Summary of Rental# {html.escape(tid)}</a></p>")
+        tk_mode = ("session" if engine.revision_pending(
+            con, "ticket", t["id"]) else "locked")
+        cust_code = engine.cust_code(con, t["customer_id"])
+        asset_code = engine.asset_code(con, t["asset_id"])
+        data = self._new_ticket_form_data(
+            con, keep_asset_id=asset_code, sel_cust=cust_code,
+            sel_unit=asset_code)
+        if data is None:
+            return _empty_action('No rentable equipment yet',
+                                 'No rentable equipment.', '/unit/new',
+                                 'Add equipment')
+        unit_rates = data["unit_rates"]
+        uom_opts = lookup_select(
+            con, "inv_uom", "uom", extra='id="f_unit_uom"', css="line-uom",
+            current={"Day": "Days", "Week": "Weeks",
+                     "Monthly": "Months", "Hour": "Hours"}.get(
+                         t["rate_type"] or "Day", "Each"),
+            vals=enabled_values(con, "inv_uom"), add_option=False)
+        # The stored rental line's description and qty ride the row,
+        # as they do on the summary (read from ticket_lines).
+        line = con.execute(
+            "SELECT description, qty FROM ticket_lines WHERE ticket_id=? "
+            "AND category='Rental' ORDER BY line_id LIMIT 1",
+            (t["id"],)).fetchone()
+        item_desc = (line["description"] if line else "") or ""
+        qty = (line["qty"] if line else None) or 1
+        # Build 'am' (Jason 2026-10-28): preset values show under
+        # the hauler's own name, as on the new-ticket form.
+        _co_tr = self.desk(con)
+        _we_lbl = (f"{_co_tr} Transport" if _co_tr
+                   else engine.HAUL_LABELS["we"])
+        _cust_lbl = (f"{t['account_name']} Transport"
+                     if t["account_name"]
+                     else engine.HAUL_LABELS["customer"])
+        haul_val = (_cust_lbl if (t["haul_by"] or "") == "customer"
+                    else _we_lbl if (t["haul_by"] or "") == "we"
+                    else (t["haul_note"] or _we_lbl))
+        deliver_val = (engine.DELIVER_LABELS.get(t["deliver_to"] or "")
+                       or t["deliver_note"] or engine.DELIVER_LABELS["job_site"])
+        haul_combo = combo_field(
+            "f_haul", "haul_text",
+            [("customer", _cust_lbl, "customer"),
+             ("we", _we_lbl, "we")],
+            value=haul_val, label="Transport",
+            placeholder="Company, customer, or type a hauler…")
+        deliver_combo = combo_field(
+            "f_deliver", "deliver_text",
+            [(d, engine.DELIVER_LABELS[d], d) for d in
+             ("job_site", "our_yard", "customer_yard", "dock")],
+            value=deliver_val, label="Deliver to",
+            placeholder="Job site, yard, or type…")
+        _tk_cust = (
+            combo_field("f_customer", "customer_text", data["cust_opts"],
+                        value=data["cust_current"], label="Customer",
+                        required=True,
+                        placeholder="Type to search customers…")
+            + f'<input type=hidden id="f_customer_id" name=customer_id '
+              f'value="{html.escape(cust_code, quote=True)}">')
+        _tk_extra = (
+            '<div class="row"><div><label>Reference Ticket</label>'
+            f'<input name=ref_ticket class=w-sm placeholder="Optional" '
+            f'value="{html.escape(t["ref_ticket"] or "", quote=True)}"></div>'
+            f'<div><label>On-Rent</label><input type=date name=on_rent '
+            f'value="{html.escape(t["on_rent"] or "")}" required '
+            f'data-label="On-rent date" class=w-sm></div>'
+            f'<div><label>Off-Rent Est</label><input type=date '
+            f'name=off_rent_est class=w-sm '
+            f'value="{html.escape(t["off_rent"] or "")}"></div></div>'
+            f'<div class="row"><div>{haul_combo}</div>'
+            f'<div>{deliver_combo}</div></div>'
+            '<div><label>Upload</label><input type=file '
+            'name=ticket_upload></div>')
+        _tk_job_lines = [("PO #", t["po"] or ""),
+                         ("Job Name", t["job_name"] or ""),
+                         ("Well #", t["well_or_pad"] or "")]
+        _tk_doc = (f'Rental Ticket # <input name=ticket_id value="{html.escape(tid, quote=True)}" '
+                   f'class=w-xs>'
+                   f'<input type=hidden name=edit_target value="{html.escape(tid, quote=True)}">'
+                   f'<input type=hidden name=editing value=1>'
+                   if tk_mode == "session" else
+                   f'Rental Ticket # <input value="{html.escape(tid, quote=True)}" '
+                   f'class=w-xs disabled>'
+                   f'<input type=hidden name=ticket_id value="{html.escape(tid, quote=True)}">'
+                   f'<input type=hidden name=editing value=1>')
+        created = str(t["created_at"] or "")[:10]
+        _tk_date = (f'<label>Date</label> <input type=date name=ticket_date '
+                    f'value="{html.escape(created)}" class=w-sm>')
+        rate_val = t["rate_value"]
+        rate_txt = ("" if rate_val is None else
+                    (f"{float(rate_val):g}"))
+        _job_vals = {"job_name": t["job_name"] or "",
+                     "job_location": t["site_name"] or "",
+                     "po": t["po"] or "",
+                     "well_no": t["well_or_pad"] or "",
+                     "afe": t["afe"] or ""}
+        return f"""
+        <div id="formerr" role="alert"></div>
+        <form method=post action="/ticket/new" id="ticketform" enctype="multipart/form-data">
+
+          {self._form_head(con, _tk_doc, _tk_date, _tk_cust, _tk_job_lines)}
+          <fieldset>
+          {self._line_head()}
+          <div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">
+            <div><label>Type</label><select disabled><option selected>Rental</option></select></div>
+            <div>{combo_field("f_unit", "unit_text", data["unit_opts"], value=data["unit_current"], label="Item", required=True, placeholder="Type to search units…")}
+            <input type=hidden id="f_unit_id" name=asset_id value="{html.escape(asset_code, quote=True)}">
+            <input type=hidden id="f_unit_free" name=item_text value=""></div>
+            <div><label>Description</label><textarea name=item_desc class=ldesc rows=1 placeholder="Details">{html.escape(item_desc)}</textarea></div>
+            <div><label>Qty</label><div style="display:flex;align-items:center;gap:6px"><input name=qty type=number step="any" value={html.escape(str(qty), quote=True)} class=w-xs style="flex:1;min-width:0"><span class="ratetype-tag mute" style="font-size:12px;white-space:nowrap"></span></div></div>
+            <div><label>Unit</label>{uom_opts}</div>
+            <div><label>Rate $</label><span class="rate-x"><input id="f_rateval" name=rate_value type=number step=0.01 value="{html.escape(rate_txt, quote=True)}" placeholder="unit default" data-label="Rate $" class="w-sm line-rate">
+            <input type=hidden name=rate_type value="{html.escape(t["rate_type"] or "", quote=True)}" class="line-ratetype"><button type=button class=line-del title="Delete line item">✕</button></span></div>
+          </div>
+          <p id="ticketsum" class="hint" hidden style="font-size:14px;color:var(--frame);
+             background:#eef3fa;border-radius:6px;padding:8px 12px"></p>
+          <div><label>Notes</label><input name=location_note data-label="Notes" style="width:100%" value="{html.escape(t["location_note"] or "", quote=True)}"></div>
+          {self._btn_row(None, "jobpop", add_item=False, edit_pop="revpop") if tk_mode == "locked" else self._btn_row("Save", "jobpop", add_item=True)}
+          </fieldset>
+                    {self._job_info_popup('jobpop', _job_vals, _tk_extra)}
+          {self._revise_popup(con, "ticket", tid) if tk_mode == "locked" else ""}
+        </form>
+        {self._LOCK_JS if tk_mode == "locked" else ""}
+        """ + ("" if tk_mode == "locked" else self._new_ticket_form_script(
+            unit_rates, draft_key=f"draft:/ticket/edit:{tid}",
+            preserve_rate=True))
+
     def _condition_popups(self, con, t, locked):
         """Check-Out / Check-In (build 'u', Jason 2026-10-25,
         universal summary pattern): the two condition forms ride in
@@ -682,8 +896,15 @@ class AssetViews(CoreViews):
         out_c = self._g(t, "out_condition")
         in_c = self._g(t, "in_condition")
         ro = "disabled" if locked else ""
-        btn = "" if locked else "<p><button>Save Check-Out</button></p>"
-        btn2 = "" if locked else "<p><button>Save Check-In</button></p>"
+        # Build 'ac' (Jason 2026-10-27): the condition forms' commits
+        # ride the standard commit seat (button row, commit only) —
+        # no plain-<p> commits in popups. Build 'ad' (Jason
+        # 2026-10-27): the seats are labeled "Save" — the commit
+        # is named for the act, never the form's content.
+        btn = "" if locked else self._btn_row("Save",
+                                              print_menu="")
+        btn2 = "" if locked else self._btn_row("Save",
+                                               print_menu="")
         form_out = f"""
           <form method=post action="/ticket/{html.escape(tid)}/condition" enctype="multipart/form-data">
             <input type=hidden name=side value=out>
@@ -721,10 +942,16 @@ class AssetViews(CoreViews):
         universal summary pattern): the ticket page IS the rental's
         summary — its facts stated (customer, unit, site, status,
         next step, dates, rate, FIT, conditions, money), its stored
-        charge lines read-only, and every act behind a popup door:
-        Job Info (transport fields + uploads, build 's'), Payment
-        (the money panel), Check-Out, Check-In, Status, Move with
-        note. The Work Ticket / Delivery Ticket print doors stay."""
+        charge lines read-only, and its acts behind popup doors:
+        Check-Out, Check-In, Status, Move with note. (Build 'aa',
+        2026-10-26: the Work Ticket / Delivery Ticket print doors
+        are the two entries of the summary's one Print menu —
+        JC-AA1. Build 'ah', Jason 2026-10-28: the Payment door
+        and its money panel are off — the summary states the money
+        facts. Build 'ai', Jason 2026-10-28, reversing 'ah' at his
+        word: ONE small Payment button stands in the summary's
+        bottom row — navigation to the payment form with this
+        rental prefilled; no money is worked on the summary.)"""
         t = con.execute(
             """SELECT t.*, c.account_name, a.unit_no, a.description
                FROM tickets t JOIN customers c ON c.id = t.customer_id
@@ -761,7 +988,9 @@ class AssetViews(CoreViews):
         haul = engine.clean_haul_by(self._g(t, "haul_by"))
         dest = engine.clean_deliver_to(self._g(t, "deliver_to"))
         haul_text = engine.transport_display(
-            haul, self._g(t, "haul_note") if "haul_note" in t.keys() else "")
+            haul, self._g(t, "haul_note") if "haul_note" in t.keys() else "",
+            company_name=self.desk(con),
+            customer_name=t["account_name"] or "")
         del_opts = "".join(
             f"<option value='{d}'{' selected' if dest == d else ''}>"
             f"{html.escape(engine.DELIVER_LABELS[d])}</option>" for d in engine.DELIVER_TO)
@@ -814,94 +1043,39 @@ class AssetViews(CoreViews):
           <p>{buttons or 'No further moves.'}</p>
         </form>
         """
-        # Transport lock wording (Jason, 2026-10-21): name the document
-        # that holds the lock — never a bare "the ticket" / "the invoice"
-        # the reader has to guess at. Verified in code: the ticket's
-        # transport fields (haul, deliver-to, tax jurisdiction) are
-        # written ONLY by update_ticket_transport, which refuses once
-        # the ticket is Billed/Closed/Void or carries an invoice number —
-        # so after billing they cannot be changed anywhere, and the line
-        # says so instead of pointing at another page. Build 's'
-        # (Jason, 2026-10-25): the line renders inside the Job Info
-        # popup, where the transport fields now live.
-        if not locked:
-            transport_lock_line = ""
-        elif t["invoice_no"]:
-            transport_lock_line = (
-                "<p class='hint'>Locked — billed on invoice "
-                f"{html.escape(t['invoice_no'])}. Transport and possession "
-                "can't be changed after billing.</p>")
-        elif t["status"] == "Billed" and self._g(t, "billed_note"):
-            transport_lock_line = (
-                "<p class='hint'>Locked — marked Billed without an invoice "
-                "(out of flow). See the note above. Transport and "
-                "possession can't be changed after billing.</p>")
-        else:
-            transport_lock_line = (
-                "<p class='hint'>Locked — this Rental Ticket is "
-                f"{html.escape(t['status'].lower())}. Transport and "
-                "possession can't be changed now.</p>")
         # Stored charge lines (census, build 's'): lines typed before
         # build 's' stay on the record — counted in this ticket's
         # total, never editable, never deleted. Build 'u': they are
         # this summary's lines, stated read-only on the summary
         # itself (they rode in the Job Info popup in build 's only
         # because the page had no lines section; a summary does).
+        # Build 'ac' (Jason 2026-10-27): the stored lines render
+        # through the one shared summary lines builder — the family
+        # column vocabulary (Qty and Unit in their own cells; the
+        # old headerless per-line Tax cell drops — the ticket's Tax
+        # and Total facts state the tax). No stored lines renders
+        # the shell with its empty-state row, never a blank area.
         _stored = engine.ticket_lines(con, tid)
-        if _stored:
-            _srows = "".join(
-                f"<tr><td>{html.escape(_ln['category'])}</td>"
-                f"<td>{html.escape(_ln['item'])}</td>"
-                f"<td>{html.escape(_ln['description'])}</td>"
-                f"<td style='text-align:right'>{_ln['qty']:g} "
-                f"{html.escape(_ln['uom'])}</td>"
-                f"<td style='text-align:right'>${_ln['rate']:,.2f}</td>"
-                f"<td style='text-align:right'>${_ln['amount']:,.2f}</td>"
-                f"<td>{'Tax' if _ln['taxed'] else ''}</td>"
-                f"<td>{html.escape(_ln['note'] or '')}</td></tr>"
-                for _ln in _stored)
-            stored_lines_html = (
-                "<p class=\"hint\">Charge lines on this Rental (record — "
-                "read only)</p>"
-                "<table><tr><th>Type</th><th>Item</th>"
-                "<th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th>"
-                f"<th></th><th>Note</th></tr>{_srows}</table>")
-        else:
-            stored_lines_html = ""
-        # Job Info (build 's', Jason 2026-10-25): Transport, Deliver
-        # to, and Tax Jurisdiction are ticket data and live in the
-        # Job Info popup; the popup's own form posts to the transport
-        # route, whose engine write keeps the lock rules.
-        _ro = " disabled" if locked else ""
-        if locked:
-            taxloc_field = (
-                "<label>Tax Jurisdiction</label><input value=\""
-                + html.escape(tax_loc_cur or "—", quote=True) + "\" disabled>")
-        else:
-            taxloc_field = (
-                combo_field("t_taxloc", "tax_loc_text", tax_loc_opts,
-                            value=tax_loc_cur, label="Tax jurisdiction",
-                            placeholder="Pick or leave blank")
-                + f"<input type=hidden id=\"t_taxloc_id\" name=tax_loc_id "
-                  f"value=\"{html.escape(current_tax_loc, quote=True)}\">")
-        jobinfo_popup = f"""
-        <div id="tktjobpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
-          <h3 style="margin-top:0">Job info <span style="float:right"><button type=button onclick="document.getElementById('tktjobpop').style.display='none'">Close</button></span></h3>
-          <form method=post action="/ticket/{html.escape(tid)}/transport" enctype="multipart/form-data">
-          <div class="row">
-            <div><label>Transport</label><input name=haul_by list="ticket-haul-list" value="{html.escape(haul_text, quote=True)}" autocomplete="off"{_ro}><datalist id="ticket-haul-list"><option value="Customer Transport"><option value="Company Transport"></datalist></div>
-            <div><label>Deliver to</label><select name=deliver_to class=w-sm{_ro}>{del_opts}</select></div>
-            <div>{taxloc_field}</div>
-          </div>
-          <p class="hint">{html.escape(m.get("possession_label") or "")}. {html.escape(m.get("tax_note") or "")}
-          Tax: {html.escape(m.get("tax_name") or "")} {m.get("tax_rate", 0):.4f}{" · exempt" if m.get("tax_exempt") else ""}.</p>
-          <p class="hint">{html.escape(engine.haul_consequence(haul, dest))}</p>
-          <div><label>Attach File</label><input type=file name=ticket_upload{_ro}></div>
-          {transport_lock_line}
-          {"" if locked else '<p><button>Save</button></p>'}
-          </form>
-        </div>
-        """
+        _srows = [
+            [html.escape(_ln['category']),
+             html.escape(_ln['item']),
+             html.escape(_ln['description']),
+             f"{_ln['qty']:g}",
+             html.escape(_ln['uom']),
+             f"${_ln['rate']:,.2f}",
+             f"${_ln['amount']:,.2f}",
+             self._sum_note_cell("ticket", tid, _ln['line_id'],
+                                 _ln['note'])]
+            for _ln in _stored]
+        stored_lines_html = (
+            "<p class=\"hint\">Charge lines on this Rental (record — "
+            "read only)</p>"
+            + self._sum_lines(
+                [("Type", False), ("Item", False),
+                 ("Description", False), ("Qty", True),
+                 ("Unit", False), ("Rate", True), ("Amount", True),
+                 ("Note", False)],
+                _srows, empty_text="No lines."))
         # Noted passage (Jason, 2026-10-21): a secondary control that can
         # move this ticket to ANY other status — outside the usual next
         # steps, and to Billed with no invoice behind it — when the
@@ -919,7 +1093,7 @@ class AssetViews(CoreViews):
           <p><label>Move to</label> <select name=status class=w-sm>{jump_opts}</select></p>
           <p><label>Note (required)</label>
           <input name=note required maxlength=2000 style="width:100%"></p>
-          <p><button>Move with note</button></p>
+          {self._btn_row("Save", print_menu="")}
         </form>
         """
         # Money (Jason 2026-10-23, universality): before invoicing,
@@ -938,12 +1112,18 @@ class AssetViews(CoreViews):
                 f"{_tset_txt}<a href=\"/invoice/"
                 f"{html.escape(t['invoice_no'])}\">Invoice "
                 f"{html.escape(t['invoice_no'])}</a> carries the money.")
-            pay_door, pay_popup = "", ""
-            money_rows = []
+            # Build 'ac' (Jason 2026-10-27, state changes values,
+            # not anatomy): the Settled/Balance rows stand on an
+            # invoiced rental too. Settled states the ticket's own
+            # settled figure (the same figure the Money fact
+            # states); the Balance lives on the invoice once the
+            # money has carried, so it states an em dash here.
+            money_rows = [
+                ("Settled", f"${float(_tset['total']):,.2f}"),
+                ("Balance", None),
+            ]
         else:
             money_fact = None
-            pay_door, pay_popup = self._money_popup(
-                con, "ticket", tid, t["customer_id"])
             _set = engine.doc_settled(con, "ticket", tid)
             money_rows = [
                 ("Settled", f"${float(_set['total']):,.2f}"),
@@ -975,11 +1155,28 @@ class AssetViews(CoreViews):
                 bits.append(f"Input by: {html.escape(str(by))} "
                             f"{html.escape(fmt_datetime(at))}")
             return " · ".join(bits)
-        facts = [
+        # Build 'af' (Jason 2026-10-28): grouped fact blocks.
+        # Job Info markers follow the rental's printed papers
+        # (printpack.html_ticket, Work + Delivery): Job, PO #, AFE
+        # and Well / Pad stand in the info rows, Transport in the
+        # transport bar, the tax jurisdiction in its row. Deliver
+        # to does not print — its possession consequence does.
+        cust_pairs = [
             ("Customer", html.escape(t["account_name"])),
             ("Unit", f"{html.escape(t['unit_no'])} — "
                      f"{html.escape(t['description'] or '')}"),
             ("Site", html.escape(t["site_id"] or "—")),
+        ]
+        job_pairs = self._ji_pairs([
+            ("Job Name", html.escape(self._g(t, "job_name")) if (self._g(t, "job_name") or "").strip() else None, True),
+            ("PO #", html.escape(self._g(t, "po")) if (self._g(t, "po") or "").strip() else None, True),
+            ("AFE #", html.escape(self._g(t, "afe")) if (self._g(t, "afe") or "").strip() else None, True),
+            ("Well #", html.escape(self._g(t, "well_or_pad")) if (self._g(t, "well_or_pad") or "").strip() else None, True),
+            ("Transport", html.escape(haul_text), True),
+            ("Deliver to", html.escape(engine.DELIVER_LABELS.get(dest, dest)), False),
+            ("Tax Jurisdiction", html.escape(tax_loc_cur or "—"), True),
+        ])
+        doc_pairs = [
             ("Status", html.escape(t["status"])),
             ("Next Step", html.escape(status_help) if status_help else None),
             ("On Rent", html.escape(fmt_date(t["on_rent"]))),
@@ -989,7 +1186,6 @@ class AssetViews(CoreViews):
                     + (f" · <span class='fail'>FIT override: "
                        f"{html.escape(self._g(t, 'fit_override'))}</span>"
                        if self._g(t, "fit_override") else "")),
-            ("PO #", html.escape(self._g(t, "po")) if (self._g(t, "po") or "").strip() else None),
             ("Quote #", (f"<a href=\"/summary/quote/{html.escape(self._g(t, 'quote_no'), quote=True)}\">"
                          f"{html.escape(self._g(t, 'quote_no'))}</a>")
                         if (self._g(t, "quote_no") or "").strip() else None),
@@ -997,11 +1193,6 @@ class AssetViews(CoreViews):
                            f"{html.escape(t['invoice_no'])}</a>")
                           if t["invoice_no"] else None),
             ("Associated", self._assoc_co_fact(con, "ticket", tid)),
-            ("Job Name", html.escape(self._g(t, "job_name")) if (self._g(t, "job_name") or "").strip() else None),
-            ("AFE #", html.escape(self._g(t, "afe")) if (self._g(t, "afe") or "").strip() else None),
-            ("Transport", html.escape(haul_text)),
-            ("Deliver to", html.escape(engine.DELIVER_LABELS.get(dest, dest))),
-            ("Tax Jurisdiction", html.escape(tax_loc_cur or "—")),
             ("Check-Out", _cond_fact("out")),
             ("Check-In", _cond_fact("in")),
             ("Days", str(m["days"])),
@@ -1016,23 +1207,52 @@ class AssetViews(CoreViews):
             ("Input by:", f"{html.escape(str(self._g(t, 'clerk') or ''))} "
                            f"{html.escape(fmt_datetime(self._g(t, 'created_at')))}".strip()),
         ]
+        doc_pairs += self._chain_facts(
+            con, "ticket", t,
+            lambda n: f"/ticket/{html.escape(n, quote=True)}")
         cond_doors, cond_popups = self._condition_popups(con, t, locked)
-        doors = (
-            self._pop_door("tktjobpop", "Job Info")
-            + pay_door + cond_doors
+        # Door row (build 'aa', 2026-10-26): the working doors in
+        # their order, then ONE Print — the Rental's two papers are
+        # the two entries of its Print menu (JC-AA1); the oversized
+        # standalone Work Ticket / Delivery Ticket links are gone.
+        # Build 'ab' (void-and-revise): the Edit door stands in the
+        # uniform position for every live rental — the form opens
+        # locked and Edit starts the revision. It stands down only
+        # where the revision itself is barred (JC-AB19): a
+        # revised-away rental (paper), an invoiced rental (its
+        # paper is the invoice's), a plain-void rental (its record
+        # stands).
+        # Build 'af' (Jason 2026-10-28): the Job Info door and its
+        # popup are OFF this summary — the summary states the job
+        # info itself; transport is edited on the rental form,
+        # whose own Job Info popup stands untouched.
+        doors = self._sum_doors(
+            cond_doors
             + self._pop_door("statpop", "Status")
-            + self._pop_door("jumppop", "Move with note")
-            + f"<a class=\"btn\" href=\"/print/work/{html.escape(tid)}\">Work Ticket</a> "
-            + f"<a class=\"btn\" href=\"/print/delivery/{html.escape(tid)}\">Delivery Ticket</a>")
+            + self._pop_door("jumppop", "Move with note"),
+            None if (t.get("revised_by_id") or t["invoice_id"]
+                     or t["status"] == "Void")
+            else f"/ticket/new?kind=rental&edit={tid}",
+            self._print_menu(docs=[
+                ("Work Ticket", f"/print/work/{tid}",
+                 f"/print/work/{tid}.pdf"),
+                ("Delivery Ticket", f"/print/delivery/{tid}",
+                 f"/print/delivery/{tid}.pdf")]))
         popups = (
-            jobinfo_popup + pay_popup + cond_popups
+            cond_popups
             + self._pop_wrap("statpop", "Status", status_form)
             + self._pop_wrap("jumppop", "Move with note", jump_form))
-        extra_top = (billed_mark + task_nudge(con, f"/ticket/{tid}")
+        extra_top = (self._revto_line(con, "ticket", t)
+                     + billed_mark + task_nudge(con, f"/ticket/{tid}")
                      + quote_panel + self._paper_warning(t, m))
         return self._sum_page(
-            "Rental", tid, facts, stored_lines_html, doors, popups,
-            "/tickets", "Rental Tickets", extra_top=extra_top)
+            "Rental", tid, [], stored_lines_html, doors, popups,
+            "/tickets", "Rental Tickets", extra_top=extra_top,
+            fact_groups=[("Customer", cust_pairs),
+                         ("Job Info", job_pairs),
+                         ("Rental", doc_pairs)],
+            paper_html=self._sum_paperwork("ticket", tid),
+            pay_doc=("ticket", tid))
 
 
     # Open ticket statuses — the Fit column's quiet signal set.
@@ -1072,10 +1292,14 @@ class AssetViews(CoreViews):
         Dispatched tickets failing fit, the only moment paper earns a tap.
         flag=nooff shows exactly the on-rent tickets with no off-rent date.
         Any other flag value falls back to the unfiltered list."""
+        _tk_filter = ("WHERE t.revised_by_id IS NULL "
+                      if engine.revision_cols_ready(con, "tickets")
+                      else "")
         rows = con.execute(
-            """SELECT t.ticket_id, t.status, t.on_rent, t.off_rent, c.account_name, a.unit_no
+            f"""SELECT t.ticket_id, t.status, t.on_rent, t.off_rent, c.account_name, a.unit_no
                FROM tickets t JOIN customers c ON c.id = t.customer_id
                JOIN assets a ON a.id = t.asset_id
+               {_tk_filter}
                ORDER BY t.on_rent DESC"""
         ).fetchall()
         head = ""
@@ -1339,6 +1563,9 @@ class AssetViews(CoreViews):
                 po_hist = (
                     f'<h2 style="font-size:16px;color:var(--frame)">Purchase Orders</h2>'
                     f"<table><tr><th>PO #</th><th>Status</th><th>Expires</th></tr>{_uh}</table>")
+        _urow = self._btn_row(
+            "Save",
+            extra='<a class="btn secondary" href="/assets/all">Close</a>')
         return chain_banner(con, "equipment") + f"""
         {warn}
         <form method=post action="/unit/save">
@@ -1389,7 +1616,7 @@ class AssetViews(CoreViews):
           <label><input type=checkbox name=abs_ok value=1 {"checked" if row and row["abs_ok"] else ""}> ABS stamp</label>
           <label><input type=checkbox name=cert_operator value=1 {"checked" if row and row["cert_operator"] else ""}> Requires certified operator</label>
           <label>Notes</label><input name=notes value="{html.escape(v('notes'))}">
-          <p><button>Save Asset</button> <a href="/assets/all">Cancel</a></p>
+          {_urow}
         </form>
         {self._unit_compliance_link(con, aid) if row else ""}
         {po_hist}
@@ -1397,12 +1624,15 @@ class AssetViews(CoreViews):
         """
 
     def view_sites(self, con):
-        # No inline index list (Jason 2026-10-21, look-see batch 2 —
-        # same universal form rule as Customers): Done Today is the
-        # recent list; the full list lives behind View (/sites/all,
-        # rows open the site).
-        return chain_banner_rerun(con, "site") + tabs_admin("/sites") + """<p style="margin:0 0 8px"><a class="btn" href="/site/new">+ New Site</a></p>
-        """ + self._view_door("/sites/all", "Job sites — all")
+        # Build 'ai' (Jason 2026-10-28): the page opens on the
+        # standing blank form, like Vendors — the universal master
+        # pattern. The form carries its own chain banner, its Save
+        # row, and its View row at the bottom left (/sites/all).
+        # What stood here before — a "+ New Site" door and a
+        # separate View door, no form (look-see batch 2, 2026-10-21)
+        # — is the form's own furniture now.
+        return tabs_admin("/sites", con=con) \
+            + self.view_site_form(con, None)
 
     def view_sites_all(self, con):
         """Every job site, filterable/sortable — the audit popup for Admin → Job Sites."""
@@ -1548,6 +1778,11 @@ class AssetViews(CoreViews):
         flag_opts = [(f, f, f) for f in engine.lookups(con, "flag_state")]
         waters_opts = [(w, w, w) for w in engine.lookups(con, "waters")]
         regime_opts = [(r, r, r) for r in engine.lookups(con, "regime")]
+        _srow = self._btn_row(
+            "Save",
+            extra=('<a class="btn secondary" href="'
+                   + (('/site/' + html.escape(sid)) if row else '/sites')
+                   + '">Close</a>'))
         return chain_banner(con, "site") + f"""
         {f'<p class="hint">Carried forward from {html.escape(carried["site_id"])} — name the new site.</p>' if carried else ''}
         <form method=post action="/site/save">
@@ -1568,7 +1803,7 @@ class AssetViews(CoreViews):
           </details>
           <label><input type=checkbox name=tax_exempt value=1 {"checked" if exempt else ""}> Tax exempt at this site</label>
           <label>Notes</label><input name=notes value="{html.escape(v('notes'))}">
-          <p><button>Save Site</button> <a class="btn secondary" href="{'/site/' + html.escape(sid) if row else '/sites'}">Cancel</a></p>
+          {_srow}
         </form>
         {self._view_row("/sites/all", "Sites")}
         """
@@ -1588,6 +1823,13 @@ class AssetViews(CoreViews):
             row["invoice_no"] = engine.doc_num(con, "invoice", row.get("invoice_id"))
             row["quote_no"] = engine.doc_num(con, "quote", row.get("quote_id"))
         nxt = wid or engine.next_wo_id(con)
+        # Void-and-revise (build 'ab'): an existing WO's form opens
+        # LOCKED (the record) unless it is a fresh revision under
+        # its session marker — then it is the revision's own editor.
+        wo_mode = None
+        if row:
+            wo_mode = ("session" if engine.revision_pending(
+                con, "wo", row["id"]) else "locked")
         def v(k, default=""):
             if not row:
                 return default
@@ -1662,7 +1904,9 @@ class AssetViews(CoreViews):
             </div>
             <div><label><input type=checkbox name=warranty value=1 {"checked" if row and row["warranty"] else ""}> Warranty</label></div>
             <div><label>Uploads</label><input type=file name=wo_upload></div>"""
-        _wo_doc = f'WO # <input value="{html.escape(nxt)}" disabled class=w-xs>'
+        _wo_doc = (f'Work Order # <input name=wo_rename value="{html.escape(nxt, quote=True)}" class=w-xs>'
+                   if wo_mode == "session" else
+                   f'Work Order # <input value="{html.escape(nxt)}" disabled class=w-xs>')
         _wo_date = f'<label>Date</label> <input type=date name=wo_date value="{html.escape(v("wo_date")[:10] if v("wo_date") else today)}" class=w-sm>'
         return ("" if bare else self._ticket_kind_bar(con, "workorder")) + f"""
         {quote_panel}
@@ -1672,9 +1916,11 @@ class AssetViews(CoreViews):
           {self._line_head()}
           {line_rows}
           <div><label>Notes</label><input name=notes value="{html.escape(v('notes'))}" style="width:100%"></div>
-          {self._btn_row("Save", "wojobpop", add_item=True)}
+          {self._btn_row(None, "wojobpop", add_item=False, edit_pop="revpop") if wo_mode == "locked" else self._btn_row("Save", "wojobpop", add_item=True)}
           {self._job_info_popup('wojobpop', {"po": v("po")}, _wo_extra)}
+          {self._revise_popup(con, "wo", wid) if wo_mode == "locked" else ""}
         </form>
+        {self._LOCK_JS if wo_mode == "locked" else ""}
         """ + ("""<script>
         (function(){
           var form = document.querySelector('form[action="/wo/save"]');
@@ -1708,9 +1954,10 @@ class AssetViews(CoreViews):
         </script>""") + (
             # Build 'u' (Jason 2026-10-25, universal summary pattern;
             # disposes of PHASET JC-T4): the money panel no longer
-            # stands below this form — a customer work order's money
-            # is worked from its summary's Payment popup. The form
-            # keeps the document's own work only.
+            # stands below this form. Build 'ah' (Jason 2026-10-28):
+            # the summary's Payment popup is off too — a customer
+            # work order's money is worked from the Payment form.
+            # The form keeps the document's own work only.
             ""
         ) + ("" if bare else self._view_row("/wos/all", "Work Orders"))
 
@@ -1719,11 +1966,16 @@ class AssetViews(CoreViews):
         universal summary pattern): the work order's facts stated —
         customer, date, status, type, unit, charge, its lines, its
         totals, its notes and Job Info values — with doors: Edit (to
-        the form), Payment (the money panel in its popup, customer
-        work orders), Print (the page print menu; a work order has
-        no print pack), View (the Work Orders list). The quote-expiry
-        panel that stood on the form is information: it states here
-        as a fact line."""
+        the form), Print (the page print menu; a work order has
+        no print pack), View (the Work Orders list). (Build 'ah',
+        Jason 2026-10-28: the Payment door and its money panel are
+        off — the summary states the money facts. Build 'ai',
+        Jason 2026-10-28, reversing 'ah' at his word: ONE small
+        Payment button stands in the summary's bottom row —
+        navigation to the payment form with this work order
+        prefilled; no money is worked on the summary.)
+        The quote-expiry panel that stood on the form is
+        information: it states here as a fact line."""
         row = con.execute(
             """SELECT w.*, COALESCE(c.account_name, '') AS cust,
                       COALESCE(a.unit_no, '') AS unit_no
@@ -1746,20 +1998,26 @@ class AssetViews(CoreViews):
                 return default
             val = row[k]
             return "" if val is None else str(val)
+        # Build 'ac' (Jason 2026-10-27): the shared summary lines
+        # builder, the family vocabulary — the Note column stands
+        # (wo_lines carries line_note), and no lines renders the
+        # shell, never a blank area.
         lines = engine.wo_lines(con, wid)
-        lrows = "".join(
-            f"<tr><td>{html.escape(ln['category'] or '')}</td>"
-            f"<td>{html.escape(ln['item'] or '')}</td>"
-            f"<td>{html.escape(ln['description'] or '')}</td>"
-            f"<td>{float(ln['qty'] or 0):g}</td>"
-            f"<td>{html.escape(ln['uom'] or '')}</td>"
-            f"<td>${float(ln['rate'] or 0):,.2f}</td>"
-            f"<td>${float(ln['qty'] or 0) * float(ln['rate'] or 0):,.2f}</td></tr>"
-            for ln in lines)
-        lines_html = (
-            "<table><tr><th>Type</th><th>Item</th><th>Description</th>"
-            "<th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr>"
-            f"{lrows}</table>" if lrows else "")
+        lines_html = self._sum_lines(
+            [("Type", False), ("Item", False), ("Description", False),
+             ("Qty", True), ("Unit", False), ("Rate", True),
+             ("Amount", True), ("Note", False)],
+            [[html.escape(ln['category'] or ''),
+              html.escape(ln['item'] or ''),
+              html.escape(ln['description'] or ''),
+              f"{float(ln['qty'] or 0):g}",
+              html.escape(ln['uom'] or ''),
+              f"${float(ln['rate'] or 0):,.2f}",
+              f"${float(ln['qty'] or 0) * float(ln['rate'] or 0):,.2f}",
+              self._sum_note_cell("wo", wid, ln['line_id'],
+                                  ln['line_note'])]
+             for ln in lines],
+            empty_text="No lines.")
         quote_fact = None
         if v("quote_no"):
             quote_fact = (
@@ -1770,8 +2028,17 @@ class AssetViews(CoreViews):
                 quote_fact += (f" · Quote check: expired "
                                f"{html.escape(_qc['date_str'])}")
         _ref_t = v("ref_ticket") or v("ticket_id")
-        facts = [
+        # Build 'af': grouped fact blocks. The work order's one
+        # job field is its PO #; it stands on the printed summary
+        # page (a work order has no print pack — the page print
+        # carries the fact table), so its marker is a check.
+        cust_pairs = [
             ("Customer", html.escape(v("cust"))),
+        ]
+        job_pairs = self._ji_pairs([
+            ("PO #", html.escape(v("po")) if v("po") else None, True),
+        ])
+        doc_pairs = [
             ("Date", html.escape(fmt_date(v("wo_date")))),
             ("Status", html.escape(v("status"))),
             ("Type", html.escape(v("work_type"))),
@@ -1784,49 +2051,76 @@ class AssetViews(CoreViews):
             ("Invoice #",
              (f"<a href=\"/invoice/{html.escape(v('invoice_no'), quote=True)}\">"
               f"{html.escape(v('invoice_no'))}</a>") if v("invoice_no") else None),
-            ("PO #", html.escape(v("po")) if v("po") else None),
             ("Associated", self._assoc_co_fact(con, "wo", wid)),
             ("Crew / Vendor", html.escape(v("vendor")) if v("vendor") else None),
             ("Open Date", html.escape(fmt_date(v("open_date"))) if v("open_date") else None),
             ("Close Date", html.escape(fmt_date(v("close_date"))) if v("close_date") else None),
             ("Warranty", "Yes" if v("warranty") == "1" else None),
         ]
+        # Build 'ac' (Jason 2026-10-27): the fact list does not
+        # branch on money state — the money facts are computed for
+        # both sides. Build 'af' (Jason 2026-10-28): on an internal
+        # work order they carry no value and the summary omits
+        # them (null omission). (Build 'ah', Jason 2026-10-28: the
+        # Payment door is off every summary — an internal work
+        # order's money facts carry no value and omit, as before;
+        # the absence is the record's kind, not state drift.)
         if v("charge_to") == "customer":
             _set = engine.doc_settled(con, "wo", wid)
-            facts += [
+            _money_facts = [
                 ("Total", f"${float(engine.doc_total(con, 'wo', wid)):,.2f}"),
                 ("Settled", f"${float(_set['total']):,.2f}"),
                 ("Balance", f"${float(engine.doc_balance(con, 'wo', wid)):,.2f}"),
             ]
-            pay_door, pay_popup = self._money_popup(
-                con, "wo", wid, v("customer_id"))
         else:
-            facts += [
-                ("Labor", f"${float(v('labor') or 0):,.2f}"),
-                ("Parts", f"${float(v('parts') or 0):,.2f}"),
-                ("Other", f"${float(v('other_cost') or 0):,.2f}"),
-            ]
-            pay_door, pay_popup = "", ""
-        facts.append(("Notes", html.escape(v("notes")) if v("notes") else None))
-        doors = (pay_door
-                 + f"<a class=\"btn\" href=\"/wo/{html.escape(wid, quote=True)}\">Edit</a> "
-                 + self._print_menu(page=True))
-        return (self._ticket_kind_bar(con, "workorder")
-                + self._sum_page("Work Order", wid, facts, lines_html,
-                                 doors, pay_popup,
-                                 "/wos/all", "Work Orders"))
+            _money_facts = [("Total", None), ("Settled", None),
+                            ("Balance", None)]
+        doc_pairs += _money_facts + [
+            ("Labor", f"${float(v('labor') or 0):,.2f}"
+             if (v('labor') or '').strip() else None),
+            ("Parts", f"${float(v('parts') or 0):,.2f}"
+             if (v('parts') or '').strip() else None),
+            ("Other", f"${float(v('other_cost') or 0):,.2f}"
+             if (v('other_cost') or '').strip() else None),
+        ]
+        doc_pairs.append(("Notes", html.escape(v("notes")) if v("notes") else None))
+        doc_pairs += self._chain_facts(
+            con, "wo", row,
+            lambda n: f"/summary/wo/{html.escape(n, quote=True)}")
+        doors = self._sum_doors(
+            "",
+            None if (row.get("revised_by_id")
+                     or (v("status") or "") == "Void")
+            else f"/wo/{wid}",
+            self._print_menu(page=True))
+        # Build 'ac' (Jason 2026-10-27): no family tab strip on a
+        # summary — the page opens bare under its title, like the
+        # Rental and Sale summaries.
+        return self._sum_page(
+            "Work Order", wid, [], lines_html, doors, "",
+            "/wos/all", "Work Orders",
+            extra_top=self._revto_line(con, "wo", row),
+            fact_groups=[("Customer", cust_pairs),
+                         ("Job Info", job_pairs),
+                         ("Work Order", doc_pairs)],
+            paper_html=self._sum_paperwork("wo", wid),
+            pay_doc=("wo", wid))
 
     def view_wos_all(self, con):
         """Work Orders list fragment — the universal View popup's
         content for the Work Order pages (build 'r', Jason
         2026-10-25). Same audit chrome as the other list fragments:
         filter box, sortable columns, rows link to the record."""
+        _wo_filter = ("WHERE w.revised_by_id IS NULL "
+                      if engine.revision_cols_ready(con, "work_orders")
+                      else "")
         rows = con.execute(
-            """SELECT w.wo_id, w.wo_date, w.status, w.work_type,
+            f"""SELECT w.wo_id, w.wo_date, w.status, w.work_type,
                       c.account_name, a.unit_no
                FROM work_orders w
                LEFT JOIN customers c ON c.id = w.customer_id
                LEFT JOIN assets a ON a.id = w.asset_id
+               {_wo_filter}
                ORDER BY w.wo_date DESC, w.wo_id DESC""").fetchall()
         body = "".join(
             f"<tr><td><a href='/summary/wo/{html.escape(r['wo_id'], quote=True)}'>"
@@ -1839,7 +2133,7 @@ class AssetViews(CoreViews):
             for r in rows)
         return (f"<input id=auditq placeholder='Filter…' oninput='auditFilter(this)'>"
                 f"<h2>Work Orders</h2>"
-                f"<table class=audit><tr><th>WO #</th><th>Date</th>"
+                f"<table class=audit><tr><th>Work Order #</th><th>Date</th>"
                 f"<th>Customer</th><th>Unit</th><th>Type</th><th>Status</th></tr>"
                 f"{body or '<tr><td colspan=6>No work orders.</td></tr>'}</table>"
                 + AUDIT_TABLE_JS)
@@ -1848,16 +2142,10 @@ class AssetViews(CoreViews):
         """Sales list fragment — the universal View popup's content
         for the Sale page (build 'r', Jason 2026-10-25). The register
         table that used to render below the sale form, in the audit
-        chrome (same rows as _sales_list_html, incl. balance)."""
+        chrome (the register's rows, incl. balance)."""
         try:
             groups = con.execute(
-                """SELECT s.sale_group AS grp, MIN(s.sale_date) AS d,
-                          COUNT(*) AS n, COALESCE(SUM(s.amount),0) AS tot,
-                          COALESCE(c.account_name, s.customer_id) AS cust
-                   FROM sales s
-                   LEFT JOIN customers c ON c.id = s.customer_id
-                   GROUP BY s.sale_group
-                   ORDER BY d DESC, grp DESC LIMIT 50""").fetchall()
+                """SELECT (SELECT h.sale_id FROM sales h WHERE h.id = s.group_id) AS grp, MIN(s.sale_date) AS d, COUNT(*) AS n, COALESCE(SUM(s.amount),0) AS tot, COALESCE(c.account_name, s.customer_id) AS cust FROM sales s LEFT JOIN customers c ON c.id = s.customer_id WHERE s.revised_by_id IS NULL GROUP BY s.group_id ORDER BY d DESC, grp DESC LIMIT 50""").fetchall()
         except Exception:
             groups = []
         rows_html = ""
@@ -1872,8 +2160,8 @@ class AssetViews(CoreViews):
                 f"<td>${float(g['tot']):,.2f}</td>"
                 f"<td>${bal:,.2f}</td></tr>")
         return (f"<input id=auditq placeholder='Filter…' oninput='auditFilter(this)'>"
-                f"<h2>Sales</h2>"
-                f"<table class=audit><tr><th>Sale</th><th>Date</th>"
+                f"<h2>Sales Tickets</h2>"
+                f"<table class=audit><tr><th>Sales Ticket</th><th>Date</th>"
                 f"<th>Customer</th><th>Lines</th><th>Total</th><th>Balance</th></tr>"
                 f"{rows_html or '<tr><td colspan=6>No sales.</td></tr>'}</table>"
                 + AUDIT_TABLE_JS)
@@ -1884,6 +2172,47 @@ class AssetViews(CoreViews):
         carries to invoice."""
         from datetime import date
         today = date.today().isoformat()
+        # Build 'ab' (void-and-revise): ?edit=<sale#> loads an
+        # existing sale into this same form — its own units rejoin
+        # the picker (they stand sold: to this sale), its lines
+        # render as the rows. The form opens LOCKED (the record)
+        # unless the sale is a fresh revision under its session
+        # marker — then it is the revision's own editor and the
+        # save routes to engine.update_sale. A revised-away sale
+        # is paper (the refusal names its head); an invoiced sale
+        # refuses the same way the revise gate does — its money
+        # lives on the invoice.
+        edit_grp = ((q or {}).get("edit") or "").strip()
+        edit_rows = []
+        edit_head = None
+        sale_mode = None
+        if edit_grp:
+            edit_rows = con.execute(
+                "SELECT * FROM sales WHERE group_id=? ORDER BY seq, id",
+                (engine.doc_key(con, "sale", edit_grp),)).fetchall()
+            if not edit_rows:
+                return '<div class="err">Unknown sale.</div>'
+            edit_head = edit_rows[0]
+            if dict(edit_head).get("revised_by_id"):
+                _head = engine.num_of(
+                    con, "sales", edit_head["revised_by_id"])
+                return (f"<h2>Sales Ticket {html.escape(edit_grp)}</h2>"
+                        f"<p class='hint'>This sale was revised — "
+                        f"the live document is "
+                        f"<a href='/sale/{html.escape(_head or '', quote=True)}'>"
+                        f"{html.escape(_head or '')}</a>.</p>")
+            if any(r["invoice_id"] for r in edit_rows):
+                _ino = next(engine.num_of(con, "invoices",
+                                          r["invoice_id"])
+                            for r in edit_rows if r["invoice_id"])
+                return (f"<h2>Sales Ticket {html.escape(edit_grp)}</h2>"
+                        f"<p class='hint'>Sales Ticket {html.escape(edit_grp)} "
+                        f"is on {html.escape(_ino or '')} — its money "
+                        f"lives on the invoice now. "
+                        f"<a href='/sale/{html.escape(edit_grp, quote=True)}'>"
+                        f"Summary of Sales Ticket# {html.escape(edit_grp)}</a></p>")
+            sale_mode = ("session" if engine.revision_pending(
+                con, "sale", edit_head["id"]) else "locked")
         # Available assets (not sold, active, in service). Sale draw
         # (Jason 2026-10-24 ruling, amended the same day): NO class
         # is excluded — Fleet sells too, because long-rent customers
@@ -1895,18 +2224,34 @@ class AssetViews(CoreViews):
             "SELECT asset_id, unit_no, COALESCE(designation,'Fleet') FROM assets WHERE active=1 AND (sold_date IS NULL OR sold_date='') "
             "AND COALESCE(status,'Active') = 'Active' ORDER BY unit_no"
         ).fetchall()
+        if edit_rows:
+            have = {r[0] for r in assets}
+            for r in edit_rows:
+                code = engine.asset_code(con, r["asset_id"])
+                if code and code not in have:
+                    a = con.execute(
+                        "SELECT asset_id, unit_no, "
+                        "COALESCE(designation,'Fleet') FROM assets "
+                        "WHERE asset_id=?", (code,)).fetchone()
+                    if a:
+                        assets = list(assets) + [a]
+                        have.add(code)
         custs = con.execute(
             "SELECT customer_id, account_name FROM customers ORDER BY account_name"
         ).fetchall()
-        aopts = "".join(
-            f"<option value='{r[0]}' data-desig='{html.escape(r[2])}'>"
-            f"{html.escape(r[1])}{' — Plant' if r[2] == 'Plant' else ' — Fleet' if r[2] == 'Fleet' else ''}</option>"
-            for r in assets)
+        def aopts_for(selected=""):
+            return "".join(
+                f"<option value='{r[0]}' data-desig='{html.escape(r[2])}'"
+                f"{' selected' if selected and r[0] == selected else ''}>"
+                f"{html.escape(r[1])}{' — Plant' if r[2] == 'Plant' else ' — Fleet' if r[2] == 'Fleet' else ''}</option>"
+                for r in assets)
+        aopts = aopts_for()
         copts = "".join(f"<option value='{r[0]}'>{r[1]}</option>" for r in custs)
-        from datetime import date as _d
-        _yr = _d.today().year
-        _n = con.execute("SELECT COALESCE(MAX(CAST(SUBSTR(sale_id, 8) AS INTEGER)), 0) + 1 FROM sales WHERE sale_id LIKE ?", (f"S-{_yr}-%",)).fetchone()[0]
-        sale_no = f"S-{_yr}-{_n:04d}"
+        # Build 'ai' (Jason 2026-10-28): the form's prefill IS the
+        # minter's next number — the plain {stem}-{n} shape at the
+        # 100001 floor (engine.peek_next_sale_id); the year-shaped
+        # local computation is superseded with the shape itself.
+        sale_no = engine.peek_next_sale_id(con)
         # Header zone (build 'r', Jason 2026-10-25, facelift item 4;
         # two-row form build 't', same day, universal form law):
         # Company block, Sale # + Date, bar, Customer left, Job Info
@@ -1915,41 +2260,98 @@ class AssetViews(CoreViews):
         # confirm checks stand in the confirm-and-sign popup
         # (#saleconfpop) — saving an unconfirmed Plant/Fleet sale
         # opens it; the checks, the stamps, and the server's refusal
-        # are unchanged.
+        # are unchanged. Build 'ac' (Jason 2026-10-27, defect C-4):
+        # the popup's commit is no longer a second submit —
+        # it triggers the form's ONE Save path (requestSubmit runs
+        # the same submit the row's Save makes, confirmations now
+        # set; the old op=save field was never read by the POST
+        # layer, so the post is unchanged). Build 'ad' (Jason
+        # 2026-10-27): the popup's button is labeled "Save" —
+        # the popup itself is the confirmation; the button names
+        # the act only.
+        if edit_head is not None:
+            _ecust = engine.cust_code(con, edit_head["customer_id"])
+            copts = "".join(
+                f"<option value='{r[0]}'"
+                f"{' selected' if r[0] == _ecust else ''}>{r[1]}</option>"
+                for r in custs)
+            sale_no = edit_grp
+            _sale_extra = (
+                '<div class="row"><div><label>Reference #</label>'
+                f'<input name=ref_no class=w-sm placeholder="Optional" '
+                f'value="{html.escape(self._g(edit_head, "ref_no"), quote=True)}"></div>'
+                '<div><label>Condition</label>'
+                f'<input name=condition placeholder="As-is, good, etc." '
+                f'value="{html.escape(self._g(edit_head, "condition"), quote=True)}"></div></div>')
+            _sale_hiddens = (
+                f'<input type=hidden name=editing value=1>'
+                f'<input type=hidden name=sale_group_key '
+                f'value="{edit_head["id"]}">')
+            _sale_job = [("Reference #", self._g(edit_head, "ref_no"))]
+            _sale_vals = {}
+            _sale_date_val = edit_head["sale_date"] or today
+            _sale_notes = self._g(edit_head, "notes")
+            def _sale_row(i, r):
+                suf = "" if i == 0 else str(i)
+                code = engine.asset_code(con, r["asset_id"])
+                return (
+                    f'<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">'
+                    f'<input type=hidden name=line_ref{suf} value="{html.escape(r["sale_id"], quote=True)}">'
+                    f'<div><label>Type</label><select disabled><option selected>Item</option></select></div>'
+                    f'<div><label>Item</label><select name=asset_id{suf} required><option value="">— Pick —</option>{aopts_for(code)}</select></div>'
+                    f'<div><label>Description</label><textarea name=item_desc{suf} class=ldesc rows=1 placeholder="Details">{html.escape(self._g(r, "item_desc"))}</textarea></div>'
+                    f'<div><label>Qty</label><input name=qty{suf} type=number min=1 value={html.escape(str(r["qty"] or 1), quote=True)} required class=w-xs></div>'
+                    f'<div><label>Unit</label><select disabled><option selected>Each</option></select></div>'
+                    f'<div><label>Price</label><span class="rate-x"><input name=amount{suf} type=number step=0.01 min=0 required class=w-sm value="{float(r["amount"] or 0):g}"><button type=button class=line-del title="Delete line item">✕</button></span></div>'
+                    f'</div>')
+            _sale_rows = "".join(
+                _sale_row(i, r) for i, r in enumerate(edit_rows))
+        else:
+            _sale_extra = ('<div class="row"><div><label>Reference #</label>'
+                           '<input name=ref_no class=w-sm placeholder="Optional"></div>'
+                           '<div><label>Condition</label>'
+                           '<input name=condition placeholder="As-is, good, etc."></div></div>')
+            _sale_hiddens = ""
+            _sale_job = [("Reference #", "")]
+            _sale_vals = None
+            _sale_date_val = today
+            _sale_notes = ""
+            _sale_rows = (
+                '<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">'
+                '<div><label>Type</label><select disabled><option selected>Item</option></select></div>'
+                f'<div><label>Item</label><select name=asset_id required><option value="">— Pick —</option>{aopts}</select></div>'
+                '<div><label>Description</label><textarea name=item_desc class=ldesc rows=1 placeholder="Details"></textarea></div>'
+                '<div><label>Qty</label><input name=qty type=number min=1 value=1 required class=w-xs></div>'
+                '<div><label>Unit</label><select disabled><option selected>Each</option></select></div>'
+                '<div><label>Price</label><span class="rate-x"><input name=amount type=number step=0.01 min=0.01 required class=w-sm><button type=button class=line-del title="Delete line item">✕</button></span></div>'
+                '</div>')
         _sale_cust = (f'<div><label>Customer</label><select name=customer_id required>'
                       f'<option value="">— Pick —</option>{copts}</select></div>')
-        _sale_extra = ('<div class="row"><div><label>Reference #</label>'
-                       '<input name=ref_no class=w-sm placeholder="Optional"></div>'
-                       '<div><label>Condition</label>'
-                       '<input name=condition placeholder="As-is, good, etc."></div></div>')
-        _sale_doc = f'Sale # <input value="{sale_no}" disabled class=w-xs>'
-        _sale_date = f'<label>Date</label> <input type=date name=sale_date value="{today}" required class=w-sm>'
+        _sale_doc = (f'Sales Ticket # <input name=sale_id value="{html.escape(sale_no, quote=True)}" class=w-xs>'
+                     if sale_mode == "session" else
+                     f'Sales Ticket # <input value="{sale_no}" disabled class=w-xs>')
+        _sale_date = f'<label>Date</label> <input type=date name=sale_date value="{_sale_date_val}" required class=w-sm>'
         return f"""
         <form method=post action="/sale/save" enctype="multipart/form-data">
-          <input type=hidden name=sale_id value="{sale_no}">
-          {self._form_head(con, _sale_doc, _sale_date, _sale_cust, [("Reference #", "")])}
+          {'' if sale_mode == "session" else f'<input type=hidden name=sale_id value="{sale_no}">'}
+          {_sale_hiddens}
+          {self._form_head(con, _sale_doc, _sale_date, _sale_cust, _sale_job)}
           {self._line_head("Price")}
-          <div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">
-            <div><label>Type</label><select disabled><option selected>Item</option></select></div>
-            <div><label>Item</label><select name=asset_id required><option value="">— Pick —</option>{aopts}</select></div>
-            <div><label>Description</label><textarea name=item_desc class=ldesc rows=1 placeholder="Details"></textarea></div>
-            <div><label>Qty</label><input name=qty type=number min=1 value=1 required class=w-xs></div>
-            <div><label>Unit</label><select disabled><option selected>Each</option></select></div>
-            <div><label>Price</label><span class="rate-x"><input name=amount type=number step=0.01 min=0.01 required class=w-sm><button type=button class=line-del title="Delete line item">✕</button></span></div>
-          </div>
-          <div><label>Notes</label><input name=notes style="width:100%"></div>
-          {self._btn_row("Save", "salejobpop", add_item=True)}
-          {self._job_info_popup('salejobpop', None, _sale_extra)}
-          <div id="saleconfpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
-            <h3 style="margin-top:0">Confirm sale <span style="float:right"><button type="button" onclick="document.getElementById('saleconfpop').style.display='none'">Close</button></span></h3>
+          {_sale_rows}
+          <div><label>Notes</label><input name=notes style="width:100%" value="{html.escape(_sale_notes, quote=True)}"></div>
+          {self._btn_row(None, "salejobpop", add_item=False, edit_pop="revpop") if sale_mode == "locked" else self._btn_row("Save", "salejobpop", add_item=True)}
+          {self._job_info_popup('salejobpop', _sale_vals, _sale_extra)}
+          {self._revise_popup(con, "sale", edit_grp) if sale_mode == "locked" else ""}
+          <div id="saleconfpop" class="wpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
+            <h3 class="wpop-h" style="margin-top:0">Confirm sale {self._pop_furniture("saleconfpop")}</h3>
             <p id="plant-confirm" hidden><label><input type=checkbox name=plant_confirm value=1>
             Confirm Plant sale — a Plant (fixed) asset is in this sale.</label></p>
             <p id="fleet-confirm" hidden><label><input type=checkbox name=fleet_confirm value=1>
             Confirm Fleet sale — a Fleet (rental) unit is in this sale.</label></p>
-            <p><button type="submit" name="op" value="save">Confirm &amp; Save</button></p>
+            <p><button type="button" onclick="this.form.requestSubmit()">Save</button></p>
           </div>
         </form>
-        {self._view_row("/sales/all", "Sales")}
+        {self._view_row("/sales/all", "Sales Tickets")}
         <script>
         (function(){{
           var form = document.querySelector('form[action="/sale/save"]');
@@ -2013,7 +2415,8 @@ class AssetViews(CoreViews):
           // universal form law): the Plant/Fleet confirms no longer
           // stand on the form — saving a sale that carries an
           // unconfirmed Plant or Fleet line opens the popup instead
-          // of submitting; its Confirm & Save button submits with
+          // of submitting; its Save button (build 'ad': the commit
+          // is named for the act only) submits with
           // the checks set. The server enforces the same rules, so
           // a crafted post without a check is still refused.
           var confPop = document.getElementById('saleconfpop');
@@ -2029,54 +2432,29 @@ class AssetViews(CoreViews):
           }});
         }})();
         </script>
-        """
+        """ + (self._LOCK_JS if sale_mode == "locked" else "")
         # Build 'r' (Jason 2026-10-25): the sales register no longer
         # renders below the form — it is the View popup's content
-        # (/sales/all). _sales_list_html remains for other callers.
-
-    def _sales_list_html(self, con):
-        """Recorded sales by group (Jason 2026-10-23, universality):
-        each sale — one submission, one or more unit rows — with its
-        total and open balance; the row opens the sale's page, where
-        money is taken against it."""
-        try:
-            groups = con.execute(
-                """SELECT s.sale_group AS grp, MIN(s.sale_date) AS d,
-                          COUNT(*) AS n, COALESCE(SUM(s.amount),0) AS tot,
-                          COALESCE(c.account_name, s.customer_id) AS cust
-                   FROM sales s
-                   LEFT JOIN customers c ON c.id = s.customer_id
-                   GROUP BY s.sale_group
-                   ORDER BY d DESC, grp DESC LIMIT 50""").fetchall()
-        except Exception:
-            return ""
-        if not groups:
-            return ""
-        rows = []
-        for g in groups:
-            bal = float(engine.doc_balance(con, "sale", g["grp"]))
-            rows.append(
-                f"<tr><td><a href=\"/sale/{html.escape(g['grp'], quote=True)}\">"
-                f"{html.escape(g['grp'])}</a></td>"
-                f"<td>{html.escape(fmt_date(g['d'] or ''))}</td>"
-                f"<td>{html.escape(g['cust'] or '')}</td>"
-                f"<td>{int(g['n'])}</td>"
-                f"<td>${float(g['tot']):,.2f}</td>"
-                f"<td>${bal:,.2f}</td></tr>")
-        return ("<h2 style='font-size:16px;color:var(--frame)'>Sales</h2>"
-                "<table><tr><th>Sale</th><th>Date</th><th>Customer</th>"
-                "<th>Lines</th><th>Total</th><th>Balance</th></tr>"
-                + "".join(rows) + "</table>")
+        # (/sales/all). (Build 'ag': the _sales_list_html helper
+        # that once rendered it here had no callers left and is
+        # removed; view_sales_all renders the register itself.)
 
     def view_sale_detail(self, con, grp):
-        """Summary of Sale# (build 'u', Jason 2026-10-25, universal
+        """Summary of Sales Ticket# (build 'u', Jason 2026-10-25, universal
         summary pattern): the sale's facts stated — customer, date,
         ref, its unit rows, totals, notes (the confirm stamps ride
-        in the rows' notes), record stamps — and its money panel
-        behind the Payment popup door. A sale has no edit form (the
-        Sale tab is a creation form), so the summary carries no Edit
-        door; its Print door is the page print menu, as on the Sale
-        form (a sale has no print pack)."""
+        in the rows' notes), record stamps, and its money stated
+        as facts. (Build 'ah', Jason 2026-10-28: the Payment door
+        and its money panel are off. Build 'ai', Jason 2026-10-28,
+        reversing 'ah' at his word: ONE small Payment button
+        stands in the summary's bottom row — navigation to the
+        payment form with this sale prefilled; no money is worked
+        on the summary.) (Build 'ab', JC-AA3 +
+        void-and-revise: the sale edits on the Sale form loaded
+        with it — the Edit door below; only a revised-away sale or
+        an invoiced sale carries none, the invoice holding its
+        paper.) Its Print door is the page print menu, as on the
+        Sale form (a sale has no print pack)."""
         try:
             rows = con.execute(
                 """SELECT s.*, COALESCE(a.unit_no,'') AS unit_no,
@@ -2091,26 +2469,49 @@ class AssetViews(CoreViews):
         if not rows:
             return '<div class="err">Unknown sale.</div>'
         head = rows[0]
-        body = "".join(
-            f"<tr><td>{html.escape(r['unit_no'] or '')}</td>"
-            f"<td>{html.escape(r['item_desc'] or '')}</td>"
-            f"<td>{float(r['qty'] or 0):g}</td>"
-            f"<td>${float(r['amount'] or 0):,.2f}</td></tr>"
-            for r in rows)
-        lines_html = ("<table><tr><th>Unit</th><th>Description</th>"
-                      f"<th>Qty</th><th>Price</th></tr>{body}</table>")
+        # Build 'ac' (Jason 2026-10-27): the sale's lines join the
+        # shared vocabulary through the one builder. The sale form's
+        # own fixed values fill Type ("Item") and Unit ("Each");
+        # Rate is the row's unit price (amount ÷ qty — the sale
+        # record stores the line amount; qty is a whole-unit count,
+        # so Rate is Amount on the one-unit rows sales are made
+        # of); the row's line_note stands in the Note column.
+        lines_html = self._sum_lines(
+            [("Type", False), ("Item", False), ("Description", False),
+             ("Qty", True), ("Unit", False), ("Rate", True),
+             ("Amount", True), ("Note", False)],
+            [["Item",
+              html.escape(r['unit_no'] or ''),
+              html.escape(r['item_desc'] or ''),
+              f"{float(r['qty'] or 0):g}",
+              "Each",
+              (f"${float(r['amount'] or 0) / float(r['qty']):,.2f}"
+               if float(r['qty'] or 0) else "—"),
+              f"${float(r['amount'] or 0):,.2f}",
+              self._sum_note_cell("sale", grp, r['id'],
+                                  r['line_note'])]
+             for r in rows],
+            empty_text="No lines.")
         _set = engine.doc_settled(con, "sale", grp)
         _notes = []
         for r in rows:
             _n = (r["notes"] or "").strip() if "notes" in r.keys() else ""
             if _n and _n not in _notes:
                 _notes.append(_n)
-        facts = [
+        # Build 'af': grouped fact blocks. The sale's Job Info
+        # box holds its Reference # (the form's job field); a sale
+        # has no print pack — the summary's own page print carries
+        # the fact table, so the marker is a check.
+        cust_pairs = [
             ("Customer", html.escape(head["cust"] or "")),
+        ]
+        job_pairs = self._ji_pairs([
+            ("Ref", html.escape(self._g(head, "ref_no"))
+             if self._g(head, "ref_no") else None, True),
+        ])
+        doc_pairs = [
             ("Date", html.escape(fmt_date(head["sale_date"] or ""))),
             ("Associated", self._assoc_co_fact(con, "sale", grp)),
-            ("Ref", html.escape(self._g(head, "ref_no"))
-             if self._g(head, "ref_no") else None),
             ("Total", f"${float(engine.doc_total(con, 'sale', grp)):,.2f}"),
             ("Settled", f"${float(_set['total']):,.2f}"),
             ("Balance", f"${float(engine.doc_balance(con, 'sale', grp)):,.2f}"),
@@ -2118,10 +2519,28 @@ class AssetViews(CoreViews):
             ("Input by:", f"{html.escape(str(self._g(head, 'clerk') or ''))} "
                           f"{html.escape(fmt_datetime(self._g(head, 'created_at')))}".strip()),
         ]
-        pay_door, pay_popup = self._money_popup(
-            con, "sale", grp,
-            engine.cust_code(con, head["customer_id"]) or "")
-        doors = pay_door + self._print_menu(page=True)
+        doc_pairs += self._chain_facts(
+            con, "sale", head,
+            lambda n: f"/sale/{html.escape(n, quote=True)}")
+        # Build 'ab' (void-and-revise): the Edit door stands in the
+        # uniform position for every live sale — the form opens
+        # locked and Edit starts the revision. It stands down only
+        # where the revision itself is barred: a revised-away sale
+        # (paper) or an invoiced sale (its money lives on the
+        # invoice). A fully settled sale carries the door — the
+        # revision is its correction path.
+        doors = self._sum_doors(
+            "",
+            None if (dict(head).get("revised_by_id")
+                     or any(r["invoice_id"] for r in rows))
+            else f"/sale?edit={grp}",
+            self._print_menu(page=True))
         return self._sum_page(
-            "Sale", grp, facts, lines_html, doors, pay_popup,
-            "/sales/all", "Sales")
+            "Sales Ticket", grp, [], lines_html, doors, "",
+            "/sales/all", "Sales Tickets",
+            extra_top=self._revto_line(con, "sale", head),
+            fact_groups=[("Customer", cust_pairs),
+                         ("Job Info", job_pairs),
+                         ("Sales Ticket", doc_pairs)],
+            paper_html=self._sum_paperwork("sale", grp),
+            pay_doc=("sale", grp))

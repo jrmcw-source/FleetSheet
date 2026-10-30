@@ -75,10 +75,10 @@ def _load():
                                                    ctypes.c_wchar_p,
                                                    ctypes.c_wchar_p]
         ws.win_sparkle_set_appcast_url.argtypes = [ctypes.c_char_p]
-        ws.win_sparkle_set_ed25519_pub_key.argtypes = [ctypes.c_char_p]
-        ws.win_sparkle_set_ed25519_pub_key.restype = ctypes.c_int
+        ws.win_sparkle_set_eddsa_public_key.argtypes = [ctypes.c_char_p]
+        ws.win_sparkle_set_eddsa_public_key.restype = ctypes.c_int
         ws.win_sparkle_set_automatic_check_for_updates.argtypes = [ctypes.c_int]
-        ws.win_sparkle_set_shut_down_request_callback.argtypes = [
+        ws.win_sparkle_set_shutdown_request_callback.argtypes = [
             ctypes.CFUNCTYPE(None)]
     except Exception:
         return None
@@ -110,7 +110,7 @@ def init(version, on_shutdown_request=None):
         ws.win_sparkle_set_app_details("FleetSheet", "FleetSheet",
                                        str(version))
         ws.win_sparkle_set_appcast_url(_APPCAST_URL.encode("utf-8"))
-        if ws.win_sparkle_set_ed25519_pub_key(
+        if ws.win_sparkle_set_eddsa_public_key(
                 _ED_PUBKEY_B64.encode("utf-8")) != 0:
             return False
         # Decision B (menu-only): NO automatic checks. The only trigger
@@ -121,7 +121,7 @@ def init(version, on_shutdown_request=None):
             # so the new installer can replace it.
             _shutdown_cb_ref = ctypes.CFUNCTYPE(None)(
                 lambda: _invoke_shutdown(on_shutdown_request))
-            ws.win_sparkle_set_shut_down_request_callback(_shutdown_cb_ref)
+            ws.win_sparkle_set_shutdown_request_callback(_shutdown_cb_ref)
         ws.win_sparkle_init()
         _initialized = True
         return True

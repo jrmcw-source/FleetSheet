@@ -20,6 +20,8 @@ from engine_core import (
     require_clerk,
     validate_new_doc_no,
     key_of,
+    stamp_company_snapshot,
+    company_snapshot_json,
     num_of,
     doc_key,
     doc_num,
@@ -42,6 +44,9 @@ from engine_core import (
     period_bounds,
     _ensure_device_tables,
     get_option,
+    doc_prefix,
+    DOC_NUMBER_FLOOR,
+    doc_number_floor,
     set_option,
     module_on,
     COND_NOT_RECORDED,
@@ -128,7 +133,7 @@ from engine_assets import create_ticket, ticket_money, clean_rate_unit, RATE_UNI
 
 """FleetSheet engine: accounting flow — quotes, invoices, payments, credit memos, petty cash, exports, revenue reports."""
 
-__all__ = ['next_invoice_id', 'create_invoice', 'invoice_has_lines', '_next_pay_id', '_refresh_invoice_status', 'record_payment', 'next_batch_id', 'next_cm_id', 'credit_applied', 'credit_open', 'credit_lines', '_apply_credit_rows', 'issue_credit_memo', 'apply_open_credit', 'list_open_credits', 'list_open_invoices', 'big_fish_invoices', 'next_quote_id', 'next_co_id', '_line_amount', 'save_quote', 'set_quote_status', 'issue_change_order', 'save_change_order', 'change_order_assoc', 'associated_change_orders', 'record_doc_payment', 'apply_doc_credit', 'doc_total', 'doc_balance', 'doc_settled', 'doc_line_states', 'set_doc_line_note', 'doc_has_line_allocations', 'PAYABLE_KINDS', 'DOC_LABELS', 'quote_totals', 'quote_pack', 'convert_quote', 'next_pc_id', 'petty_balance', 'petty_book', 'set_pc_float', 'record_petty', 'CASH_ENTRY_METHODS', 'record_cash_entry', 'list_cash_entries', 'invoice_line_states', 'invoice_has_line_allocations', 'list_payment_allocations', 'set_invoice_line_note', 'invoice_totals', 'invoice_totals_batch', 'invoice_balance', 'invoice_locked', 'set_invoice_po', 'upsert_po_record', 'po_record', 'backfill_po_records', 'po_check', 'quote_check',
+__all__ = ['next_invoice_id', 'create_invoice', 'invoice_has_lines', '_next_pay_id', '_refresh_invoice_status', 'record_payment', 'payment_batch_rows', 'payment_batch_info', 'payment_edit_block', 'void_payment_batch', 'stamp_payment_correction', 'next_batch_id', 'next_cm_id', 'credit_applied', 'credit_open', 'credit_lines', '_apply_credit_rows', 'issue_credit_memo', 'apply_open_credit', 'list_open_credits', 'list_open_invoices', 'big_fish_invoices', 'next_quote_id', 'next_co_id', '_line_amount', 'save_quote', 'set_quote_status', 'issue_change_order', 'save_change_order', 'change_order_assoc', 'associated_change_orders', 'record_doc_payment', 'apply_doc_credit', 'doc_total', 'doc_balance', 'doc_settled', 'doc_line_states', 'set_doc_line_note', 'doc_has_line_allocations', 'PAYABLE_KINDS', 'DOC_LABELS', 'quote_totals', 'quote_pack', 'convert_quote', 'next_pc_id', 'petty_balance', 'petty_book', 'set_pc_float', 'record_petty', 'CASH_ENTRY_METHODS', 'record_cash_entry', 'list_cash_entries', 'peek_cash_entry_no', 'complete_cash_revision', 'complete_petty_revision', 'invoice_line_states', 'invoice_has_line_allocations', 'list_payment_allocations', 'set_invoice_line_note', 'invoice_totals', 'invoice_totals_batch', 'invoice_balance', 'invoice_locked', 'set_invoice_po', 'upsert_po_record', 'po_record', 'backfill_po_records', 'po_check', 'quote_check',
  'save_invoice_doc', 'get_invoice_doc', 'read_invoice_doc', 'delete_invoice_doc', 'set_invoice_doc_print', 'list_invoice_docs', 'invoice_job_box', 'INV_DOC_KINDS', 'add_invoice_line', 'drop_invoice_line', 'PO_STATUSES', '_ensure_saved_exports', 'list_saved_exports', 'save_export', 'delete_saved_export', 'next_customer_id', 'save_customer', 'report_invoicing', 'report_revenue', 'report_recap']
 
 # PO register status (Batch 3 #15): a stored, operator-set value —
@@ -140,7 +145,8 @@ PO_STATUSES = ("Open", "Paid in full")
 def next_invoice_id(con: sqlite3.Connection) -> str:
     prefix = con.execute("SELECT invoice_prefix FROM company WHERE id=1").fetchone()[0]
     while True:
-        n = _reserve_counter(con, "next_invoice", 1001)
+        n = _reserve_counter(con, "next_invoice", 1001,
+                             floor=DOC_NUMBER_FLOOR)
         ino = f"{prefix}-{n}"
         if not con.execute("SELECT 1 FROM invoices WHERE invoice_no=?", (ino,)).fetchone():
             return ino
@@ -362,6 +368,7 @@ def create_invoice(con: sqlite3.Connection, customer_id: str, ticket_ids: list[s
                                       asset_id=_po_assets[0] if _po_assets else None)
         if _is_new_po and _po_assets:
             _auto_reserve_for_po(con, customer_id, (po or "").strip(), _po_assets[0], ts[0])
+        stamp_company_snapshot(con, "invoices", _icur.lastrowid)
         con.commit(); return ino
     except Exception:
         con.rollback(); raise
@@ -370,11 +377,13 @@ def invoice_has_lines(con, invoice_no: str) -> bool:
 def _next_pay_id(con) -> str:
     # Build 'v' (landmine c): skip numbers already standing in either
     # payment ledger — a payment number minted ahead of the counter
-    # must never be reissued.
+    # must never be reissued. Build 'ai': the floor applies at the
+    # read, like every generated number (build 'ao': the payment
+    # kind's own start, 200001).
     while True:
-        row=con.execute("SELECT next_payment FROM company WHERE id=1").fetchone(); n=int(row["next_payment"] or 1)
+        row=con.execute("SELECT next_payment FROM company WHERE id=1").fetchone(); n=max(int(row["next_payment"] or 1), doc_number_floor("pay"))
         con.execute("UPDATE company SET next_payment=? WHERE id=1",(n+1,))
-        pid = f"P-{n:03d}"
+        pid = f"{doc_prefix(con, 'pay')}-{n:03d}"
         taken = con.execute("SELECT 1 FROM collections WHERE pay_id=?", (pid,)).fetchone()
         if not taken and _doc_collections_exist(con):
             taken = con.execute("SELECT 1 FROM doc_collections WHERE pay_id=?", (pid,)).fetchone()
@@ -385,18 +394,41 @@ def _refresh_invoice_status(con, invoice_no: str) -> None:
     if not cur: return
     st="Paid" if tot["balance"]<=0.009 else ("Partial" if tot["paid"]>0.009 else (cur["status"] if cur["status"] not in ("Paid","Partial") else "Ready"))
     con.execute("UPDATE invoices SET status=? WHERE invoice_no=?",(st,invoice_no))
+def _stamp_batch(con, batch_id) -> None:
+    """Snapshot the company identity onto a payment batch's rows
+    (build 'ab', redirect #3): a payment posts once, as a batch, so
+    every row it wrote in both ledgers wears the identity current
+    at the posting. Guarded — a no-op where the column predates."""
+    if not batch_id:
+        return
+    _snap = company_snapshot_json(con)
+    for _tbl in ("collections", "doc_collections"):
+        _cols = [r[1] for r in con.execute(f"PRAGMA table_info({_tbl})")]
+        if "co_snapshot" in _cols:
+            con.execute(
+                f"UPDATE {_tbl} SET co_snapshot=? "
+                f"WHERE COALESCE(batch_id, pay_id)=?", (_snap, batch_id))
+
+
 def next_batch_id(con: sqlite3.Connection) -> str:
     """Next payment-batch id (PB-NNN): one received payment allocated
     across one or many invoices. MAX-based like the pay_nums backfill —
-    no counter column, single-user app. First batch is PB-1001."""
+    no counter column, single-user app. Build 'af' (Jason 2026-10-28):
+    the stem is the operator's (prefix_batch); the MAX scan reads the
+    stem's own series. Build 'ai' (Jason 2026-10-28): the series
+    starts at the floor — first batch is PB-100001 (build 'ao',
+    Jason 2026-10-29: per-kind starts — the batch kind's start is
+    900001, so the first batch is PB-900001)."""
+    _stem = doc_prefix(con, "batch")
     nums = []
     for (b,) in con.execute(
-            "SELECT batch_id FROM collections WHERE batch_id LIKE 'PB-%'"):
+            "SELECT batch_id FROM collections WHERE batch_id LIKE ?",
+            (f"{_stem}-%",)):
         try:
             nums.append(int(str(b).split("-", 1)[1]))
         except (ValueError, IndexError):
             pass
-    return f"PB-{max(nums, default=1000) + 1:03d}"
+    return f"{_stem}-{max(max(nums, default=0), doc_number_floor('batch') - 1) + 1:03d}"
 
 
 # ---------------------------------------------------------------------------
@@ -419,6 +451,7 @@ def _ensure_payalloc_table(con: sqlite3.Connection) -> None:
       doc_id INTEGER NOT NULL DEFAULT 0,
       line_id INTEGER,
       carried INTEGER NOT NULL DEFAULT 0,
+      voided INTEGER NOT NULL DEFAULT 0,
       amount REAL NOT NULL CHECK (amount > 0),
       pay_date TEXT NOT NULL DEFAULT '',
       clerk TEXT,
@@ -447,9 +480,50 @@ def _ensure_doc_collections(con: sqlite3.Connection) -> None:
       clerk TEXT,
       applied_amount REAL,
       unapplied_amount REAL NOT NULL DEFAULT 0,
-      cash_entry_id INTEGER REFERENCES cash_entries(entry_id)
+      cash_entry_id INTEGER REFERENCES cash_entries(entry_id),
+      voided INTEGER NOT NULL DEFAULT 0,
+      void_replaced_by TEXT,
+      void_corrects TEXT
     )""")
     con.execute("CREATE INDEX IF NOT EXISTS idx_dcol_doc ON doc_collections(doc_kind, doc_id)")
+
+
+def _chain_ready(con: sqlite3.Connection) -> bool:
+    """True when the revision-chain columns stand on credit_memos
+    (they ride schema.sql / migrate_legacy_schema / the revisions
+    module's lazy guard; a book read before any of those ran simply
+    has no chains yet)."""
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                       "AND name='credit_memos'").fetchone():
+        return False
+    cols = [r[1] for r in con.execute("PRAGMA table_info(credit_memos)")]
+    return "revised_by_id" in cols
+
+
+def _ensure_void_cols(con: sqlite3.Connection) -> None:
+    """Payment-correction columns (build 'ab', JC-AA3): voided /
+    void_replaced_by / void_corrects on both money ledgers, voided
+    on payment_allocations. schema.sql owns the DDL for new books
+    and engine_migrations adds them to old ones; this lazy guard
+    follows the app's own lazy-column idiom so every money read and
+    write is safe on a book that has not been re-opened since the
+    build changed."""
+    for tbl in ("collections", "doc_collections"):
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                       "AND name=?", (tbl,)).fetchone():
+            cols = [r[1] for r in con.execute(f"PRAGMA table_info({tbl})")]
+            if cols and "voided" not in cols:
+                con.execute(f"ALTER TABLE {tbl} ADD COLUMN voided INTEGER NOT NULL DEFAULT 0")
+                con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_replaced_by TEXT")
+                con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_corrects TEXT")
+            if cols and "void_reason" not in cols:
+                con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_reason TEXT")
+                con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_by TEXT")
+                con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_at TEXT")
+    if _payalloc_exists(con):
+        cols = [r[1] for r in con.execute("PRAGMA table_info(payment_allocations)")]
+        if cols and "voided" not in cols:
+            con.execute("ALTER TABLE payment_allocations ADD COLUMN voided INTEGER NOT NULL DEFAULT 0")
 
 
 def _payalloc_exists(con) -> bool:
@@ -476,7 +550,7 @@ def _doc_collections_exist(con) -> bool:
 # DOC_LABELS names them the way the app does.
 PAYABLE_KINDS = ("invoice", "wo", "ticket", "sale", "quote", "change")
 DOC_LABELS = {"invoice": "Invoice", "wo": "WO", "ticket": "Rental Ticket",
-              "sale": "Sale", "quote": "Quote", "change": "Change Order"}
+              "sale": "Sales Ticket", "quote": "Quote", "change": "Change Order"}
 
 
 def _line_total(row) -> Decimal:
@@ -628,20 +702,12 @@ def _doc_line_allocated(con, doc_kind: str, doc_ref: str,
         "SELECT COALESCE(SUM(pa.amount),0) FROM payment_allocations pa "
         "LEFT JOIN cash_entries ce ON ce.entry_id = pa.cash_entry_id "
         "WHERE pa.doc_kind=? AND pa.doc_id=? AND pa.line_id=? "
+        "AND COALESCE(pa.voided,0)=0 "
         "AND (pa.source IN ('payment','credit') "
         "OR (pa.source='cash' AND ce.direction='in'))",
         (doc_kind, doc_key(con, doc_kind, doc_ref), int(line_id))).fetchone()[0]
     return _money(v)
 
-
-def _line_allocated(con, line_id: int) -> Decimal:
-    """Compat wrapper: an invoice line's covered amount."""
-    row = con.execute(
-        "SELECT invoice_id FROM invoice_lines WHERE line_id=?",
-        (int(line_id),)).fetchone()
-    if not row:
-        return Decimal("0.00")
-    return _doc_line_allocated(con, "invoice", num_of(con, "invoices", row[0]), line_id)
 
 
 def _clean_doc_line_allocs(con, doc_kind: str, doc_ref: str, line_allocs,
@@ -772,6 +838,7 @@ def doc_line_states(con, doc_kind: str, doc_ref: str) -> list:
                 "ON ce.entry_id = pa.cash_entry_id "
                 "WHERE pa.doc_kind=? AND pa.doc_id=? "
                 "AND pa.line_id IS NOT NULL "
+                "AND COALESCE(pa.voided,0)=0 "
                 "AND (pa.source IN ('payment','credit') "
                 "OR (pa.source='cash' AND ce.direction='in')) "
                 "GROUP BY pa.line_id, pa.source, pa.carried",
@@ -893,14 +960,19 @@ def invoice_has_line_allocations(con, invoice_no: str) -> bool:
 def list_payment_allocations(con, pay_id=None, batch_id=None,
                              invoice_no=None, cash_entry_id=None,
                              source=None, doc_kind=None, doc_ref=None,
-                             carried=None) -> list:
+                             carried=None, include_voided=False) -> list:
     """Allocation rows with the line label resolved per document kind
     (item, else description, else category). Blanket rows read
     'Blanket'. Filters combine; invoice_no remains as the invoice
-    shortcut for doc_kind='invoice' + doc_ref."""
+    shortcut for doc_kind='invoice' + doc_ref. Voided rows (a
+    corrected payment's released allocations, build 'ab') are
+    excluded unless include_voided is set."""
     if not _payalloc_exists(con):
         return []
+    _ensure_void_cols(con)
     conds, args = [], []
+    if not include_voided:
+        conds.append("COALESCE(pa.voided,0)=0")
     if pay_id is not None:
         conds.append("pa.pay_id=?")
         args.append(pay_key_of(con, pay_id))
@@ -1058,16 +1130,29 @@ def doc_settled(con, doc_kind: str, doc_ref: str) -> dict:
     other documents read doc_collections. Carried mirrors are not
     counted here — they are the invoice-side reflection of a source
     document's rows, which are counted on the source document."""
+    _ensure_void_cols(con)
     if doc_kind == "invoice":
         t = invoice_totals(con, doc_ref)
         return {"payment": _money(t["cash"]), "credit": _money(t["credit"]),
                 "total": _money(t["paid"])}
     pay = cred = Decimal("0.00")
     if _doc_collections_exist(con):
+        # Void-and-revise (build 'ab'): money recorded against any
+        # link of the document's revision chain resolves to the
+        # chain — the head is the live document, and what was paid
+        # against an ancestor stands against it.
+        from engine_revisions import chain_ancestor_keys  # lazy
+        _rk = {"ticket": "ticket", "sale": "sale", "wo": "wo",
+               "quote": "quote", "change": "change"}.get(doc_kind)
+        _dk = doc_key(con, doc_kind, doc_ref)
+        _keys = (chain_ancestor_keys(con, _rk, _dk)
+                 if _rk and _dk else [_dk])
+        _ph = ",".join("?" * len(_keys))
         for kind, s in con.execute(
                 "SELECT kind, COALESCE(SUM(amount),0) FROM doc_collections "
-                "WHERE doc_kind=? AND doc_id=? GROUP BY kind",
-                (doc_kind, doc_key(con, doc_kind, doc_ref))):
+                f"WHERE doc_kind=? AND doc_id IN ({_ph}) "
+                "AND COALESCE(voided,0)=0 GROUP BY kind",
+                (doc_kind, *_keys)):
             if kind == "credit":
                 cred = _money(s)
             else:
@@ -1177,6 +1262,7 @@ def record_payment(con: sqlite3.Connection, invoice_no: str, amount: float, pay_
             pay_date=pay_date, clerk=who, applied=applied,
             cleaned=cleaned_allocs)
     _refresh_invoice_status(con,invoice_no)
+    _stamp_batch(con, batch_id)
     if commit:
         con.commit()
     return {"pay_id":posted_pid,"batch_id":batch_id,"applied":float(applied),"credit_memo":cm_no,"credit_amount":float(excess)}
@@ -1299,11 +1385,175 @@ def record_doc_payment(con: sqlite3.Connection, doc_kind: str, doc_ref: str, amo
             cash_entry_id=cash_entry_id, batch_id=batch_id,
             doc_kind=doc_kind, doc_ref=doc_ref, pay_date=pay_date,
             clerk=who, applied=applied, cleaned=cleaned_allocs)
+    _stamp_batch(con, batch_id)
     if commit:
         con.commit()
     return {"pay_id": posted_pid, "batch_id": batch_id,
             "applied": float(applied), "credit_memo": cm_no,
             "credit_amount": float(excess)}
+
+
+# ---------------------------------------------------------------------------
+# Payment corrections (build 'ab', Jason's JC-AA3 ruling 2026-10-26,
+# correction model approved by Jason the same day: "the payment
+# mechanic is sound... The records must stay"). A payment is never
+# rewritten. Editing one voids the original batch in place — its rows
+# stand in the ledgers, marked void, their allocations released — and
+# posts the edited payment as a NEW batch linked both ways. No void
+# or reversal machinery existed for payments before this build; this
+# is it. Money reads exclude voided rows everywhere (invoice_totals,
+# doc_settled, line allocations, reports), so a void releases the
+# money exactly as if it had never been applied, while the record of
+# it remains.
+
+def payment_batch_rows(con, batch: str):
+    """(invoice-ledger rows, doc-ledger rows) for one payment batch,
+    voided or not. A batch of one posted from a document popup is its
+    own pay_id; rows are matched on batch_id first, then pay_id."""
+    _ensure_void_cols(con)
+    crows = con.execute(
+        "SELECT * FROM collections WHERE COALESCE(batch_id, pay_id)=? "
+        "ORDER BY id", (batch,)).fetchall()
+    drows = []
+    if _doc_collections_exist(con):
+        drows = con.execute(
+            "SELECT * FROM doc_collections WHERE COALESCE(batch_id, pay_id)=? "
+            "ORDER BY id", (batch,)).fetchall()
+    return crows, drows
+
+
+def payment_batch_info(con, batch: str) -> dict | None:
+    """Everything the payment editor and summary need about one
+    batch: its rows, head facts, void state and correction links.
+    None when no such payment exists."""
+    crows, drows = payment_batch_rows(con, batch)
+    rows = list(crows) + list(drows)
+    if not rows:
+        return None
+    head = rows[0]
+    cust_key_ = None
+    if crows:
+        inv = con.execute("SELECT customer_id FROM invoices WHERE id=?",
+                          (crows[0]["invoice_id"],)).fetchone()
+        cust_key_ = inv["customer_id"] if inv else None
+    elif drows:
+        cust_key_ = drows[0]["customer_id"]
+    return {
+        "batch": batch,
+        "rows": rows,
+        "crows": crows,
+        "drows": drows,
+        "customer_key": cust_key_,
+        "customer_id": cust_code(con, cust_key_) if cust_key_ else "",
+        "pay_date": head["pay_date"],
+        "method": head["method"],
+        "ref_no": head["ref_no"] or "",
+        "notes": head["notes"] or "",
+        "clerk": head["clerk"] or "",
+        "amount": sum(float(r["amount"] or 0) for r in rows),
+        "voided": any(int(r["voided"] or 0) for r in rows),
+        "replaced_by": next((r["void_replaced_by"] for r in rows
+                             if r["void_replaced_by"]), None),
+        "corrects": next((r["void_corrects"] for r in rows
+                          if r["void_corrects"]), None),
+        "void_reason": next((r["void_reason"] for r in rows
+                             if dict(r).get("void_reason")), None),
+        "void_by": next((r["void_by"] for r in rows
+                         if dict(r).get("void_by")), None),
+        "void_at": next((r["void_at"] for r in rows
+                         if dict(r).get("void_at")), None),
+    }
+
+
+def payment_edit_block(con, batch: str):
+    """Why payment batch may not be corrected, or None when it may.
+    Each block is a judgment call of build 'ab' (JC-AB7..JC-AB11 in
+    PHASEAB-REPORT): the correction re-posts the money through the
+    ordinary payment paths, so anything those paths cannot reproduce
+    blocks the edit rather than losing the record."""
+    info = payment_batch_info(con, batch)
+    if info is None:
+        return "No such payment."
+    if info["voided"]:
+        if info["replaced_by"]:
+            return (f"This payment was voided and replaced by "
+                    f"{info['replaced_by']} — edit the replacement.")
+        return "This payment is void and cannot be edited."
+    rows = info["rows"]
+    if any(r["kind"] != "payment" for r in rows):
+        return ("This record includes credit applications, which are "
+                "not received payments and cannot be edited here.")
+    if any(r["cash_entry_id"] for r in rows):
+        return ("This payment was settled through the Cash tab — its "
+                "record is the cash entry, which cannot be edited here.")
+    carried = con.execute(
+        "SELECT invoice_id FROM collections WHERE batch_id=? "
+        "AND COALESCE(carried_from,'')<>'' LIMIT 1",
+        (batch,)).fetchone()
+    if carried:
+        ino = num_of(con, "invoices", carried["invoice_id"])
+        return (f"This payment's money carried onto {ino} when its "
+                f"document was invoiced — the payment cannot be "
+                f"corrected now.")
+    for r in rows:
+        cm = con.execute(
+            "SELECT cm_no FROM credit_memos WHERE notes LIKE ?",
+            (f"%(payment {r['pay_id']})%",)).fetchone()
+        if cm:
+            return (f"This payment issued credit memo {cm['cm_no']} "
+                    f"for its overpayment — the payment cannot be "
+                    f"corrected while that credit stands.")
+    return None
+
+
+def void_payment_batch(con, batch: str, clerk: str,
+                       replaced_by: str, reason: str = "",
+                       at: str = "") -> None:
+    """Mark one payment batch void in place: both ledgers' rows and
+    the batch's line-allocation rows. The void is signed into the
+    record — reason, operator name (the clerk), timestamp — and the
+    original's notes gain the void line; every money read excludes
+    voided rows, so balances and line states release at once.
+    Caller owns the transaction."""
+    _ensure_void_cols(con)
+    note = f"Void — corrected by payment {replaced_by}."
+    con.execute(
+        "UPDATE collections SET voided=1, void_replaced_by=?, "
+        "void_reason=?, void_by=?, void_at=?, "
+        "notes=CASE WHEN COALESCE(notes,'')='' THEN ? "
+        "ELSE notes || ' ' || ? END "
+        "WHERE COALESCE(batch_id, pay_id)=?",
+        (replaced_by, reason or None, clerk or None, at or None,
+         note, note, batch))
+    if _doc_collections_exist(con):
+        con.execute(
+            "UPDATE doc_collections SET voided=1, void_replaced_by=?, "
+            "void_reason=?, void_by=?, void_at=?, "
+            "notes=CASE WHEN COALESCE(notes,'')='' THEN ? "
+            "ELSE notes || ' ' || ? END "
+            "WHERE COALESCE(batch_id, pay_id)=?",
+            (replaced_by, reason or None, clerk or None, at or None,
+             note, note, batch))
+    if _payalloc_exists(con):
+        con.execute(
+            "UPDATE payment_allocations SET voided=1 "
+            "WHERE batch_id=? AND COALESCE(carried,0)=0",
+            (batch,))
+
+
+def stamp_payment_correction(con, batch: str, orig_batch: str) -> None:
+    """Name the original on a correction's fresh rows (both ledgers).
+    Caller owns the transaction."""
+    _ensure_void_cols(con)
+    con.execute(
+        "UPDATE collections SET void_corrects=? "
+        "WHERE COALESCE(batch_id, pay_id)=? AND COALESCE(voided,0)=0",
+        (orig_batch, batch))
+    if _doc_collections_exist(con):
+        con.execute(
+            "UPDATE doc_collections SET void_corrects=? "
+            "WHERE COALESCE(batch_id, pay_id)=? AND COALESCE(voided,0)=0",
+            (orig_batch, batch))
 
 
 def _apply_doc_credit_rows(con, cm_no: str, customer_id: str,
@@ -1447,6 +1697,7 @@ def _carry_doc_settlements(con, src_kind: str, src_ref: str, ino: str,
     src_key = doc_key(con, src_kind, src_ref)
     rows = con.execute(
         "SELECT * FROM doc_collections WHERE doc_kind=? AND doc_id=? "
+        "AND COALESCE(voided,0)=0 "
         "ORDER BY pay_date, pay_id", (src_kind, src_key)).fetchall()
     settled = sum((_money(r["amount"]) for r in rows), Decimal("0.00"))
     if settled <= Decimal("0.009"):
@@ -1546,8 +1797,9 @@ def _carry_doc_settlements(con, src_kind: str, src_ref: str, ino: str,
 
 def next_cm_id(con: sqlite3.Connection) -> str:
     while True:
-        n = _reserve_counter(con, "next_cm", 1001)
-        cno = f"CM-{n:04d}"
+        n = _reserve_counter(con, "next_cm", 1001,
+                             floor=doc_number_floor("cm"))
+        cno = f"{doc_prefix(con, 'cm')}-{n:04d}"
         if not con.execute("SELECT 1 FROM credit_memos WHERE cm_no=?", (cno,)).fetchone():
             return cno
 def credit_applied(con: sqlite3.Connection, cm_no: str) -> float:
@@ -1556,16 +1808,24 @@ def credit_applied(con: sqlite3.Connection, cm_no: str) -> float:
     collections; credits applied against work orders, tickets, and
     sales live in doc_collections. Carried mirrors are not counted —
     they reuse the source row's memo through the source ledger."""
+    # Void-and-revise (build 'ab'): applications recorded against
+    # any link of the memo's chain count — a revised-away memo
+    # reads fully applied through its head, and the head carries
+    # its ancestors' applications.
+    from engine_revisions import chain_ancestor_keys as _cak2  # lazy
+    _cmk = key_of(con, "credit_memos", cm_no)
+    _cmkeys = _cak2(con, "credit", _cmk) if _cmk else [_cmk]
+    _cph = ",".join("?" * len(_cmkeys))
     row = con.execute(
-        "SELECT COALESCE(SUM(COALESCE(applied_amount,amount)),0) FROM collections WHERE cm_id=? AND kind='credit'",
-        (key_of(con, "credit_memos", cm_no),),
+        f"SELECT COALESCE(SUM(COALESCE(applied_amount,amount)),0) FROM collections WHERE cm_id IN ({_cph}) AND kind='credit'",
+        tuple(_cmkeys),
     ).fetchone()
     total = float(row[0] or 0)
     if _doc_collections_exist(con):
         row2 = con.execute(
-            "SELECT COALESCE(SUM(amount),0) FROM doc_collections "
-            "WHERE cm_id=? AND kind='credit'",
-            (key_of(con, "credit_memos", cm_no),)).fetchone()
+            f"SELECT COALESCE(SUM(amount),0) FROM doc_collections "
+            f"WHERE cm_id IN ({_cph}) AND kind='credit'",
+            tuple(_cmkeys)).fetchone()
         total += float(row2[0] or 0)
     return total
 def credit_lines(con: sqlite3.Connection, cm_no: str) -> list[dict]:
@@ -1818,6 +2078,8 @@ def issue_credit_memo(
                                        doc_applies, d, who)
     if abs(used) - abs(face) > 0.009:
         raise ValueError("Applied more than the credit memo face")
+    stamp_company_snapshot(con, "credit_memos",
+                           key_of(con, "credit_memos", cm_no))
     con.commit()
     return cm_no
 def apply_open_credit(
@@ -1857,6 +2119,11 @@ def list_open_credits(con: sqlite3.Connection, customer_id: str | None = None) -
     if customer_id:
         q += " WHERE customer_id=?"
         args.append(cust_key(con, customer_id))
+    # Void-and-revise (build 'ab'): a revised-away memo is paper —
+    # its open credit lives on the chain head, never offered twice.
+    if _chain_ready(con):
+        q += (" AND" if customer_id else " WHERE")
+        q += " revised_by_id IS NULL"
     q += " ORDER BY cm_date DESC, cm_no DESC"
     out = []
     for r in con.execute(q, args):
@@ -1916,9 +2183,11 @@ def big_fish_invoices(con: sqlite3.Connection, min_n: int = 8, factor: float = 2
 
 
 def next_quote_id(con) -> str:
-    return _next_doc(con, "next_quote", "QT", "quotes", "quote_no")
+    return _next_doc(con, "next_quote", doc_prefix(con, "quote"),
+                     "quotes", "quote_no", floor=doc_number_floor("quote"))
 def next_co_id(con) -> str:
-    return _next_doc(con, "next_co", "CO", "change_orders", "co_no")
+    return _next_doc(con, "next_co", doc_prefix(con, "change"),
+                     "change_orders", "co_no", floor=doc_number_floor("change"))
 def _line_amount(qty, rate) -> float:
     return round(float(qty or 0) * float(rate or 0), 2)
 def save_quote(con, header: dict, lines: list) -> str:
@@ -2019,6 +2288,7 @@ def save_quote(con, header: dict, lines: list) -> str:
         [(qkey, row[0], key_of(con, "assets", row[1]) if row[1] else None) + row[2:]
          for row in clean],
     )
+    stamp_company_snapshot(con, "quotes", qkey)
     con.commit()
     return qno
 def set_quote_status(con, quote_no: str, new: str) -> None:
@@ -2108,22 +2378,39 @@ def issue_change_order(con, customer_id: str, reason: str, lines: list, co_date:
            VALUES (?,?,?,?,?,?,?,?,?)""",
         [(cur.lastrowid,) + row for row in clean],
     )
+    stamp_company_snapshot(con, "change_orders", cur.lastrowid)
     con.commit()
     return cno
 
 
-def save_change_order(con, co_no: str, customer_id: str, reason: str, lines: list, co_date: str | None = None, notes: str = "", clerk: str = "", po: str = "", assoc_kind: str | None = None, assoc_ref: str | None = None) -> str:
+def save_change_order(con, co_no: str, customer_id: str, reason: str, lines: list, co_date: str | None = None, notes: str = "", clerk: str = "", po: str = "", assoc_kind: str | None = None, assoc_ref: str | None = None, revision: bool = False) -> str:
     """Edit an issued Change Order (header + lines + association).
     The record is the protection: once money has settled against a
     Change Order its lines and amount stand as issued — the edit is
-    refused and the correction is a new Change Order."""
+    refused and the correction is a new Change Order.
+    revision=True (build 'ab', void-and-revise): the save completes
+    a fresh REVISION of a voided original — the settled money it
+    reads is the chain's, inherited from the ancestor it corrects,
+    not posted against this row — so the gate counts only money
+    settled against THIS row's own key."""
     co = con.execute("SELECT * FROM change_orders WHERE co_no=?",
                      (co_no,)).fetchone()
     if not co:
         raise ValueError("Unknown change order")
     if co["status"] == "Void":
         raise ValueError("A void change order does not change")
-    if abs(doc_settled(con, "change", co_no)["total"]) > Decimal("0.009"):
+    if revision:
+        _own = 0.0
+        if _doc_collections_exist(con):
+            _r = con.execute(
+                "SELECT COALESCE(SUM(amount),0) FROM doc_collections "
+                "WHERE doc_kind='change' AND doc_id=? "
+                "AND COALESCE(voided,0)=0", (co["id"],)).fetchone()
+            _own = float(_r[0] or 0)
+        _settled = abs(_own) > 0.009
+    else:
+        _settled = abs(doc_settled(con, "change", co_no)["total"]) > Decimal("0.009")
+    if _settled:
         raise ValueError(
             f"{co_no} has money settled against it — its lines stand "
             "as issued; pursue a correction as a new change order")
@@ -2150,6 +2437,7 @@ def save_change_order(con, co_no: str, customer_id: str, reason: str, lines: lis
            VALUES (?,?,?,?,?,?,?,?,?)""",
         [(co["id"],) + row for row in clean],
     )
+    stamp_company_snapshot(con, "change_orders", co["id"])
     con.commit()
     return co_no
 
@@ -2309,27 +2597,42 @@ def convert_quote(con, quote_no: str, on_rent: str | None = None) -> list[str]:
     return made
 def next_pc_id(con: sqlite3.Connection) -> str:
     while True:
-        n = _reserve_counter(con, "next_pc", 1001)
-        pid = f"PC-{n:04d}"
+        n = _reserve_counter(con, "next_pc", 1001,
+                             floor=doc_number_floor("petty"))
+        pid = f"{doc_prefix(con, 'petty')}-{n:04d}"
         if not con.execute("SELECT 1 FROM petty_cash WHERE pc_id=?", (pid,)).fetchone():
             return pid
+def _petty_chain_ready(con: sqlite3.Connection) -> bool:
+    return any(r[1] == "revised_by_id" for r in con.execute(
+        "PRAGMA table_info(petty_cash)"))
+
+
 def petty_balance(con: sqlite3.Connection) -> float:
+    # Build 'ab' (redirect #2): the box holds the chain heads — a
+    # voided entry's money stands in its revision, not twice.
+    _flt = (" WHERE revised_by_id IS NULL"
+            if _petty_chain_ready(con) else "")
     row = con.execute(
         """SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0)
-           FROM petty_cash"""
+           FROM petty_cash""" + _flt
     ).fetchone()
     return round(float(row[0] or 0), 2)
 def petty_book(con: sqlite3.Connection) -> dict:
     co = con.execute("SELECT pc_float FROM company WHERE id=1").fetchone()
     target = float(co["pc_float"] or 0) if co else 0.0
     bal = petty_balance(con)
+    _chain = _petty_chain_ready(con)
     rows = []
     run = 0.0
     for r in con.execute("SELECT * FROM petty_cash ORDER BY txn_date, pc_id"):
+        d = dict(r)
         amt = float(r["amount"])
-        run += amt if r["direction"] == "in" else -amt
+        _voided = bool(_chain and d.get("revised_by_id"))
+        if not _voided:
+            run += amt if r["direction"] == "in" else -amt
         rows.append({
             "pc_id": r["pc_id"],
+            "id": r["id"],
             "txn_date": str(r["txn_date"])[:10],
             "direction": r["direction"],
             "amount": amt,
@@ -2338,7 +2641,11 @@ def petty_book(con: sqlite3.Connection) -> dict:
             "payee": r["payee"] or "",
             "ref_no": r["ref_no"] or "",
             "notes": r["notes"] or "",
-            "running": round(run, 2),
+            "running": round(run, 2) if not _voided else None,
+            "revised_by_id": d.get("revised_by_id") if _chain else None,
+            "revises_id": d.get("revises_id") if _chain else None,
+            "void_reason": (d.get("void_reason") or "") if _chain else "",
+            "void_by": (d.get("void_by") or "") if _chain else "",
         })
     rows.reverse()
     return {
@@ -2353,6 +2660,20 @@ def set_pc_float(con: sqlite3.Connection, target: float) -> None:
         raise ValueError("Float cannot be negative")
     con.execute("UPDATE company SET pc_float=? WHERE id=1", (t,))
     con.commit()
+def peek_pc_id(con: sqlite3.Connection) -> str:
+    """The next generated petty number (PC-####), read-only — the
+    form's prefill beside next_pc_id's reserving mint. Build 'af':
+    the stem is the operator's (prefix_petty)."""
+    _stem = doc_prefix(con, "petty")
+    row = con.execute("SELECT next_pc FROM company WHERE id=1").fetchone()
+    n = max(int(row[0]) if row and row[0] is not None else 1001,
+            doc_number_floor("petty"))
+    while con.execute("SELECT 1 FROM petty_cash WHERE pc_id=?",
+                      (f"{_stem}-{n:04d}",)).fetchone():
+        n += 1
+    return f"{_stem}-{n:04d}"
+
+
 def record_petty(
     con: sqlite3.Connection,
     direction: str,
@@ -2363,6 +2684,7 @@ def record_petty(
     ref_no: str = "",
     notes: str = "",
     clerk: str = "",
+    pc_id: str = "",
 ) -> str:
     who = require_clerk(clerk)
     direction = (direction or "").strip().lower()
@@ -2380,12 +2702,22 @@ def record_petty(
         raise ValueError("Pick a category that matches in or out")
     if direction == "out" and amt - petty_balance(con) > 0.009:
         raise ValueError(f"Box only holds ${petty_balance(con):,.2f}")
-    pid = next_pc_id(con)
-    con.execute(
+    # Operator number (build 'ab', redirect #2): pc_id is the
+    # entry's number — free text when the operator names it, unique
+    # across the whole log incl. voided; blank takes the mint.
+    pid = (pc_id or "").strip()
+    if pid:
+        if con.execute("SELECT 1 FROM petty_cash WHERE pc_id=?",
+                       (pid,)).fetchone():
+            raise ValueError(f"Petty cash number {pid} is already used")
+    else:
+        pid = next_pc_id(con)
+    _pcur = con.execute(
         """INSERT INTO petty_cash(pc_id, txn_date, direction, amount, category, payee, ref_no, notes, clerk)
            VALUES (?,?,?,?,?,?,?,?,?)""",
         (pid, txn_date or date.today().isoformat(), direction, amt, category, payee or "", ref_no or "", notes or "", who),
     )
+    stamp_company_snapshot(con, "petty_cash", _pcur.lastrowid)
     con.commit()
     return pid
 # ---------------------------------------------------------------------------
@@ -2417,10 +2749,57 @@ def _ensure_cash_table(con: sqlite3.Connection) -> None:
       asset_id INTEGER REFERENCES assets(id),
       notes TEXT,
       clerk TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      entry_no TEXT,
+      revises_id INTEGER,
+      revised_by_id INTEGER,
+      void_reason TEXT,
+      void_by TEXT,
+      void_at TEXT
     )""")
     con.execute(
         "CREATE INDEX IF NOT EXISTS idx_cash_date ON cash_entries(entry_date)")
+    _cc = [r[1] for r in con.execute("PRAGMA table_info(cash_entries)")]
+    if "entry_no" not in _cc:
+        # Build 'ab' (redirect #2): operator number + revise chain
+        # on books that predate them (migration backfills numbers;
+        # this lazy path only guarantees the columns).
+        con.execute("ALTER TABLE cash_entries ADD COLUMN entry_no TEXT")
+        con.execute("ALTER TABLE cash_entries ADD COLUMN revises_id INTEGER")
+        con.execute("ALTER TABLE cash_entries ADD COLUMN revised_by_id INTEGER")
+        con.execute("ALTER TABLE cash_entries ADD COLUMN void_reason TEXT")
+        con.execute("ALTER TABLE cash_entries ADD COLUMN void_by TEXT")
+        con.execute("ALTER TABLE cash_entries ADD COLUMN void_at TEXT")
+
+
+def peek_cash_entry_no(con: sqlite3.Connection) -> str:
+    """The next generated cash-entry number (CE-####), read-only —
+    the form's prefill. Minting at save follows the same walk.
+    Build 'af' (Jason 2026-10-28): the stem is the operator's
+    (prefix_cash); the walk reads the stem's own series."""
+    _ensure_cash_table(con)
+    _stem = doc_prefix(con, "cash")
+    # Build 'ai': the walk starts at the floor (build 'ao': the
+    # cash kind's own start, 20001).
+    best = doc_number_floor("cash") - 1
+    for (v,) in con.execute(
+            "SELECT entry_no FROM cash_entries "
+            "WHERE entry_no LIKE ?", (f"{_stem}-%",)):
+        try:
+            best = max(best, int(str(v)[len(_stem) + 1:]))
+        except ValueError:
+            continue
+    return f"{_stem}-{best + 1:04d}"
+
+
+def _mint_cash_entry_no(con: sqlite3.Connection) -> str:
+    _stem = doc_prefix(con, "cash")
+    cand = peek_cash_entry_no(con)
+    while con.execute("SELECT 1 FROM cash_entries WHERE entry_no=?",
+                      (cand,)).fetchone():
+        n = int(cand[len(_stem) + 1:]) + 1
+        cand = f"{_stem}-{n:04d}"
+    return cand
 
 
 def record_cash_entry(con: sqlite3.Connection, entry_date: str | None = None,
@@ -2431,7 +2810,7 @@ def record_cash_entry(con: sqlite3.Connection, entry_date: str | None = None,
                       notes: str = "", clerk: str = "",
                       line_allocs: list | None = None,
                       sale_group: str = "", quote_no: str = "",
-                      co_no: str = "") -> int:
+                      co_no: str = "", entry_no: str = "") -> int:
     """Record one cash entry. Exactly one attachment (invoice, work
     order, rental ticket, sale, quote, or change order) is required —
     an unattached entry is refused. Customer / asset default from the
@@ -2547,11 +2926,21 @@ def record_cash_entry(con: sqlite3.Connection, entry_date: str | None = None,
         cleaned_allocs = _clean_doc_line_allocs(
             con, doc_kind, doc_ref, line_allocs, amt, "cash")
     edate = (entry_date or date.today().isoformat())[:10]
+    # Operator number (build 'ab', redirect #2): free text, unique
+    # across the register's whole history — voided entries included,
+    # their numbers stay taken. Blank takes the generated default.
+    eno = (entry_no or "").strip()
+    if eno:
+        if con.execute("SELECT 1 FROM cash_entries WHERE entry_no=?",
+                       (eno,)).fetchone():
+            raise ValueError(f"Cash entry number {eno} is already used")
+    else:
+        eno = _mint_cash_entry_no(con)
     cur = con.execute(
         """INSERT INTO cash_entries(entry_date, direction, method, amount,
            customer_id, invoice_id, wo_id, ticket_id, sale_id, quote_id,
-           co_id, asset_id, notes, clerk)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           co_id, asset_id, notes, clerk, entry_no)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (edate, direction, method, round(amt, 2),
          cust_key(con, cid) if cid else None,
          key_of(con, "invoices", ino) if ino else None,
@@ -2561,8 +2950,9 @@ def record_cash_entry(con: sqlite3.Connection, entry_date: str | None = None,
          key_of(con, "quotes", qno) if qno else None,
          key_of(con, "change_orders", cono) if cono else None,
          key_of(con, "assets", aid) if aid else None,
-         (notes or "").strip(), who))
+         (notes or "").strip(), who, eno))
     eid = int(cur.lastrowid)
+    stamp_company_snapshot(con, "cash_entries", eid, pk="entry_id")
     if settling:
         if doc_kind == "invoice":
             res = record_payment(
@@ -2600,13 +2990,17 @@ def list_cash_entries(con: sqlite3.Connection) -> list[dict]:
     open credit memo the money became."""
     _ensure_cash_table(con)
     _cols = [r[1] for r in con.execute("PRAGMA table_info(collections)")]
+    _vflt = (" AND COALESCE(c2.voided,0)=0" if "voided" in _cols else "")
     _link = ("(SELECT c2.pay_id FROM collections c2 "
              "WHERE c2.cash_entry_id = ce.entry_id "
-             "AND c2.kind='payment' LIMIT 1)"
+             f"AND c2.kind='payment'{_vflt} LIMIT 1)"
              if "cash_entry_id" in _cols else "NULL")
+    _dcols = ([r[1] for r in con.execute("PRAGMA table_info(doc_collections)")]
+              if _doc_collections_exist(con) else [])
+    _dvflt = (" AND COALESCE(d2.voided,0)=0" if "voided" in _dcols else "")
     _dlink = ("(SELECT d2.pay_id FROM doc_collections d2 "
               "WHERE d2.cash_entry_id = ce.entry_id "
-              "AND d2.kind='payment' LIMIT 1)"
+              f"AND d2.kind='payment'{_dvflt} LIMIT 1)"
               if _doc_collections_exist(con) else "NULL")
     _cmlink = ("(SELECT cm2.cm_no FROM credit_memos cm2 "
                "WHERE cm2.cash_entry_id = ce.entry_id LIMIT 1)"
@@ -2679,6 +3073,7 @@ def _invoice_tax_extras(con: sqlite3.Connection, invoice_no: str):
     except Exception:
         return adj, False, False, Decimal("0")
 def invoice_totals(con: sqlite3.Connection, invoice_no: str) -> dict:
+    _ensure_void_cols(con)
     ikey = key_of(con, "invoices", invoice_no)
     rows=con.execute("SELECT amount,tax_amount,source_type FROM invoice_lines WHERE invoice_id=? ORDER BY line_id",(ikey,)).fetchall()
     sub=sum((_money(r["amount"]) for r in rows),Decimal("0.00")); linetax=sum((_money(r["tax_amount"]) for r in rows),Decimal("0.00"))
@@ -2690,8 +3085,13 @@ def invoice_totals(con: sqlite3.Connection, invoice_no: str) -> dict:
     else:
         tax=linetax
     total=_ms(sub,tax,adj)
-    cash=_money(con.execute("SELECT COALESCE(SUM(COALESCE(applied_amount,amount)),0) FROM collections WHERE invoice_id=? AND kind='payment'",(ikey,)).fetchone()[0])
-    credit=_money(con.execute("SELECT COALESCE(SUM(COALESCE(applied_amount,amount)),0) FROM collections WHERE invoice_id=? AND kind='credit'",(ikey,)).fetchone()[0])
+    # Void-and-revise (build 'ab'): collections recorded against
+    # any link of this invoice's revision chain count toward it.
+    from engine_revisions import chain_ancestor_keys as _cak  # lazy
+    _ikeys = _cak(con, "invoice", ikey)
+    _iph = ",".join("?" * len(_ikeys))
+    cash=_money(con.execute(f"SELECT COALESCE(SUM(COALESCE(applied_amount,amount)),0) FROM collections WHERE invoice_id IN ({_iph}) AND kind='payment' AND COALESCE(voided,0)=0",tuple(_ikeys)).fetchone()[0])
+    credit=_money(con.execute(f"SELECT COALESCE(SUM(COALESCE(applied_amount,amount)),0) FROM collections WHERE invoice_id IN ({_iph}) AND kind='credit' AND COALESCE(voided,0)=0",tuple(_ikeys)).fetchone()[0])
     paid=_ms(cash,credit); bal=_ms(total,-paid)
     return {"subtotal":float(sub),"tax":float(tax),"adjustment":float(adj),"total":float(total),"cash":float(cash),"credit":float(credit),"paid":float(paid),"balance":float(bal),"count":sum(r["source_type"]=="ticket" for r in rows),"wo_count":sum(r["source_type"]=="work_order" for r in rows),"wo_sub":float(sum((_money(r["amount"]) for r in rows if r["source_type"]=="work_order"),Decimal("0.00"))),"extra_sub":float(sum((_money(r["amount"]) for r in rows if r["source_type"]=="extra"),Decimal("0.00"))),"line_count":len(rows)}
 @ttl_cached()
@@ -2699,6 +3099,7 @@ def invoice_totals_batch(con: sqlite3.Connection) -> dict:
     """Full totals for every invoice in 2 queries (N+1 killer for Today/alerts).
     Returns {invoice_no: {subtotal,tax,total,cash,credit,paid,balance}}. Uses the
     same Decimal math as invoice_totals so figures match exactly."""
+    _ensure_void_cols(con)
     line_totals = {}
     for ino, sub, tax in con.execute(
         "SELECT i.invoice_no, COALESCE(SUM(l.amount),0), "
@@ -2713,6 +3114,7 @@ def invoice_totals_batch(con: sqlite3.Connection) -> dict:
         "COALESCE(SUM(CASE WHEN c.kind='payment' THEN COALESCE(c.applied_amount,c.amount) ELSE 0 END),0), "
         "COALESCE(SUM(CASE WHEN c.kind='credit' THEN COALESCE(c.applied_amount,c.amount) ELSE 0 END),0) "
         "FROM collections c JOIN invoices i ON i.id = c.invoice_id "
+        "WHERE COALESCE(c.voided,0)=0 "
         "GROUP BY i.invoice_no"):
         cash_d, credit_d = _money(cash), _money(credit)
         paid_totals[ino] = (cash_d, credit_d, _ms(cash_d, credit_d))
@@ -2734,6 +3136,40 @@ def invoice_totals_batch(con: sqlite3.Connection) -> dict:
         inv_extras = {}
     out = {}
     zero = Decimal("0.00")
+    # Void-and-revise (build 'ab'): fold each revised-away invoice's
+    # paid into its chain head and zero the ancestor's own balance —
+    # money recorded against any link resolves to the head, and an
+    # ancestor never surfaces as an open invoice again.
+    _fold = {}
+    _away = set()
+    try:
+        from engine_revisions import ensure_revision_cols as _erc
+        _erc(con)
+        _links = con.execute(
+            "SELECT id, invoice_no, revises_id, revised_by_id "
+            "FROM invoices").fetchall()
+        _bykey = {r[0]: r for r in _links}
+        def _head(k):
+            seen = set()
+            while k in _bykey and _bykey[k][3] and k not in seen:
+                seen.add(k)
+                nxt = None
+                for _r in _links:
+                    if _r[2] == k:
+                        nxt = _r[0]
+                        break
+                if nxt is None:
+                    break
+                k = nxt
+            return k
+        for r in _links:
+            if r[3]:
+                _away.add(r[1])
+                _h = _head(r[0])
+                if _h != r[0]:
+                    _fold[r[1]] = _bykey[_h][1]
+    except Exception:
+        _fold, _away = {}, set()
     for ino, (sub, tax, _linetotal) in line_totals.items():
         adj = adj_totals.get(ino, zero)
         adjtx, opex, rate = inv_extras.get(ino, (False, False, Decimal("0")))
@@ -2743,10 +3179,21 @@ def invoice_totals_batch(con: sqlite3.Connection) -> dict:
             tax = _ms(tax, (adj * rate).quantize(CENT, rounding=ROUND_HALF_UP))
         total = _ms(sub, tax, adj)
         cash, credit, paid = paid_totals.get(ino, (zero, zero, zero))
+        if ino in _away:
+            cash, credit, paid = total, zero, total
         bal = _ms(total, -paid)
         out[ino] = {"subtotal": float(sub), "tax": float(tax), "total": float(total),
                     "cash": float(cash), "credit": float(credit), "paid": float(paid),
                     "balance": float(bal)}
+    for _src, _dst in _fold.items():
+        if _src in paid_totals and _dst in out:
+            _c, _cr, _p = paid_totals[_src]
+            out[_dst]["cash"] = float(_money(out[_dst]["cash"]) + _c)
+            out[_dst]["credit"] = float(_money(out[_dst]["credit"]) + _cr)
+            out[_dst]["paid"] = float(_money(out[_dst]["paid"]) + _p)
+            out[_dst]["balance"] = float(
+                _ms(_money(out[_dst]["total"]),
+                    -_money(out[_dst]["paid"])))
     return out
 def invoice_balances_batch(con: sqlite3.Connection) -> dict:
     """Balance for every invoice in 2 queries. {invoice_no: balance_float}."""
@@ -2754,13 +3201,14 @@ def invoice_balances_batch(con: sqlite3.Connection) -> dict:
 def invoice_balance(con, invoice_no: str) -> float:
     return invoice_totals(con, invoice_no)["balance"]
 def invoice_locked(con, invoice_no: str) -> bool:
+    _ensure_void_cols(con)
     inv=con.execute("SELECT status FROM invoices WHERE invoice_no=?",(invoice_no,)).fetchone()
     if not inv: return True
     # B7: a posted invoice (Sent to the customer) is locked, not just Paid /
     # Write-off or one with cash applied. The PO is the customer's document
     # reference — it must not change after they've seen the invoice.
     if inv["status"] in ("Sent","Paid","Write-off"): return True
-    return con.execute("SELECT 1 FROM collections WHERE invoice_id=? LIMIT 1",(key_of(con, "invoices", invoice_no),)).fetchone() is not None
+    return con.execute("SELECT 1 FROM collections WHERE invoice_id=? AND COALESCE(voided,0)=0 LIMIT 1",(key_of(con, "invoices", invoice_no),)).fetchone() is not None
 def set_invoice_po(con, invoice_no: str, po: str, clerk: str = "", po_expire: str|None=None, po_cost_code: str|None=None, po_notes: str|None=None, po_total: float|None=None, po_status: str|None=None) -> None:
     if invoice_locked(con, invoice_no):
         raise ValueError("Invoice is locked (sent, paid, or has payments)")
@@ -3618,7 +4066,7 @@ def report_revenue(con: sqlite3.Connection, kind: str = "mtd") -> dict:
            FROM collections c
            JOIN invoices i ON i.id = c.invoice_id
            JOIN customers cu ON cu.id = i.customer_id
-           WHERE c.kind='payment'"""
+           WHERE c.kind='payment' AND COALESCE(c.voided,0)=0"""
     ):
         d = _parse(p["pay_date"])
         if not d or d < start or d > end:
@@ -3700,3 +4148,86 @@ def report_recap(con: sqlite3.Connection, kind: str = "mtd") -> dict:
     }
 
 
+
+
+def complete_cash_revision(con: sqlite3.Connection, entry_key: int,
+                           **fields) -> int:
+    """Complete a cash-entry revision (build 'ab', redirect #2):
+    the revision created at the confirm act is a shell carrying the
+    original's content; its first Save replaces the shell with a
+    fresh record_cash_entry post — full validation, fresh
+    settlement — under the revision's own number (or the operator's
+    rename of it), and the chain re-points at the posted entry: the
+    voided original's revised_by_id and the new entry's revises_id.
+    Returns the posted entry's id."""
+    import engine_revisions as _rev
+    _rev.ensure_revision_cols(con)
+    shell = con.execute("SELECT * FROM cash_entries WHERE entry_id=?",
+                        (entry_key,)).fetchone()
+    if not shell:
+        raise ValueError("That cash entry revision no longer stands")
+    orig_key = shell["revises_id"]
+    eno = (fields.pop("entry_no", None) or shell["entry_no"] or "")
+    con.execute("DELETE FROM cash_entries WHERE entry_id=?",
+                (entry_key,))
+    new_id = record_cash_entry(con, entry_no=eno, **fields)
+    con.execute("UPDATE cash_entries SET revises_id=? WHERE entry_id=?",
+                (orig_key, new_id))
+    if orig_key:
+        con.execute("UPDATE cash_entries SET revised_by_id=? "
+                    "WHERE entry_id=?", (new_id, orig_key))
+    con.commit()
+    return new_id
+
+
+def complete_petty_revision(con: sqlite3.Connection, pc_key: int,
+                            direction: str, amount: float,
+                            category: str, txn_date: str | None = None,
+                            payee: str = "", ref_no: str = "",
+                            notes: str = "", clerk: str = "",
+                            pc_id: str = "") -> str:
+    """Complete a petty-cash revision (build 'ab', redirect #2):
+    petty rows carry no settlements, so the shell the confirm act
+    created is completed in place with the operator's edited
+    values — the voided original is never touched. The entry's
+    number may be renamed off its 'Rev. N' prefill; uniqueness runs
+    over the whole log, voided entries included."""
+    who = require_clerk(clerk)
+    row = con.execute("SELECT * FROM petty_cash WHERE id=?",
+                      (pc_key,)).fetchone()
+    if not row:
+        raise ValueError("That petty entry revision no longer stands")
+    direction = (direction or "").strip().lower()
+    if direction not in ("in", "out"):
+        raise ValueError("Petty cash is in or out")
+    try:
+        amt = float(amount)
+    except (TypeError, ValueError):
+        raise ValueError("Amount must be a number") from None
+    if amt <= 0:
+        raise ValueError("Amount must be positive")
+    category = (category or "").strip()
+    allowed = PC_IN_CATS if direction == "in" else PC_OUT_CATS
+    if category not in allowed:
+        raise ValueError("Pick a category that matches in or out")
+    if direction == "out":
+        others = petty_balance(con) - (
+            float(row["amount"]) if row["direction"] == "in"
+            else -float(row["amount"]))
+        if amt - others > 0.009:
+            raise ValueError(f"Box only holds ${others:,.2f}")
+    new_no = (pc_id or "").strip() or row["pc_id"]
+    if new_no != row["pc_id"] and con.execute(
+            "SELECT 1 FROM petty_cash WHERE pc_id=?",
+            (new_no,)).fetchone():
+        raise ValueError(f"Petty cash number {new_no} is already used")
+    con.execute(
+        """UPDATE petty_cash SET pc_id=?, txn_date=?, direction=?,
+           amount=?, category=?, payee=?, ref_no=?, notes=?, clerk=?
+           WHERE id=?""",
+        (new_no, (txn_date or row["txn_date"])[:10], direction,
+         round(amt, 2), category, payee or "", ref_no or "",
+         notes or "", who, pc_key))
+    stamp_company_snapshot(con, "petty_cash", pc_key)
+    con.commit()
+    return new_no
