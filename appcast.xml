@@ -6,13 +6,13 @@
     <description>FleetSheet for Windows — update feed</description>
     <language>en</language>
     <item>
-      <title>FleetSheet 1.1.1</title>
-      <pubDate>Fri, 30 Oct 2026 01:34:23 +0000</pubDate>
-      <sparkle:version>1.1.1</sparkle:version>
+      <title>FleetSheet 1.1.2</title>
+      <pubDate>Fri, 30 Oct 2026 01:36:09 +0000</pubDate>
+      <sparkle:version>1.1.2</sparkle:version>
       <enclosure url="https://github.com/jrmcw-source/FleetSheet/releases/download/v1.1.1/FleetSheet-Setup-1.1.1.exe"
                  type="application/octet-stream"
                  length="22571697"
-                 sparkle:version="1.1.1"
+                 sparkle:version="1.1.2"
                  sparkle:edSignature="s/sDQ+ziXxTOcI5rukEzw+SYe6HadJDs9WxtZSF9n+7dML/nyWOIbH/5vPybhZjr6mD7CBWdstpSPnLVCGbuCw==" />
     </item>
   </channel>
