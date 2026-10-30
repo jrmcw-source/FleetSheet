@@ -1,0 +1,118 @@
+FleetSheet v1.1 — pack 2026-10-26z (two-defect fix build)
+==========================================================
+
+Build 'z' fixes the two defects Jason's installed-app test
+found on 2026-10-26, minutes after v1.1 shipped. Nothing else
+changes: no page, form, or workflow is touched, and VERSION
+stays 1.1.0.
+
+1. UPDATER — DEAD ON EVERY MACHINE, NOW WIRED TO THE REAL
+   DLL. As shipped (v1.0 and v1.1 alike), Admin → Check for
+   Updates silently did nothing: updater_winsparkle._load()
+   set ctypes argtypes on two WinSparkle exports that do not
+   exist — win_sparkle_set_ed25519_pub_key and
+   win_sparkle_set_shut_down_request_callback — so the DLL
+   never loaded and init() always returned False. Proven on
+   Jason's installed copy (available() True, init() False).
+
+   - The module now calls the real exports:
+     win_sparkle_set_eddsa_public_key and
+     win_sparkle_set_shutdown_request_callback (argtypes, the
+     init() call, and the callback registration; the plan
+     text in packaging/WINSPARKLE.md corrected to match).
+   - stage/app/WinSparkle.dll replaced: the build carried an
+     older DSA-era DLL (2,797,056 bytes) with no Ed25519
+     export at all. The stage now carries the 2,886,144-byte
+     DLL (md5 931ba23bfbdccbe707fb8c137548f7ac) — the copy
+     the GitHub repo has carried since v1.0 — verified to
+     export both real names before it was installed.
+   - The key-paste step is UNCHANGED: the stage still ships
+     the placeholder; Jason pastes the real public key on
+     the _ED_PUBKEY_B64 line before compiling, exactly as
+     in pack 'y'. (His v1.1 compile already proved the paste
+     lands: the installed file carries the real key.)
+   - New standing test (Suite C19): every ws.<name> the
+     module touches is asserted present in the shipped
+     DLL's export strings, read from the DLL bytes themselves.
+     A name drift now fails the suite forever. C19 fails on
+     the build-'y' pair by exactly the two wrong names
+     (negative control, run and logged).
+
+2. STARTUP MIGRATION — A GENUINE PRE-'v' BOOK NOW OPENS.
+   Jason's v1.0-era live book crashed the app at startup
+   (the blank console): init_db's opening schema pass dies on
+   a legacy index (no such column: batch_id), and the
+   migration ledger then died at its credit-memo backfill
+   (engine_migrations.py line 411: no such column: cm_no).
+   Mechanism: the schema pass runs first and — the old book
+   having no credit_memo_lines — creates that table in the
+   CURRENT cm_id shape on its way to the dying index; the
+   ledger's backfill then probes it by cm_no. Same artifact,
+   two more tables deep: the pass also leaves an EMPTY
+   current-shape ticket_lines whose FK (REFERENCES
+   tickets(id)) cannot resolve against the still-number-keyed
+   tickets table, and a v1.0-era book has no wo_lines at all
+   for the ledger's unconditional UPDATEs. Three guards, all
+   in engine_migrations.py, all in the file's own PRAGMA/DLL-
+   shape idiom, all idempotent, none fabricating or dropping
+   a record:
+
+   - credit_memo_lines: when the live table is the schema
+     pass's EMPTY cm_id-shaped artifact (not yet re-keyed),
+     drop it and let the ledger's CREATE make the number-
+     keyed shape; the existing backfill and the end-of-ledger
+     re-key then run exactly as on any other pre-'v' book.
+     A non-empty cm_id table is left untouched and the cm_no
+     backfill is skipped (no shipped build produces one).
+   - ticket_lines: the same drop-if-empty guard on the
+     pass's current-shape artifact, keyed on its DDL naming
+     REFERENCES tickets(id); the CREATE below then makes the
+     number-keyed shape the flat-charge sync writes to.
+   - wo_lines: CREATE TABLE IF NOT EXISTS in the number-
+     keyed shape before the category/uom UPDATEs, same
+     pattern as the ledger's other line tables.
+
+   Proof (PHASEZ-REPORT.md carries the full outputs):
+   - A synthetic book built from the v1.0 sources (tag v1.0)
+     reproduces Jason's traceback byte-for-byte under build
+     'y' code — batch_id, then line 411 cm_no — and opens
+     clean under 'z', data intact, balances exact.
+   - Jason's actual book (fleetsheet-old.db, run on a copy):
+     pre-fix, his exact traceback; post-fix, init_db
+     completes. Before/after counts: company 1, customers
+     50, invoices 500, invoice_lines 1181, collections 420,
+     credit_memos 8, tickets 130, assets 44 — all unchanged.
+     By-design changes only: credit_memo_lines 0 → 8 (one
+     backfilled line per memo, each carrying its memo's face
+     verbatim), ticket_lines 0 → 443 (the flat-charge
+     conversion the ledger exists to do), lookups reseeded,
+     four current-schema tables created (doc_collections,
+     mixed_presets, payment_allocations, wo_lines). No table
+     lost; foreign_key_check clean; a second open is a clean
+     no-op (no duplicated backfill). CM-0001 stands open at
+     its full $451.73 face with its line in place.
+   - Suite C20 pins the crash shape (pristine-'l' schema,
+     lines table dropped) so the ledger cannot regress it.
+
+3. MANUAL. Stamp only: 2026-10-26z; manual.pdf regenerated
+   (31 pages). No text changes — the manual already describes
+   the intended behavior; the code now matches it.
+
+BOOKS. Untouched: demo.db 07ce2c83665a39f1d51420a624cb0b97,
+blank.db cf08a4033dbc854f3dad48962806f36c — byte-identical
+to builds 'v'–'y'. Jason's fleetsheet-old.db is NOT in this
+pack; it opens under this build as proven above, and stays
+on his laptop under its own name.
+
+BATTERY. Compile 28/28; Suites A 11/11, B 5/5, C 100/100
+(97 + C19 ×2 + C20), D 3/3; density PASS 69 pages; tabecho
+27; compliance 65 pass / 4 known fails (H1, H12, H21, H30);
+verify.py 37/37; demo audit 33/0/0; v101 failing-name set
+identical to build 'x' (36 names, zero delta).
+
+OPEN — JASON'S CALL, NAMED NOT DECIDED. The fixed installer
+will carry new bytes, a new hash, and a new signature under
+the same version number, 1.1.0: re-issue 1.1.0 in place, or
+release the fix as a real 1.1.1. The faux 1.1.1 appcast
+entry stays live until the fixed build passes the updater
+test on the laptop, then comes down either way.

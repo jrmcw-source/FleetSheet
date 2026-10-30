@@ -1,0 +1,137 @@
+FleetSheet v1.1.1 — pack 2026-10-27ac (uniformity fix round)
+==============================================================
+
+Build 'ac' answers Jason's look at builds 'aa' + 'ab'
+(2026-10-27) and his rulings that morning: one size within
+a line (his button ruling), the Version/Update move +
+Administration squeeze, the whole-package review rule, and
+"State changes values, not anatomy." It was built under the
+closed-build discipline ordered the same morning: a written
+element inventory first (phaseac-inventory.md), every
+surface built to the inventory, anything encountered
+outside it listed as NAMED-NOT-BUILT instead of built.
+VERSION stays 1.1.1. The books in this pack are
+byte-identical (demo 07ce2c83665a39f1d51420a624cb0b97,
+blank cf08a4033dbc854f3dad48962806f36c); no schema change,
+no engine behavior change beyond item 3(4).
+
+1. SUMMARY DOOR ROWS, ONE SIZE (Scope A). Every door in
+   every summary's door row renders at the one large
+   standard (14px, 38.3px) — the working doors (Payment,
+   Job Info, Paperwork, Status, …) now carry the same size
+   as Edit and Print. The View row below keeps its own
+   uniform small size; the law is one size WITHIN a line,
+   and each line obeys it.
+
+2. FORM COMMIT ROWS (Scope B). Every form's bottom row
+   ends: Print menu, then exactly ONE commit button, last.
+   Payment: the commit keeps its label "Apply payment"
+   (labels were not renamed — never discussed); the two
+   pay_scope radio labels moved OUT of the button cluster
+   into the form body directly above the row, one control
+   set, JC-AA2 behavior unchanged. Petty cards keep
+   "Cash Out" / "Cash In" as their commits in the same seat.
+
+3. FIVE DEFECTS (Scope C). (1) The Credit Memo form gets
+   the same locked/session split + field lock as the other
+   seven kinds — a posted memo opens LOCKED, Edit stands
+   alone, no Save beside it. (Credit's revision completes
+   at Confirm in the engine, so the locked form is the
+   memo's standing state while it stands loaded.)
+   (2) The Rental editor gains Add Item in its revision
+   session, matching the new form and all other editors.
+   (3) The Quote form's under-form Status/Convert door row
+   is removed — that work stands on the Quote summary's
+   doors, where it already lived. (4) The Sale form's
+   hidden second submit ("Confirm & Save") is gone as a
+   submit: the Confirm sale popup's button now triggers
+   the form's ONE Save path (requestSubmit). The old
+   button posted op=save, a field the POST layer never
+   read — the post is byte-for-byte the same semantics;
+   Plant/Fleet refusals and the "Plant sale confirmed." /
+   "Fleet sale confirmed." stamps are unchanged (verified
+   end-to-end in a browser). (5) The Petty page's button
+   rows render at the global 14px / 38.3px (they rendered
+   12px / 35.4px — the rows sat inside a card whose span
+   rule shrank them; the row now carries its own text
+   context), and the petty fragment's one-off 'btnlink'
+   Edit is replaced by the standard Edit door in the LEFT
+   cluster.
+
+4. SUMMARY ANATOMY (Scope D). All eight summaries open
+   bare under the page title — no family tab strip on any
+   of them. Lines areas stand on ONE shared builder: one
+   table, one column vocabulary (Type | Item | Description
+   | Qty | Unit | Rate | Amount, plus Paid | Open | Note
+   where the kind carries them; Change Order keeps its
+   Direction column). The Invoice summary is folded into
+   the standard sections — lines, totals, PO panel, quote
+   panel, "Payments & Credits" each a standard section;
+   the UPPERCASE header variant is gone. State changes
+   values, not anatomy: Paid / Open / Note columns stand
+   on every invoice; the Edit Lines door stands on every
+   invoice summary; a fact field with no value renders its
+   row with an em dash instead of dropping out (INV-1001
+   Paid and INV-1003 Partial now render with identical
+   doors, columns, and sections). A Payment summary with
+   no allocations renders its allocations table WITH its
+   header and an empty-state row, never a blank area.
+   Money popups on summaries end in the standard commit
+   seat — commit only, no page Print menu inside the
+   popup; the Invoice's and Rental's plain-paragraph popup
+   commits (Apply Payment, Save PO, Save Check-Out/In,
+   Save, Move with note) are rebuilt as the same seat,
+   labels unchanged. Edit-door absence on revised-away /
+   void / invoiced-state documents is void-and-revise law
+   and is unchanged.
+
+5. ADMINISTRATION (Scope E). The standalone Version card
+   is gone: the version line and the Check for Updates
+   control (unchanged behavior, including the not-available
+   hint) stand inside the System Administration card, low
+   and on its right, beside Backup Settings. The page is
+   squeezed: card text cut to one-line hints (functional
+   statements stay), the Page Layout card's two blocks
+   merged into one compact control row set, tighter
+   page-local card padding — the page now stands at about
+   one 900px screen. Every label and control kept.
+
+6. CENSUS (Scope F). checks/census_ui.py now MEASURES:
+   S10 every summary door row's children share one height
+   at the large standard; S11 every form's bottom-row
+   inventory (right cluster = Print + exactly one commit,
+   commit last; the Payment radios outside the row); S12
+   within-kind invariance (two invoices of different
+   states: identical door sets, fact labels, line-table
+   columns, section sets); S13 Administration (no
+   standalone Version card; the update control inside the
+   System Administration card). PASS, S1–S13.
+
+TESTS. ONE Suite C amendment, named in PHASEAC-REPORT:
+C14's build-'t' pin (Status/Convert popups ride the Quote
+FORM) is superseded by defect 3(3) above; the test now
+asserts their absence on the form and their presence on
+the Quote summary. Suite C otherwise untouched, 112/112.
+Battery: compile 29/29; Suites A 11/11, B 5/5, D 3/3;
+density PASS 69 pages; tabecho 27; compliance exactly
+65 pass / 4 known fails (H1, H12, H21, H30); census PASS;
+verify.py 37 ok / 0; demo audit 33/0/0; test_ux exactly
+its one pbox failure; migration proven on a copy of
+Jason's pre-'v' book (46 -> 50 tables, second open a
+no-op). v101: the failing-name protocol is reported in
+full in PHASEAC-REPORT — the stable failing set is
+exactly the 36 names build 'ab' closed with; a three-name
+cluster (the two PO-import tests and the pay-split test)
+flips between runs on UNCHANGED code and is reported as
+measured, not absorbed.
+
+MANUAL. Stamp 2026-10-27ac only; manual.pdf regenerated
+(md5 2f0ebee0493a5aaabd4b4470e4c32f68); no prose changes —
+the rewrite draft remains Jason's pending review,
+untouched.
+
+NOT IN THIS PACK / NOT DONE. JI# (filed, unruled — a
+later build). No GitHub push, no release, no appcast
+change. This pack goes to Jason's look at 'ac' first (on
+the LAPTOP-CHECK pack); the 1.1.1 publish stays held on
+his ruling.

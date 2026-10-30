@@ -1,0 +1,152 @@
+FleetSheet v1.1.1 — pack 2026-10-28ae (build 'ae', REBUILT)
+==============================================================
+
+The original build 'ae' (pack 2026-10-27ae) was rejected by
+Jason in full on 2026-10-27. This pack is the rebuild,
+executed from the pre-'ae' ('ad') tree under a full element
+census written before code (phaseae2-inventory.md: every
+contested element traced to its source and classified; all
+fifteen recommendations D1–D15 adopted by Jason's ruling of
+2026-10-28). Where the rejected build filled in, this one
+follows the census. VERSION stays 1.1.1. The books in this
+pack are byte-identical (demo 07ce2c83665a39f1d51420a624cb0b97,
+blank cf08a4033dbc854f3dad48962806f36c); no schema change.
+
+1. COMMIT LABELS (Phase 1). The renames the original 'ae'
+   Phase 1 named but never built: the revise popup's commit
+   "Void & Revise", the Add Done popup's "Log it", the
+   compliance item edit's "Save Changes", the Quote Convert
+   popup's commit (both the live and the dead instance), and
+   the settings/administration commits (billing, layout,
+   backup, schedule, idle lock, setup, build, save-to-backup)
+   all read "Save". Seventeen renames. The folder picker's
+   own buttons ("Use this folder" / "Use default folder" /
+   "New Folder") keep their labels — picker actions, not
+   commits (D7).
+
+2. THE FOUR MASTERS ON THE STANDARD ROW (Phase 2). Customer,
+   Vendor, Asset, and Site editors carry the standard button
+   row: the Print menu PRESENT on all four (D14 — no master
+   ships without Print), the commit "Save", and a "Close"
+   door to the old Cancel links' destinations. The word
+   "Cancel" now occurs ZERO times in the package; the fifth
+   occurrence, the folder picker's back link, is also
+   "Close" (destination and styling unchanged). Vendor (D8):
+   the "+ New vendor" toggle is gone — the form stands open
+   in the new and edit states alike — and the explanation
+   paragraph inside the vendor form is deleted (the Setup
+   tab's one-line caption stands; it is the uniform Setup
+   register). The folder picker's explanation paragraph is
+   deleted likewise. Customer form words (D2): the heading
+   is "Customer Information"; "Primary Phone" is "Main
+   Phone"; "Primary / Billing Address" is "Main / Billing
+   Address"; the checkbox words are "Main contact" and
+   "Make main location". Labels only — stored data and
+   internals are untouched (the engine's stored location
+   name stands; "Primary regulatory regime" is untouched).
+
+3. CONTACTS AND LOCATIONS LIVE IN THE CUSTOMER FORM
+   (Phase 3, D9). The Contacts and Locations sections stand
+   inside the customer form on a new record and on an
+   existing record alike, keyed by the customer's engine id
+   (the 'ad' cards were keyed by operator code and could not
+   have worked; the sections replace them, and their four
+   handlers and routes are deleted). One Save posts the
+   customer, its contacts, and its locations together. A
+   new customer renders exactly ONE blank contact row and
+   ONE blank location row; an existing customer renders its
+   stored rows and no forced blank. Add Contact / Add
+   Location append a row and commit nothing. The per-row
+   remove control is the package's line-del control (the
+   red ✕ with no fill) — the rejected build's filled grey
+   remove button does not appear. Standing engine behavior,
+   named: a typed location stands alongside the location
+   the engine records automatically from the billing
+   address. Hand-verified end to end on a scratch book:
+   create-with-children, edit round-trips, remove of an
+   unsaved row, remove of a stored row, create-with-none
+   (no ghost rows), and the four retired routes refusing
+   with the application's unknown-action answer.
+
+4. THE COMPLIANCE PAGE (Phase 4). The four-control print
+   cluster ("Print Pack", "Pack Pdf", "Print Selected",
+   "Selected Pdf") is deleted; in its place stands ONE
+   standard Print menu aimed at the full pack. Selection
+   printing lives where it always worked, in the Paperwork
+   popup. The Paperwork door stands on its own line (21.9px,
+   alone); the Print menu stands on its own line (38.3px) —
+   no line on the page mixes sizes. The tick boxes in the
+   checklist rows, the selection script, and the Tick All /
+   Clear row are deleted (D3, D4). The five explanatory
+   data-tip sentences on the certificate buttons are
+   stripped (labels unchanged, D5); the certificate
+   evidence hint paragraph is deleted (D6); the page's h2
+   inline styles are normalized to the package h2 (D11);
+   "Remove Check" stands (D12). Order flips: the Add Check
+   form stands ABOVE the Checklist table; the
+   Add-a-Certificate form stands above the certificate
+   cards; in the Billing lookup panels the "Add your own"
+   row stands above the checkbox grids.
+
+5. AUDIT-LIST ROWS, MEASURED (D10). The Vendors list was
+   the family's one mixed row: Edit 22.8px beside Remove
+   36.8px. The Remove button now carries Edit's exact
+   padding; the row measures 22.8 / 22.8 — uniformly small,
+   the Company Phone Numbers pattern. Customers and Sites
+   lists carry no row buttons; Assets rows carry one
+   uniform 21.9px control. No other audit-list change.
+   The four masters' standard rows measure Print 38.3 /
+   Save 38.3 / Close 38.3 on every master.
+
+CENSUS. S14x (the revise popup's own commit reads "Save")
+is carried over from the original 'ae'. S15 is new and
+asserts this build: the masters' standard row (Print menu
+present, "Save", "Close") on all four editors; the vendor
+form open with no toggle and no explanation paragraph;
+Contacts/Locations inside the customer form on create
+(exactly one blank row each) and on edit (the census seed's
+two contacts and one location render, named exactly); the
+V2/V3/V4 rendered order; and none of the retired compliance
+cluster's labels anywhere on the page. Census PASS,
+S1–S15. ONE suite amendment stands from the original
+'ae' round, unchanged: Suite C's Convert-label pin reads
+"Save". NAMED, NOT APPLIED: test_ux's "customer uses
+conventional business structure" check pins the form label
+"Primary / Billing Address"; the D2 rename makes that pin
+stale, and the check fails on the pin's text alone. The
+one-line amendment (the pin reads "Main / Billing
+Address") awaits Jason's word; every other test_ux check
+is at its standing state (the one pbox failure included).
+
+TESTS. Compile 29/29; Suites A 11/11, B 5/5, C 112/112,
+D 3/3; census PASS (S1–S15); density PASS 69 pages (run
+alone, last, against a fresh demo book, per the standing
+protocol); tabecho 27; compliance exactly 65 pass / 4
+known fails (H1, H12, H21, H30); verify.py 37 ok / 0;
+demo audit 33/0/0; the standalone suites at 'ad' counts
+(5/1/3/2/4/9/3/16); migration ledger 3/3; migration proven
+on a copy of Jason's pre-'v' book (46 -> 50 tables, second
+open a no-op, FK clean, original untouched). v101 under
+the 4+4 protocol against the pre-build tree: the built
+tree's stable failing set is 37 names (identical in all
+four runs); the baseline's stable set is 35, and the only
+difference is the pair of legacy PO tests, which sit in
+the baseline's unstable union and failed in some baseline
+runs — the measured instability the 'ad' round recorded
+for the same pair, not movement caused by this build
+(nothing here touches the PO path; the PO subsystem was
+retired in build 'v').
+
+MANUAL. Stamp 2026-10-28ae; manual.pdf regenerated (md5
+682f94ef2609eb34f56416b98f59b5dd). One statement added,
+Section 11.5: the customer form carries the Contacts and
+Locations sections on new and existing records alike, what
+each records, the Add controls, removal by the row's
+remove control, and the one Save recording all three
+together — worded with "main" to match the form's labels.
+No other manual text changes. The rewrite draft remains
+Jason's pending review, untouched.
+
+NOT IN THIS PACK / NOT DONE. No GitHub push, no release,
+no appcast change. The 1.1.1 publish stays held on Jason's
+look at this build first (on the LAPTOP-CHECK pack).

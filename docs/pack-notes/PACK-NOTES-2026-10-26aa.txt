@@ -1,0 +1,144 @@
+FleetSheet v1.1.1 — pack 2026-10-26aa (look-round fix build)
+==============================================================
+
+Build 'aa' answers Jason's look round on the 1.1/'z' build
+(filed 2026-10-26, 18:02–18:36 CDT;
+~/workspace/fleetsheet-work/looksee-1.1.1-look-2026-10-26.md).
+One class underneath every item: the universality work was
+checked page by page, never cross-compared as a set — so the
+summaries drifted apart, one popup kept a door the rest had
+lost, and two controls did one job on the Payment form. The
+fixes are class fixes, and a standing census
+(checks/census_ui.py in the governance folder) now renders
+the whole set and diffs it, so the class cannot drift again
+unnoticed. VERSION stays 1.1.1. UI only: the books are
+byte-identical.
+
+1. SUMMARIES — ONE ANATOMY, ONE DOOR ROW (WS1). All eight
+   summaries (Rental, Sale, Work Order, Quote, Change Order,
+   Payment, Credit Memo, Invoice) flow through the shared
+   _sum_page template, and every door row through one builder
+   (_sum_doors) implementing the template's own contract: the
+   kind's working popup doors (small) in their order, then
+   Edit (large, where the kind has its own editor), then ONE
+   Print (large) on every kind, then the universal View row.
+   - The Invoice summary folds INTO the template. Its
+     hand-built document-style page is retired; the facts
+     ride the fact table (Customer, Billing Address, Ship
+     To, Date, Status, Terms, the Job Info pairs,
+     Associated), and its lines, totals, PO panel, quote
+     panel and Payments & Credits section ride the lines
+     area as standard sections in the old order. The
+     printed-template header block is dropped, not carried —
+     its facts are the fact table's facts.
+   - The Credit Memo summary gains its lines table (it
+     carried none).
+   - JC-AA1: the Rental's Work Ticket and Delivery Ticket
+     are now the two entries of its one Print menu. The
+     oversized standalone links are gone; the Rental has a
+     real Print control like every other kind.
+
+2. FULL PAGE — DELETED (WS2). The "Full page" link is out of
+   the shared popup shell itself — markup and JS — and build
+   'w''s per-opener suppression flag (data-nofullpage, once
+   carried only by the Petty Cash door) is retired with it.
+   No popup carries the door, for anyone. Grep-verified: no
+   operator-visible "Full page"/"fullpage" string remains in
+   the app (comments keep historical mentions only).
+
+3. ONE POPUP BEHAVIOR (WS3). Both shells now carry the same
+   furniture and geometry:
+   - Shell B (the inline working popups — _pop_wrap popups,
+     the Job Info popups, and the hand-built copies: quote
+     Status/Convert, CM Apply Leftover, rental Job Info,
+     sale confirm-and-sign) carries the universal furniture
+     in its heading, in order: Collapse, Refresh, Print,
+     Close. Print prints the host document/page; Refresh
+     re-fetches the popup's content from the server, the way
+     the Job Info popup's refresh always worked.
+   - Collapse-to-bar + expand on BOTH shells (Shell A gains
+     a Collapse control on its title bar; Shell B collapses
+     to its heading). Shell B gains resize (CSS resize) and
+     drag by its heading; Shell A keeps its resize + drag —
+     and the rules that stripped them at the large/xlarge
+     text sizes are REMOVED. Only the <=700px small-screen
+     full-screen rule stands. Collapse state is in-page
+     only; nothing persists.
+
+4. EMPTY STRIPS — KILLED (WS4). The section wrapper
+   (PBOX_JS) wrapped each hidden working popup into a .pbox
+   section box, and the box rendered as an empty horizontal
+   strip — one per working popup on every summary. The
+   wrapper now skips popup containers outright. The census
+   verifies zero empty strips on all eight summaries.
+
+5. EDIT MEANS THE DOCUMENT'S OWN FORM (WS5). Audited per
+   kind: Work Order / Quote / Invoice already targeted their
+   own forms — unchanged. Change Order verified: its door
+   opens the Change Order form with that CO loaded (customer,
+   lines, reason, association prefilled; the editor refuses
+   once money has settled) — kept. Credit Memo FIXED: its
+   Edit door now carries cm_no beside the customer; the
+   Credit Memo form loads THAT MEMO — the memo stands
+   selected in its Apply Leftover popup, rendered open.
+   (A posted memo's own fields never change; the memo's
+   application work is what the form carries.) Rental /
+   Sale / Payment verified BY NAME: none of the three has
+   an editor form — the Rental is worked from its summary's
+   popups by design (build 'u'), a Sale posts once, a
+   Payment is a record — so no Edit door stands on them.
+   The uniform rule now reads: Edit exists iff the document
+   has its own editor, and always opens that editor with
+   that document. JC-AA3, flagged for Jason's ruling: the
+   build brief assumed a rental editor exists; it does not,
+   and building one is a feature build, not a UI fix — the
+   Rental stands with Sale and Payment under the rule.
+
+6. PAYMENT FORM — ONE APPLY (WS6). The standalone "Pay all
+   shown in full" button is deleted, button and JS. The
+   form keeps its single commit, "Apply payment", in the
+   standing top-commit position, and gains the two-state
+   scope toggle beside it (JC-AA2): "Amounts as entered"
+   (default) / "All shown in full". With "All shown in
+   full", applying fills each shown split row to its full
+   balance and posts in the same action — one button,
+   toggle what you want to apply to. Proven in the browser:
+   Bayou Pipeline, INV-1003, no amounts typed, toggle on
+   full — one click posted PB-1001, $1,089.75, invoice
+   Paid.
+
+7. PRINT EVERYTHING THAT CAN BE SEEN (WS7). The Cash tab's
+   register (Cash entries) gains the page print menu beside
+   its heading; the Petty page's header Print is now the
+   standard three-choice print menu (was a bare link), and
+   the float popover carries Print beside Refresh/Close off
+   fragment mode. Check In/Out's form Print confirmed
+   present and left. The census asserts Print on every
+   surface it renders.
+
+TESTS AMENDED TO THE NEW LAW (same counts, assertions
+updated where they pinned a retired mechanism): Suite C —
+the Petty popup tests (the data-nofullpage mechanism is
+gone; the law is now that the shell carries no Full page
+element at all) and C15's Edit-door test (the CM door now
+carries cm_no and the form loads the memo). Suite A — the
+note-popup probe null-guards the deleted link. The
+governance checks/ copies are re-synced.
+
+BATTERY. Compile 28/28; Suites A 11/11, B 5/5, C 100/100,
+D 3/3; density PASS 69 pages; tabecho 27; compliance
+exactly 65 pass / 4 known fails (H1, H12, H21, H30);
+verify.py 37 ok / 0 fails; demo audit 33/0/0; test_ux
+exactly its one known failure (pbox); census_ui.py PASS.
+v101: see PHASEAA-REPORT.md — one name added, named and
+explained there, not absorbed silently.
+
+BOOKS. Untouched: demo.db 07ce2c83665a39f1d51420a624cb0b97,
+blank.db cf08a4033dbc854f3dad48962806f36c — byte-identical
+to builds 'v'–'z'. Manual stamp 2026-10-26aa only;
+manual.pdf regenerated; no prose changes (the rewrite
+draft remains Jason's pending review, untouched).
+
+NOT IN THIS PACK / NOT DONE. No GitHub push, no release, no
+appcast change — this build goes to Jason's look first, and
+the 1.1.1 publish waits on his ruling, as does JC-AA3.

@@ -1,0 +1,134 @@
+FleetSheet v1.1.1 — pack 2026-10-26ab (void-and-revise build)
+==============================================================
+
+Build 'ab' carries out Jason's rulings of 2026-10-26 evening:
+JC-AA3 (every document kind edits on its own form), the
+VOID-AND-REVISE standing rule, its extension to Cash and
+Petty Cash, and the company snapshot at issuance. It also
+builds the three editors build 'aa' verified BY NAME as
+missing: Rental, Sale, Payment. VERSION stays 1.1.1. The
+books in this pack are byte-identical (demo
+07ce2c83665a39f1d51420a624cb0b97, blank
+cf08a4033dbc854f3dad48962806f36c); all schema change is
+migration-on-open, verified on copies of a pre-'v' book.
+
+1. VOID-AND-REVISE, ALL EIGHT DOCUMENT KINDS (Rental, Sale,
+   Work Order, Quote, Change Order, Invoice, Payment, Credit
+   Memo). A document is a draft only while never saved AND
+   never printed. Editing a posted/issued document never
+   updates it in place: the form opens LOCKED (the record —
+   viewable, printable); its Edit button opens the revise
+   popup (popup-law form popup) asking for a Reason
+   (required) and the operator Name (required, prefilled
+   with the desk user); confirming VOIDS the original with
+   reason + name + timestamp signed into the record and
+   creates the revision in the same engine operation
+   (JC-AB0, confirm-time), prefilled from the original's
+   full content, its number prefilled "<original> Rev. N"
+   in a free-text field. Save posts the revision. The chain
+   links by engine key ID, never by number; uniqueness runs
+   over the kind's whole history INCLUDING voided documents
+   (a voided number stays taken). The newest revision is
+   the live document: registers show the head, money reads
+   resolve through the chain, summaries render the chain
+   both directions ("Revised by <number>" + reason + name
+   on the voided original; "Revision of <number>" on the
+   revision). A bare save against an issued document
+   without a revision session is refused, pointed at Edit.
+
+2. THE THREE EDITORS. Rental: the booking form loads the
+   rental (route /ticket/new?kind=rental&edit=<number>, the
+   invoice editor's idiom); the summary's Edit door targets
+   it. Sale: the sale form loads the sale's group by engine
+   key; gates — a revision's total may not drop below what
+   the chain has settled, Plant/Fleet confirmations still
+   govern, invoiced lines refuse. Payment: the correction
+   model the brief specified, aligned to the same Rev. N
+   chain — NO payment void/reversal machinery existed in
+   the engine before this build (grep-verified); it was
+   built new (void_payment_batch signs both ledgers and the
+   line allocations; the replacement posts through the
+   ordinary payment paths under the minted batch number).
+   Five payment edit blocks are named judgment calls
+   (JC-AB7..JC-AB11): already-void batches, credit-kind
+   rows, cash-settled payments (the cash entry is the
+   record), money carried onto an invoice, and batches that
+   issued an overpayment credit memo. A correction whose
+   document was itself revised posts its split against the
+   chain head (JC-AB26).
+
+3. CASH + PETTY CASH INSIDE THE MODEL (redirect #2).
+   Pre-build facts: cash entries carried NO operator-facing
+   number (the register's first column showed the raw
+   engine key); petty entries carried a system-minted
+   PC-#### (shown in the drawer header, not operator text).
+   Now: cash entries carry entry_no (free text, generated
+   default CE-####, unique across the register including
+   voided — JC-AB21, a ruling-derived addition), and
+   petty's pc_id IS its operator number (free text at
+   creation, prefilled with the peeked mint). Both registers
+   gain Edit doors in their own idiom and the full
+   void-and-revise flow behind them; a settling cash entry's
+   revision releases its settlement and re-posts on Save.
+   Petty stays a separate log. The drawer header's
+   Next-entry figure now peeks instead of minting on every
+   render (JC-AB27), so the header and the form agree.
+
+4. COMPANY SNAPSHOT AT ISSUANCE (redirect #3). Every
+   issuance snapshots the company identity (name + the
+   header's address/contact fields) onto the document row.
+   The five printpack document surfaces — invoice, credit
+   memo, quote, change order, rental Work/Delivery Tickets
+   — print the SNAPSHOT, never the live Company record; a
+   posted revision snapshots the identity current at ITS
+   posting; the voided original keeps its own. Register and
+   report prints are current-data prints, not document
+   reprints, and keep the live header (JC-AB24). LEGACY:
+   documents issued before this build carry no snapshot and
+   print from the live Company record — named for Jason's
+   ruling at his look; no audit-trail reconstruction was
+   built. Work Order, Sale and Payment have no printpack
+   document print (page prints only), as before.
+
+5. THE UNIVERSAL FORM ROW. One row, split, on every form:
+   LEFT Add Item, Job Info, Edit (Edit only on a locked
+   posted form); RIGHT Print, Save — top-commit forms
+   (Payment "Apply payment", Cash In/Out, the petty cards)
+   keep their commit in the RIGHT cluster with Print, and
+   the Payment scope toggle stays beside it (JC-AA2
+   stands).
+
+TESTS. Suite C 100 -> 112 (+12, new class C21VoidAndRevise:
+revision flow per kind incl. cash + petty, the settled
+floor, chain money, the payment void/replacement pair, the
+snapshot print test). ONE Suite C amendment, named in
+PHASEAB-REPORT: C15's build-'u' pin (a paid invoice's
+summary carries no Edit door) is superseded by JC-AA3 +
+void-and-revise; the assertion now checks the door stands.
+The census (checks/census_ui.py) now asserts, per kind, the
+full revision flow end-to-end on its seeded copy, the
+snapshot on the quote print, and prefilled editors — PASS.
+Battery: compile 29/29 (one new module, engine_revisions);
+Suites A 11/11, B 5/5, D 3/3; density PASS 69 pages (the
+petty cards' rows re-paired so the Amount field never wraps
+alone); tabecho 27; compliance exactly 65 pass / 4 known
+fails (H1, H12, H21, H30); verify.py 37 ok / 0; demo audit
+33/0/0; test_ux exactly its one pbox failure; the nine
+in-process battery suites at their 'aa' counts. v101: the
+failing-name set is reported exactly in PHASEAB-REPORT —
+one name in (test_wo_edit_saves_one_wo: pins in-place WO
+editing, which the model replaces), one name out
+(test_pay_form_has_splits_table: its pinned phrase now
+sits on one line inside an HTML comment, so the stale
+assert matches comment text — no such button exists;
+mechanisms named, nothing absorbed).
+
+MANUAL. Stamp 2026-10-26ab only; manual.pdf regenerated
+(md5 8ad3421feebb1e94b1f3392bb861eeea); no prose changes —
+the rewrite draft remains Jason's pending review,
+untouched.
+
+NOT IN THIS PACK / NOT DONE. No GitHub push, no release,
+no appcast change. This pack goes to Jason's combined look
+at 'aa' + 'ab' first (on the LAPTOP-CHECK pack); the
+1.1.1 publish stays held on his ruling.
