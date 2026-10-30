@@ -106,14 +106,15 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "stage\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.orig,*.bak,*.log,__pycache__\*,*.pyc,test_*.py,test-docs\*,CHECKPOINT_*.md,PACK-NOTES-*.txt,docs\doc-*,photos\*,*.db-wal,*.db-shm,.pytest_cache\*"
 
 [Icons]
-; Start Menu + optional desktop shortcut. The .bat starts the server
-; (with auto-open suppressed) and then opens the dedicated browser window.
-Name: "{group}\{#MyAppName}"; Filename: "{app}\FleetSheet-Start.bat"; WorkingDir: "{app}"
+; Start Menu + optional desktop shortcut. FleetSheet-Start.py, run
+; under pythonw.exe (no console window), starts the server (with
+; auto-open suppressed) and then opens the dedicated browser window.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\pythonw.exe"; Parameters: """{app}\FleetSheet-Start.py"""; WorkingDir: "{app}"; IconFilename: "{app}\fleetsheet.ico"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\FleetSheet-Start.bat"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\pythonw.exe"; Parameters: """{app}\FleetSheet-Start.py"""; WorkingDir: "{app}"; IconFilename: "{app}\fleetsheet.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\FleetSheet-Start.bat"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent shellexec
+Filename: "{app}\pythonw.exe"; Parameters: """{app}\FleetSheet-Start.py"""; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 // --- Pre-install: stop any running FleetSheet server so an upgrade never

@@ -6,9 +6,12 @@ Windows-only. Standalone, stdlib-only (no dependencies).
 What it does:
   1. Waits for the FleetSheet server to answer on http://127.0.0.1:8765.
   2. Finds a Chromium browser: Chrome -> Edge -> Brave -> system default.
-  3. Wipes and recreates the FleetSheet browser profile
-     (%LOCALAPPDATA%\\FleetSheet\\profile) so the window ALWAYS launches
-     clean: no extensions, no tabs, no synced state, ever.
+  3. Uses the dedicated FleetSheet browser profile
+     (%LOCALAPPDATA%\\FleetSheet\\profile): created clean on first
+     launch — no extensions, no tabs, no synced state — and kept
+     afterwards, so the operator's own window state (zoom, size)
+     persists between launches. The profile serves FleetSheet only,
+     so nothing foreign accumulates in it.
   4. Opens the app in --app mode (chromeless window, own taskbar entry).
   5. Verifies via the process list that the browser is actually running on
      OUR profile dir. If not confirmed within 5 seconds, falls back to the
@@ -18,7 +21,7 @@ Usage:
     pythonw.exe FleetSheet-Launcher.py [url]
 
 The installer (FleetSheet.iss) ships this next to pythonw.exe; the
-FleetSheet-Start.bat wrapper starts the server first, then runs this.
+FleetSheet-Start.py bootstrap starts the server first, then runs this.
 Set FLEETSHEET_NO_AUTO_OPEN=1 when starting app.py so the server does not
 open its own (older) window in parallel.
 """
@@ -94,22 +97,20 @@ def find_chromium():
 
 
 def fresh_profile(profile):
-    """Wipe and recreate the profile dir.
+    """Ensure the profile dir exists, and leave its contents alone.
 
-    If a browser is already running on this profile (dir locked), the wipe
-    may fail — in that case the existing process is already OUR clean
-    profile, so leaving it alone is correct. Returns True if the dir is
-    fresh (or already clean-in-use), False only on unexpected errors.
+    First launch creates the dir clean — no extensions, no tabs, no
+    synced state. Later launches KEEP it: the profile is dedicated to
+    FleetSheet, so nothing foreign accumulates in it, and what the
+    operator sets in the window (zoom, size) is still set next time.
+    If a browser is already running on this profile, the new launch
+    hands its window to that process, exactly as before. Returns
+    False only if the dir cannot be created.
     """
     if _profile_in_use_by_name(profile):
-        # A previous FleetSheet window is still open on our clean profile.
-        # The new launch will hand a window to that process; wiping now
-        # would corrupt it. Skip the wipe — it is already clean.
+        # A previous FleetSheet window is still open on our profile.
+        # The new launch will hand a window to that process.
         return True
-    try:
-        shutil.rmtree(profile, ignore_errors=True)
-    except Exception:
-        pass
     try:
         os.makedirs(profile, exist_ok=True)
         return True
@@ -152,7 +153,9 @@ def _process_lines():
     for cmd in cmds:
         try:
             out = subprocess.run(cmd, capture_output=True, text=True,
-                                 timeout=20).stdout.splitlines()
+                                 timeout=20,
+                                 creationflags=subprocess.CREATE_NO_WINDOW
+                                 ).stdout.splitlines()
             lines = [ln for ln in out
                      if ln.strip() and not ln.lstrip().startswith("Node")]
             if lines:
@@ -162,17 +165,51 @@ def _process_lines():
     return []
 
 
+def _work_area():
+    """(width, height) of the screen's work area, or None when it
+    cannot be read."""
+    try:
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+        rect = RECT()
+        # SPI_GETWORKAREA = 0x0030.
+        if not ctypes.windll.user32.SystemParametersInfoW(
+                0x0030, 0, ctypes.byref(rect), 0):
+            return None
+        width = rect.right - rect.left
+        height = rect.bottom - rect.top
+        if width <= 0 or height <= 0:
+            return None
+        return (width, height)
+    except Exception:
+        return None
+
+
+def _window_size():
+    """(width, height) for the app window: the standing 1280x900,
+    shrunk to the work area when the work area is smaller — a scaled
+    or small display never gets a window larger than the screen.
+    Falls back to 1280x900 when the work area cannot be read."""
+    area = _work_area()
+    if area is None:
+        return (1280, 900)
+    return (min(1280, area[0]), min(900, area[1]))
+
+
 def launch_app_window(exe, profile, url):
+    width, height = _window_size()
     args = ["--app=" + url,
             "--user-data-dir=" + profile,
             "--no-first-run",
             "--no-default-browser-check",
-            "--window-size=1280,900"]
+            "--window-size=%d,%d" % (width, height)]
     try:
         subprocess.Popen([exe] + args,
                          stdout=subprocess.DEVNULL,
                          stderr=subprocess.DEVNULL,
-                         stdin=subprocess.DEVNULL)
+                         stdin=subprocess.DEVNULL,
+                         creationflags=subprocess.CREATE_NO_WINDOW)
         return True
     except Exception:
         return False
@@ -201,7 +238,8 @@ def fallback_default_browser(url):
             subprocess.run(["cmd", "/c", "start", "", url],
                            stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL,
-                           timeout=10)
+                           timeout=10,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             return True
         except Exception:
             return False

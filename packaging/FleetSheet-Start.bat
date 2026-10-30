@@ -1,5 +1,9 @@
 @echo off
-rem FleetSheet-Start.bat — installed Start Menu / desktop target.
+rem FleetSheet-Start.bat — manual fallback launcher.
+rem The Start Menu and desktop shortcuts start FleetSheet through
+rem FleetSheet-Start.py under pythonw.exe, with no console window.
+rem This .bat does the same work when run by hand; as a batch file
+rem it runs in a visible console window while it works.
 rem   1. Stops any stale FleetSheet server on port 8765.
 rem   2. Starts the server hidden (pythonw = no console window).
 rem   3. Runs FleetSheet-Launcher.py, which waits for the server and opens

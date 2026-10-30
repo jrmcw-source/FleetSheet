@@ -82,8 +82,8 @@ def _load():
                                                 ctypes.c_wchar_p,
                                                 ctypes.c_wchar_p]
     _ws.win_sparkle_set_appcast_url.argtypes = [ctypes.c_char_p]
-    _ws.win_sparkle_set_ed25519_pub_key.argtypes = [ctypes.c_char_p]
-    _ws.win_sparkle_set_ed25519_pub_key.restype = ctypes.c_int
+    _ws.win_sparkle_set_eddsa_public_key.argtypes = [ctypes.c_char_p]
+    _ws.win_sparkle_set_eddsa_public_key.restype = ctypes.c_int
     return _ws
 
 def init(version):
@@ -95,12 +95,12 @@ def init(version):
     try:
         ws.win_sparkle_set_app_details("FleetSheet", "FleetSheet", version)
         ws.win_sparkle_set_appcast_url(_APPCAST_URL.encode("utf-8"))
-        if ws.win_sparkle_set_ed25519_pub_key(_ed_pubkey_b64.encode("utf-8")) != 0:
+        if ws.win_sparkle_set_eddsa_public_key(_ed_pubkey_b64.encode("utf-8")) != 0:
             return False
         ws.win_sparkle_set_automatic_check_for_updates(1)
         ws.win_sparkle_set_update_check_interval(7 * 24 * 3600)  # weekly
         # Ask the server to shut down cleanly when the user accepts an update:
-        # register win_sparkle_set_shut_down_request_callback -> set a flag
+        # register win_sparkle_set_shutdown_request_callback -> set a flag
         # the main loop checks, stopping ThreadingHTTPServer gracefully.
         ws.win_sparkle_init()
         return True
@@ -133,7 +133,7 @@ def cleanup():
 2. **Menu:** add a "Check for Updates…" item (Setup or Help area) calling
    `updater_winsparkle.check_now()`.
 3. **Shutdown callback:** register
-   `win_sparkle_set_shut_down_request_callback` so accepting an update
+   `win_sparkle_set_shutdown_request_callback` so accepting an update
    stops the HTTP server gracefully before the new installer runs.
    (ctypes `CFUNCTYPE(None)`; set a threading.Event the serve loop checks.)
 4. **Version format:** keep versions lexicographically sortable
