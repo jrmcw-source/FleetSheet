@@ -39,6 +39,33 @@ def _chain_redirect(handler, adv):
     handler._redirect(adv[0] + sep + "from=setup&msg=" + quote_plus(adv[1]))
 
 
+def _pdf_variant(doc):
+    """A document's PDF path: '.pdf' before any query string
+    (the printpack pairing, e.g. /print/work/<id> ↔
+    /print/work/<id>.pdf)."""
+    base, sep, qs = (doc or "").partition("?")
+    return base + ".pdf" + (sep + qs if sep else "")
+
+
+def _printafter_url(data, back, doc=None):
+    """Print-after-commit (build 'av'): when the universal print
+    box's commit mode posted fs_print_dest, the save's landing is
+    the /printafter page instead of the handler's default redirect.
+    Document kinds pass their /print/ screen path (doc); page-mode
+    kinds (doc=None) carry dest as page<paper|screen|location>.
+    Returns None when no print destination was posted."""
+    dest = (data.get("fs_print_dest") or "").strip()
+    if dest not in ("paper", "screen", "location"):
+        return None
+    if doc is None:
+        return ("/printafter?dest=" + quote_plus("page" + dest)
+                + "&back=" + quote_plus(back))
+    return ("/printafter?dest=" + quote_plus(dest)
+            + "&doc=" + quote_plus(doc)
+            + "&pdf=" + quote_plus(_pdf_variant(doc))
+            + "&back=" + quote_plus(back))
+
+
 
 def _post_ticket_edit(handler, con, data):
     """Save the rental editor (build 'ab', void-and-revise): the
@@ -125,6 +152,7 @@ def _post_ticket_edit(handler, con, data):
         "tax_loc_id": engine.loc_code(con, trow["tax_loc_id"])
                       if trow["tax_loc_id"] else None,
         "location_note": data.get("location_note") or "",
+        "rental_override": data.get("rental_override"),
         "clerk": handler.desk(con),
     }
     try:
@@ -155,8 +183,23 @@ def _post_ticket_edit(handler, con, data):
         "UPDATE tickets SET ref_ticket=? WHERE ticket_id=?",
         ((data.get("ref_ticket") or "").strip() or None, final))
     con.commit()
-    engine.clear_revision_pending(
-        con, "ticket", engine.doc_key(con, "ticket", final))
+    # Build 'as' (Item 6): the editor's write-in row posts with the
+    # save — blank clears it, like a line row's delete.
+    _ticket_writein(con, final, data.get("adj_label"),
+                    data.get("adjustment"),
+                    data.get("adj_taxable") == "1")
+    # Build 'av': this Save is the pending revision's commit —
+    # finalize voids the original and stands this ticket as chain
+    # head. A finalize ValueError surfaces the way this handler's
+    # other ValueErrors do (back to the editor, error stated).
+    try:
+        engine.finalize_revision(
+            con, "ticket", final,
+            (data.get("rev_note") or "").strip(), handler.desk(con))
+    except ValueError as e:
+        con.rollback()
+        handler._redirect(back + "&err=" + quote_plus(str(e)[:160]))
+        return True
     up = (handler._files or {}).get("job_attach")
     if up and up[2]:
         engine.save_job_attachment(con, "ticket", final, up[0], up[2],
@@ -165,12 +208,33 @@ def _post_ticket_edit(handler, con, data):
     if up2 and up2[2]:
         engine.save_job_attachment(con, "ticket", final, up2[0], up2[2],
                                    handler.desk(con))
+    # The handler already logs this save's Done entry.
     engine.add_done_manual(
         con, f"Edited Rental Ticket {final}", f"/ticket/{final}",
         handler.desk(con))
-    handler._redirect(f"/ticket/{final}?msg=" + quote_plus(
-        "Rental Ticket saved"))
+    _back = f"/ticket/{final}?msg=" + quote_plus("Rental Ticket saved")
+    # The print box's chosen paper rides fs_print_doc (the Rental's
+    # Work Ticket / Delivery Ticket screen path).
+    _doc = (data.get("fs_print_doc") or "").strip()
+    _pa = _printafter_url(data, _back, _doc or None)
+    handler._redirect(_pa or _back)
     return True
+
+
+def _ticket_writein(con, tid, label, amount, taxable):
+    """Build 'as' (Item 6): set a ticket's write-in charge (the
+    label-and-charge above the subtotal) from posted form values."""
+    engine.ensure_adj_cols(con, "tickets")
+    try:
+        amt = round(float(amount or 0), 2)
+    except (TypeError, ValueError):
+        amt = 0.0
+    con.execute(
+        "UPDATE tickets SET adjustment=?, adj_label=?, adj_taxable=? "
+        "WHERE ticket_id=?",
+        (amt or None, (label or "").strip() or None,
+         1 if taxable else None, tid))
+    con.commit()
 
 
 def handle_post(handler, con, data, u):
@@ -323,7 +387,10 @@ def handle_post(handler, con, data, u):
                 cur = con.execute(
                     "INSERT INTO pending_bookings (soft_ticket_id, data_json) VALUES (?,?)",
                     (engine.doc_key(con, "ticket", conflict_ticket),
-                     json.dumps({"tickets": row_tickets, "conflict": conflict_idx})))
+                     json.dumps({"tickets": row_tickets, "conflict": conflict_idx,
+                                 "writein": {"label": data.get("adj_label") or "",
+                                             "amount": data.get("adjustment") or "",
+                                             "taxable": data.get("adj_taxable") == "1"}})))
                 con.commit()
                 handler._redirect(f"/ticket/new?soft_conflict={cur.lastrowid}")
                 return True
@@ -346,6 +413,12 @@ def handle_post(handler, con, data, u):
                     con.execute("UPDATE tickets SET ref_ticket=? WHERE ticket_id=?",
                                 ((data.get("ref_ticket") or "").strip(), _tid))
                 con.commit()
+            # Build 'as' (Item 6): the booking form's write-in stands
+            # on the first ticket of the booking — the seat the
+            # booking's paperwork takes — and counts in its money.
+            _ticket_writein(con, tids[0], data.get("adj_label"),
+                            data.get("adjustment"),
+                            data.get("adj_taxable") == "1")
             # Job info attachment (Jason 2026-10-07) + ticket upload
             # (Jason 2026-10-07 F5): one file for the booking, attached
             # to the first ticket only.
@@ -400,6 +473,10 @@ def handle_post(handler, con, data, u):
             handler._redirect(
                 f"/ticket/new?err=Unit+still+soft-reserved+on+Rental+Ticket+{sc.ticket['ticket_id']}")
             return True
+        _w = booking.get("writein") or {}
+        if _w:
+            _ticket_writein(con, tids[0], _w.get("label"),
+                            _w.get("amount"), _w.get("taxable"))
         con.execute("DELETE FROM pending_bookings WHERE pending_id=?", (pid,))
         con.commit()
         if len(tids) == 1:
@@ -675,6 +752,10 @@ def handle_post(handler, con, data, u):
                 # PO from the Job Info popup (2026-10-15): previously
                 # read by nothing, so a PO typed on a WO was lost.
                 "po": data.get("po") or "",
+                # Build 'as' (Item 6): the form's write-in row.
+                "adjustment": data.get("adjustment"),
+                "adj_label": data.get("adj_label"),
+                "adj_taxable": data.get("adj_taxable") == "1",
             }
             lines = [r for r in rows if not _blank(r)]
             # The WO's own description is the first line's description
@@ -687,8 +768,19 @@ def handle_post(handler, con, data, u):
             wid = engine.save_wo(con, dict(header, description=desc,
                                            lines=lines), wid)
             if _wo_session:
-                engine.clear_revision_pending(
-                    con, "wo", engine.doc_key(con, "wo", wid))
+                # Build 'av': this Save is the pending revision's
+                # commit — finalize voids the original and stands
+                # this Work Order as chain head. A finalize
+                # ValueError propagates like this handler's other
+                # ValueErrors.
+                _wo_note = (data.get("rev_note") or "").strip()
+                _wo_orig = engine.finalize_revision(
+                    con, "wo", wid, _wo_note, handler.desk(con))
+                engine.add_done_manual(
+                    con, f"Work Order {_wo_orig} voided — revised "
+                    f"as {wid}" + (f": {_wo_note}" if _wo_note else ""),
+                    f"/summary/wo/{quote_plus(wid)}",
+                    handler.desk(con))
             if not _wo_existed:
                 engine.add_done_manual(
                     con, f"Created work order {wid}", f"/summary/wo/{wid}",
@@ -696,7 +788,12 @@ def handle_post(handler, con, data, u):
             up = (handler._files or {}).get("wo_upload")
             if up and up[2]:
                 engine.save_job_attachment(con, "wo", wid, up[0], up[2], handler.desk(con))
-            handler._redirect(f"/ticket/new?kind=workorder&msg=Work+order+saved&new={wid}")
+            _back = (f"/ticket/new?kind=workorder&msg=Work+order+saved"
+                     f"&new={wid}")
+            # The WO form prints page-mode (its _btn_row carries no
+            # /print/ sheet) — print-after is the page form.
+            _pa = _printafter_url(data, _back) if _wo_session else None
+            handler._redirect(_pa or _back)
     else:
         return False
     return True

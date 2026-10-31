@@ -156,6 +156,7 @@ from engine_assets import (
     billable_days,
     applied_rate,
     rental_amount,
+    rental_periods,
     compliance,
     fit_reason,
     possession_rules,
@@ -227,6 +228,7 @@ from engine_accounting import (
     payment_batch_info,
     payment_edit_block,
     void_payment_batch,
+    prepare_payment_revision,
     stamp_payment_correction,
     record_doc_payment,
     quote_money_block,
@@ -276,6 +278,9 @@ from engine_accounting import (
     record_cash_entry,
     list_cash_entries,
     peek_cash_entry_no,
+    peek_next_pay_id,
+    doc_writein,
+    ensure_adj_cols,
     complete_cash_revision,
     complete_petty_revision,
     invoice_totals,
@@ -435,7 +440,11 @@ from engine_revisions import (
     set_revision_pending,
     clear_revision_pending,
     revision_info,
-    create_revision,
+    create_pending_revision,
+    finalize_revision,
+    pending_revision_ref,
+    revision_is_pending,
+    pending_filter,
 )
 
 """FleetSheet engine facade.

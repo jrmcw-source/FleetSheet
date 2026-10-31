@@ -66,11 +66,11 @@ class AssetViews(CoreViews):
 
     def _btn_row(self, save_label="Save", jobpop=None, add_item=False, extra="",
                  submit_name="", submit_value="", print_menu=None,
-                 edit_pop=None):
+                 edit_pop=None, edit_href=None):
         from views_core import CoreViews
         return CoreViews._btn_row(self, save_label, jobpop, add_item, extra,
                                   submit_name, submit_value, print_menu,
-                                  edit_pop)
+                                  edit_pop, edit_href)
 
     def _top_commit(self, label, name="", value=""):
         from views_core import CoreViews
@@ -152,7 +152,7 @@ class AssetViews(CoreViews):
             body = self.view_quote_form(con, None, bare=True)
             return bar + body + self._rentals_done(con, "quote", "Quote") + done
         if kind == "change":
-            body = self.view_changes(con, {"co_no": (q or {}).get("co_no", "")}, bare=True)
+            body = self.view_changes(con, {"co_no": (q or {}).get("co_no", ""), "revise": (q or {}).get("revise", "")}, bare=True)
             return bar + body + self._rentals_done(con, "change", "Change order") + done
         if kind == "workorder":
             body = self.view_wo_form(con, None, bare=True)
@@ -161,6 +161,23 @@ class AssetViews(CoreViews):
             return bar + self._new_ticket_checkinout(con) + self._rentals_done(con, "checkinout", "Check in/out") + done
         edit_tid = ((q or {}).get("edit") or "").strip()
         if edit_tid:
+            # Build 'av': revise=1 (the summary / locked-form Edit
+            # door) — the pending revision (standing or fresh)
+            # becomes the load, in this same request; the original
+            # is not voided. A refusal (an invoiced rental) renders
+            # the loaded ticket's locked form with the reason at
+            # the top of the form area.
+            if (q or {}).get("revise") == "1":
+                _target, _err = self._revise_target(
+                    con, "ticket", edit_tid)
+                if _err:
+                    return (bar
+                            + f"<p class=\"err\">{html.escape(_err)}</p>"
+                            + self._ticket_editor(con, edit_tid)
+                            + self._rentals_done(con, "rental", "Rental")
+                            + done)
+                if _target:
+                    edit_tid = _target
             return bar + self._ticket_editor(con, edit_tid) + self._rentals_done(con, "rental", "Rental") + done
         return bar + self._new_ticket_delivery(con, q) + self._rentals_done(con, "rental", "Rental") + done
 
@@ -680,7 +697,7 @@ class AssetViews(CoreViews):
 
           {self._form_head(con, _tk_doc, _tk_date, _tk_cust, _tk_job_lines)}
           <fieldset>
-          {self._line_head()}
+          {self._line_head(total=False)}
           <div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">
             <div><label>Type</label><select disabled><option selected>Rental</option></select></div>
             <div>{combo_field("f_unit", "unit_text", unit_opts, value="", label="Item", required=True, placeholder="Type to search units…")}
@@ -692,6 +709,7 @@ class AssetViews(CoreViews):
             <div><label>Rate $</label><span class="rate-x"><input id="f_rateval" name=rate_value type=number step=0.01 placeholder="unit default" data-label="Rate $" class="w-sm line-rate">
             <input type=hidden name=rate_type value="" class="line-ratetype"><button type=button class=line-del title="Delete line item">✕</button></span></div>
           </div>
+          <div style="text-align:right">{self._writein_row()}</div>
           <p id="ticketsum" class="hint" hidden style="font-size:14px;color:var(--frame);
              background:#eef3fa;border-radius:6px;padding:8px 12px"></p>
           <div><label>Notes</label><input name=location_note data-label="Notes" style="width:100%"></div>
@@ -752,6 +770,8 @@ class AssetViews(CoreViews):
                     f"Summary of Rental# {html.escape(tid)}</a></p>")
         tk_mode = ("session" if engine.revision_pending(
             con, "ticket", t["id"]) else "locked")
+        _tk_revbanner, _tk_orig = self._pending_rev(
+            con, "ticket", t["id"], t)
         cust_code = engine.cust_code(con, t["customer_id"])
         asset_code = engine.asset_code(con, t["asset_id"])
         data = self._new_ticket_form_data(
@@ -840,6 +860,19 @@ class AssetViews(CoreViews):
         rate_val = t["rate_value"]
         rate_txt = ("" if rate_val is None else
                     (f"{float(rate_val):g}"))
+        # Build 'at' Item 2 (Jason, 2026-10-30): the rental-charge
+        # write-over field — the written figure stands in the
+        # field; the computed charge it replaces stands beside it
+        # as the field's context.
+        _ovr_val = self._g(t, "rental_override")
+        # _g renders a stored NULL as "" — the no-override state is
+        # "" as well as None; either one leaves the field blank.
+        _ovr_txt = ("" if _ovr_val in (None, "")
+                    else f"{float(_ovr_val):g}")
+        _tm = engine.ticket_money(con, tid)
+        _computed_txt = (f"Computed charge: "
+                         f"${float(_tm.get('rental_computed', 0)):,.2f}"
+                         if _tm else "")
         _job_vals = {"job_name": t["job_name"] or "",
                      "job_location": t["site_name"] or "",
                      "po": t["po"] or "",
@@ -848,10 +881,10 @@ class AssetViews(CoreViews):
         return f"""
         <div id="formerr" role="alert"></div>
         <form method=post action="/ticket/new" id="ticketform" enctype="multipart/form-data">
-
+          {_tk_revbanner}
           {self._form_head(con, _tk_doc, _tk_date, _tk_cust, _tk_job_lines)}
           <fieldset>
-          {self._line_head()}
+          {self._line_head(total=False)}
           <div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">
             <div><label>Type</label><select disabled><option selected>Rental</option></select></div>
             <div>{combo_field("f_unit", "unit_text", data["unit_opts"], value=data["unit_current"], label="Item", required=True, placeholder="Type to search units…")}
@@ -863,13 +896,14 @@ class AssetViews(CoreViews):
             <div><label>Rate $</label><span class="rate-x"><input id="f_rateval" name=rate_value type=number step=0.01 value="{html.escape(rate_txt, quote=True)}" placeholder="unit default" data-label="Rate $" class="w-sm line-rate">
             <input type=hidden name=rate_type value="{html.escape(t["rate_type"] or "", quote=True)}" class="line-ratetype"><button type=button class=line-del title="Delete line item">✕</button></span></div>
           </div>
+          <div><label>Rental Charge $</label><input name=rental_override type=number step=0.01 class=w-sm value="{_ovr_txt}" placeholder="Computed charge"> <span class="hint">{_computed_txt}</span></div>
+          <div style="text-align:right">{self._writein_row(self._g(t, 'adj_label'), self._g(t, 'adjustment'), bool(self._g(t, 'adj_taxable')))}</div>
           <p id="ticketsum" class="hint" hidden style="font-size:14px;color:var(--frame);
              background:#eef3fa;border-radius:6px;padding:8px 12px"></p>
           <div><label>Notes</label><input name=location_note data-label="Notes" style="width:100%" value="{html.escape(t["location_note"] or "", quote=True)}"></div>
-          {self._btn_row(None, "jobpop", add_item=False, edit_pop="revpop") if tk_mode == "locked" else self._btn_row("Save", "jobpop", add_item=True)}
+          {self._btn_row(None, "jobpop", add_item=False, edit_href=f"/ticket/new?kind=rental&edit={tid}&revise=1") if tk_mode == "locked" else self._btn_row("Save", "jobpop", add_item=True, print_menu=(self._print_menu(page=True, commit=True, doc_label=f"Rental Ticket {_tk_orig}") if _tk_revbanner else None))}
           </fieldset>
                     {self._job_info_popup('jobpop', _job_vals, _tk_extra)}
-          {self._revise_popup(con, "ticket", tid) if tk_mode == "locked" else ""}
         </form>
         {self._LOCK_JS if tk_mode == "locked" else ""}
         """ + ("" if tk_mode == "locked" else self._new_ticket_form_script(
@@ -1136,6 +1170,12 @@ class AssetViews(CoreViews):
             f"flow.</b></span> {html.escape(self._g(t, 'billed_note'))}</p>"
             if t["status"] == "Billed" and not t["invoice_no"]
             and self._g(t, "billed_note") else "")
+        # Build 'at' Item 2: a written-over rental charge states its
+        # audit stamp with the money facts — the summary stays
+        # look-only; the money it states is the written amount.
+        override_mark = (
+            f"<p>{html.escape(self._g(t, 'rental_override_note'))}</p>"
+            if self._g(t, "rental_override_note") else "")
         def _cond_fact(side):
             c = self._g(t, f"{side}_condition")
             if not c:
@@ -1201,7 +1241,16 @@ class AssetViews(CoreViews):
             ("Transport $", f"${m.get('transport', 0):,.2f}"),
             ("Tax", f"${m['tax']:,.2f}"),
             ("Total", f"${m['total']:,.2f}"),
-        ] + money_rows + [
+        ]
+        # Build 'as' (Item 6): the write-in states as a fact when
+        # filled, above the Total it counts into.
+        _wadj, _wlabel, _wtaxed = engine.doc_writein(
+            con, "tickets", "ticket_id", tid)
+        if _wadj or _wlabel:
+            doc_pairs.insert(len(doc_pairs) - 1,
+                             (_wlabel or "Write-in",
+                              f"${float(_wadj):,.2f}"))
+        doc_pairs += money_rows + [
             ("Money", money_fact),
             ("Notes", html.escape(self._g(t, "location_note")) if (self._g(t, "location_note") or "").strip() else None),
             ("Input by:", f"{html.escape(str(self._g(t, 'clerk') or ''))} "
@@ -1232,18 +1281,19 @@ class AssetViews(CoreViews):
             + self._pop_door("jumppop", "Move with note"),
             None if (t.get("revised_by_id") or t["invoice_id"]
                      or t["status"] == "Void")
-            else f"/ticket/new?kind=rental&edit={tid}",
+            else f"/ticket/new?kind=rental&edit={tid}&revise=1",
             self._print_menu(docs=[
                 ("Work Ticket", f"/print/work/{tid}",
                  f"/print/work/{tid}.pdf"),
                 ("Delivery Ticket", f"/print/delivery/{tid}",
-                 f"/print/delivery/{tid}.pdf")]))
+                 f"/print/delivery/{tid}.pdf")],
+                doc_label=f"Rental Ticket {tid}"))
         popups = (
             cond_popups
             + self._pop_wrap("statpop", "Status", status_form)
             + self._pop_wrap("jumppop", "Move with note", jump_form))
         extra_top = (self._revto_line(con, "ticket", t)
-                     + billed_mark + task_nudge(con, f"/ticket/{tid}")
+                     + billed_mark + override_mark + task_nudge(con, f"/ticket/{tid}")
                      + quote_panel + self._paper_warning(t, m))
         return self._sum_page(
             "Rental", tid, [], stored_lines_html, doors, popups,
@@ -1252,7 +1302,10 @@ class AssetViews(CoreViews):
                          ("Job Info", job_pairs),
                          ("Rental", doc_pairs)],
             paper_html=self._sum_paperwork("ticket", tid),
-            pay_doc=("ticket", tid))
+            pay_doc=("ticket", tid),
+            locked=(not t.get("revised_by_id")
+                    and t["status"] != "Void"
+                    and not t.get("rev_pending")))
 
 
     # Open ticket statuses — the Fit column's quiet signal set.
@@ -1808,7 +1861,23 @@ class AssetViews(CoreViews):
         {self._view_row("/sites/all", "Sites")}
         """
 
-    def view_wo_form(self, con, wid, bare=False):
+    def view_wo_form(self, con, wid, bare=False, rq=None, **_kw):
+        if isinstance(bare, dict):
+            rq, bare = bare, False
+        if rq is None and isinstance(_kw.get("q"), dict):
+            rq = _kw["q"]
+        # Build 'av': revise=1 (the summary / locked-form Edit
+        # door) — the pending revision (standing or fresh) becomes
+        # the load, in this same request; the original is not
+        # voided. A refusal renders the loaded order's locked form
+        # with the reason at the top of the form area.
+        _rev_err = ""
+        if wid and rq is not None and (rq.get("revise") == "1"):
+            _target, _err = self._revise_target(con, "wo", wid)
+            if _err:
+                _rev_err = _err
+            elif _target and _target != wid:
+                return self.view_wo_form(con, _target, bare=bare)
         row = None
         if wid:
             row = con.execute("SELECT * FROM work_orders WHERE wo_id=?", (wid,)).fetchone()
@@ -1830,6 +1899,12 @@ class AssetViews(CoreViews):
         if row:
             wo_mode = ("session" if engine.revision_pending(
                 con, "wo", row["id"]) else "locked")
+        _wo_revbanner, _wo_orig = ("", "")
+        if row:
+            _wo_revbanner, _wo_orig = self._pending_rev(
+                con, "wo", row["id"], row)
+        _rev_err_html = (f"<p class=\"err\">{html.escape(_rev_err)}</p>"
+                         if _rev_err else "")
         def v(k, default=""):
             if not row:
                 return default
@@ -1854,15 +1929,25 @@ class AssetViews(CoreViews):
         # stored lines; new renders one blank row.
         wo_lines = engine.wo_lines(con, wid) if row else []
         if not wo_lines:
-            wo_lines = [{"item": "", "description": "", "category": "", "qty": 1, "rate": 0, "uom": ""}]
+            # Build 'av': a lineless work order's description stands
+            # in its header alone (legacy and seeded records); the
+            # form's first row carries it, so the record's own
+            # content stands on its form — and a revision of such
+            # an order is prefilled with it like any other.
+            wo_lines = [{"item": "",
+                         "description": (v("description") or "")
+                         if row else "",
+                         "category": "", "qty": 1, "rate": 0,
+                         "uom": ""}]
         line_rows = "".join(
-            f"""<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">
+            f"""<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px 104px;gap:8px;align-items:start">
             <div><label>Type</label>{lookup_select(con, 'inv_cat', f'type{i}', current=(ln['category'] if 'category' in ln.keys() else '') or '', blank=True)}</div>
             <div><label>Item</label><input name=item{i} value="{html.escape(str(ln['item'] or ''), quote=True)}"></div>
             <div><label>Description</label><textarea name=description{i} class=ldesc rows=1>{html.escape(str(ln['description'] or ''))}</textarea></div>
             <div><label>Qty</label><input name=qty{i} type=number step="any" value="{html.escape(str(ln['qty'] if ln['qty'] is not None else 1))}" class=w-xs></div>
             <div><label>Unit</label>{lookup_select(con, 'inv_uom', f'uom{i}', current=(ln['uom'] if 'uom' in ln.keys() else '') or '', blank=True, vals=enabled_values(con, 'inv_uom'), add_option=False)}</div>
             <div><label>Rate $</label><span class="rate-x"><input name=cost{i} type=number step=0.01 value="{html.escape(str(ln['rate'] if ln['rate'] is not None else 0))}" class=w-sm><button type=button class=line-del title="Delete line item">✕</button></span></div>
+            <div><label>Total</label><div class=ltotal style="text-align:right;font-weight:600;padding-top:7px">${(float(ln['qty']) if ln['qty'] is not None else 1) * (float(ln['rate']) if ln['rate'] is not None else 0):,.2f}</div></div>
           </div>"""
             for i, ln in enumerate(wo_lines))
         # Header zone (build 'r', Jason 2026-10-25, facelift item 4 —
@@ -1910,15 +1995,17 @@ class AssetViews(CoreViews):
         _wo_date = f'<label>Date</label> <input type=date name=wo_date value="{html.escape(v("wo_date")[:10] if v("wo_date") else today)}" class=w-sm>'
         return ("" if bare else self._ticket_kind_bar(con, "workorder")) + f"""
         {quote_panel}
+        {_rev_err_html}
         <form method=post action="/wo/save" enctype="multipart/form-data">
+          {_wo_revbanner}
           <input type=hidden name=wo_id value="{html.escape(wid) if row else ''}">
           {self._form_head(con, _wo_doc, _wo_date, _wo_cust, [("PO #", v("po"))])}
           {self._line_head()}
           {line_rows}
+          <div style="text-align:right">{self._writein_row(row.get('adj_label') or '', row.get('adjustment'), bool(row.get('adj_taxable'))) if row else self._writein_row()}</div>
           <div><label>Notes</label><input name=notes value="{html.escape(v('notes'))}" style="width:100%"></div>
-          {self._btn_row(None, "wojobpop", add_item=False, edit_pop="revpop") if wo_mode == "locked" else self._btn_row("Save", "wojobpop", add_item=True)}
+          {self._btn_row(None, "wojobpop", add_item=False, edit_href=f"/wo/{wid}?revise=1") if wo_mode == "locked" else self._btn_row("Save", "wojobpop", add_item=True, print_menu=(self._print_menu(page=True, commit=True, doc_label=f"Work Order {_wo_orig}") if _wo_revbanner else None))}
           {self._job_info_popup('wojobpop', {"po": v("po")}, _wo_extra)}
-          {self._revise_popup(con, "wo", wid) if wo_mode == "locked" else ""}
         </form>
         {self._LOCK_JS if wo_mode == "locked" else ""}
         """ + ("""<script>
@@ -1950,6 +2037,14 @@ class AssetViews(CoreViews):
           Array.prototype.forEach.call(form.querySelectorAll('button[type=button]'), function(b){
             if (b.textContent.trim().toLowerCase() === 'add item') b.addEventListener('click', addItemRow);
           });
+          // Row totals (build 'as', Item 5).
+          function woTotals(){
+            form.querySelectorAll('.lineitem-row').forEach(function(r){
+              var q=r.querySelector('input[name^="qty"]'), c=r.querySelector('input[name^="cost"]'), lt=r.querySelector('.ltotal');
+              if(q&&c&&lt) lt.textContent='$'+((parseFloat(q.value)||0)*(parseFloat(c.value)||0)).toFixed(2);
+            });
+          }
+          form.addEventListener('input', woTotals); woTotals();
         })();
         </script>""") + (
             # Build 'u' (Jason 2026-10-25, universal summary pattern;
@@ -2075,6 +2170,13 @@ class AssetViews(CoreViews):
         else:
             _money_facts = [("Total", None), ("Settled", None),
                             ("Balance", None)]
+        # Build 'as' (Item 6): the write-in states as a fact when
+        # filled, above the Total it counts into (customer work).
+        _wadj, _wlabel, _wtaxed = engine.doc_writein(
+            con, "work_orders", "wo_id", wid)
+        if _wadj or _wlabel:
+            doc_pairs.append((_wlabel or "Write-in",
+                              f"${float(_wadj):,.2f}"))
         doc_pairs += _money_facts + [
             ("Labor", f"${float(v('labor') or 0):,.2f}"
              if (v('labor') or '').strip() else None),
@@ -2091,8 +2193,9 @@ class AssetViews(CoreViews):
             "",
             None if (row.get("revised_by_id")
                      or (v("status") or "") == "Void")
-            else f"/wo/{wid}",
-            self._print_menu(page=True))
+            else f"/wo/{wid}?revise=1",
+            self._print_menu(page=True,
+                             doc_label=f"Work Order {wid}"))
         # Build 'ac' (Jason 2026-10-27): no family tab strip on a
         # summary — the page opens bare under its title, like the
         # Rental and Sale summaries.
@@ -2104,7 +2207,10 @@ class AssetViews(CoreViews):
                          ("Job Info", job_pairs),
                          ("Work Order", doc_pairs)],
             paper_html=self._sum_paperwork("wo", wid),
-            pay_doc=("wo", wid))
+            pay_doc=("wo", wid),
+            locked=(not row.get("revised_by_id")
+                    and (v("status") or "") != "Void"
+                    and not row.get("rev_pending")))
 
     def view_wos_all(self, con):
         """Work Orders list fragment — the universal View popup's
@@ -2183,6 +2289,18 @@ class AssetViews(CoreViews):
         # refuses the same way the revise gate does — its money
         # lives on the invoice.
         edit_grp = ((q or {}).get("edit") or "").strip()
+        # Build 'av': revise=1 (the summary / locked-form Edit
+        # door) — the pending revision (standing or fresh) becomes
+        # the load, in this same request; the original is not
+        # voided. A refusal (an invoiced sale) renders the loaded
+        # sale's locked form with the reason at its head.
+        if edit_grp and (q or {}).get("revise") == "1":
+            _target, _err = self._revise_target(con, "sale", edit_grp)
+            if _err:
+                return (f"<p class=\"err\">{html.escape(_err)}</p>"
+                        + self.view_sale(con, {"edit": edit_grp}))
+            if _target:
+                edit_grp = _target
         edit_rows = []
         edit_head = None
         sale_mode = None
@@ -2213,6 +2331,10 @@ class AssetViews(CoreViews):
                         f"Summary of Sales Ticket# {html.escape(edit_grp)}</a></p>")
             sale_mode = ("session" if engine.revision_pending(
                 con, "sale", edit_head["id"]) else "locked")
+        _sale_revbanner, _sale_orig = ("", "")
+        if edit_head is not None:
+            _sale_revbanner, _sale_orig = self._pending_rev(
+                con, "sale", edit_head["id"], edit_head)
         # Available assets (not sold, active, in service). Sale draw
         # (Jason 2026-10-24 ruling, amended the same day): NO class
         # is excluded — Fleet sells too, because long-rent customers
@@ -2295,7 +2417,7 @@ class AssetViews(CoreViews):
                 suf = "" if i == 0 else str(i)
                 code = engine.asset_code(con, r["asset_id"])
                 return (
-                    f'<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">'
+                    f'<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px 104px;gap:8px;align-items:start">'
                     f'<input type=hidden name=line_ref{suf} value="{html.escape(r["sale_id"], quote=True)}">'
                     f'<div><label>Type</label><select disabled><option selected>Item</option></select></div>'
                     f'<div><label>Item</label><select name=asset_id{suf} required><option value="">— Pick —</option>{aopts_for(code)}</select></div>'
@@ -2303,6 +2425,7 @@ class AssetViews(CoreViews):
                     f'<div><label>Qty</label><input name=qty{suf} type=number min=1 value={html.escape(str(r["qty"] or 1), quote=True)} required class=w-xs></div>'
                     f'<div><label>Unit</label><select disabled><option selected>Each</option></select></div>'
                     f'<div><label>Price</label><span class="rate-x"><input name=amount{suf} type=number step=0.01 min=0 required class=w-sm value="{float(r["amount"] or 0):g}"><button type=button class=line-del title="Delete line item">✕</button></span></div>'
+                    f'<div><label>Total</label><div class=ltotal style="text-align:right;font-weight:600;padding-top:7px">${float(r["amount"] or 0):,.2f}</div></div>'
                     f'</div>')
             _sale_rows = "".join(
                 _sale_row(i, r) for i, r in enumerate(edit_rows))
@@ -2317,13 +2440,14 @@ class AssetViews(CoreViews):
             _sale_date_val = today
             _sale_notes = ""
             _sale_rows = (
-                '<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start">'
+                '<div class="lineitem-row" style="display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px 104px;gap:8px;align-items:start">'
                 '<div><label>Type</label><select disabled><option selected>Item</option></select></div>'
                 f'<div><label>Item</label><select name=asset_id required><option value="">— Pick —</option>{aopts}</select></div>'
                 '<div><label>Description</label><textarea name=item_desc class=ldesc rows=1 placeholder="Details"></textarea></div>'
                 '<div><label>Qty</label><input name=qty type=number min=1 value=1 required class=w-xs></div>'
                 '<div><label>Unit</label><select disabled><option selected>Each</option></select></div>'
                 '<div><label>Price</label><span class="rate-x"><input name=amount type=number step=0.01 min=0.01 required class=w-sm><button type=button class=line-del title="Delete line item">✕</button></span></div>'
+                '<div><label>Total</label><div class=ltotal style="text-align:right;font-weight:600;padding-top:7px">$0.00</div></div>'
                 '</div>')
         _sale_cust = (f'<div><label>Customer</label><select name=customer_id required>'
                       f'<option value="">— Pick —</option>{copts}</select></div>')
@@ -2333,15 +2457,16 @@ class AssetViews(CoreViews):
         _sale_date = f'<label>Date</label> <input type=date name=sale_date value="{_sale_date_val}" required class=w-sm>'
         return f"""
         <form method=post action="/sale/save" enctype="multipart/form-data">
+          {_sale_revbanner}
           {'' if sale_mode == "session" else f'<input type=hidden name=sale_id value="{sale_no}">'}
           {_sale_hiddens}
           {self._form_head(con, _sale_doc, _sale_date, _sale_cust, _sale_job)}
           {self._line_head("Price")}
           {_sale_rows}
+          <div style="text-align:right">{self._writein_row(self._g(edit_head, 'adj_label'), self._g(edit_head, 'adjustment'), bool(self._g(edit_head, 'adj_taxable'))) if edit_head is not None else self._writein_row()}</div>
           <div><label>Notes</label><input name=notes style="width:100%" value="{html.escape(_sale_notes, quote=True)}"></div>
-          {self._btn_row(None, "salejobpop", add_item=False, edit_pop="revpop") if sale_mode == "locked" else self._btn_row("Save", "salejobpop", add_item=True)}
+          {self._btn_row(None, "salejobpop", add_item=False, edit_href=f"/sale?edit={edit_grp}&revise=1") if sale_mode == "locked" else self._btn_row("Save", "salejobpop", add_item=True, print_menu=(self._print_menu(page=True, commit=True, doc_label=f"Sales Ticket {_sale_orig}") if _sale_revbanner else None))}
           {self._job_info_popup('salejobpop', _sale_vals, _sale_extra)}
-          {self._revise_popup(con, "sale", edit_grp) if sale_mode == "locked" else ""}
           <div id="saleconfpop" class="wpop" style="display:none;position:fixed;top:8%;left:8%;right:8%;background:white;border:2px solid #333;padding:18px;z-index:1000;max-height:84%;overflow:auto">
             <h3 class="wpop-h" style="margin-top:0">Confirm sale {self._pop_furniture("saleconfpop")}</h3>
             <p id="plant-confirm" hidden><label><input type=checkbox name=plant_confirm value=1>
@@ -2381,6 +2506,15 @@ class AssetViews(CoreViews):
           Array.prototype.forEach.call(form.querySelectorAll('button[type=button]'), function(b){{
             if (b.textContent.trim().toLowerCase() === 'add item') b.addEventListener('click', addItemRow);
           }});
+          // Row totals (build 'as', Item 5): on a sale the Price is
+          // the row's amount, so the Total cell mirrors it.
+          function saleTotals(){{
+            form.querySelectorAll('.lineitem-row').forEach(function(r){{
+              var a=r.querySelector('input[name^="amount"]'), lt=r.querySelector('.ltotal');
+              if(a&&lt) lt.textContent='$'+(parseFloat(a.value)||0).toFixed(2);
+            }});
+          }}
+          form.addEventListener('input', saleTotals); saleTotals();
           // Plant-sale and Fleet-sale double checks (Jason
           // 2026-10-24): each confirm row shows only while an asset
           // of its class is picked in some row, and hides (and
@@ -2519,6 +2653,13 @@ class AssetViews(CoreViews):
             ("Input by:", f"{html.escape(str(self._g(head, 'clerk') or ''))} "
                           f"{html.escape(fmt_datetime(self._g(head, 'created_at')))}".strip()),
         ]
+        # Build 'as' (Item 6): the write-in states as a fact when
+        # filled, above the Total it counts into.
+        _wadj, _wlabel, _wtaxed = engine.doc_writein(
+            con, "sales", "sale_id", grp)
+        if _wadj or _wlabel:
+            doc_pairs.insert(2, (_wlabel or "Write-in",
+                                 f"${float(_wadj):,.2f}"))
         doc_pairs += self._chain_facts(
             con, "sale", head,
             lambda n: f"/sale/{html.escape(n, quote=True)}")
@@ -2533,8 +2674,9 @@ class AssetViews(CoreViews):
             "",
             None if (dict(head).get("revised_by_id")
                      or any(r["invoice_id"] for r in rows))
-            else f"/sale?edit={grp}",
-            self._print_menu(page=True))
+            else f"/sale?edit={grp}&revise=1",
+            self._print_menu(page=True,
+                             doc_label=f"Sales Ticket {grp}"))
         return self._sum_page(
             "Sales Ticket", grp, [], lines_html, doors, "",
             "/sales/all", "Sales Tickets",
@@ -2543,4 +2685,6 @@ class AssetViews(CoreViews):
                          ("Job Info", job_pairs),
                          ("Sales Ticket", doc_pairs)],
             paper_html=self._sum_paperwork("sale", grp),
-            pay_doc=("sale", grp))
+            pay_doc=("sale", grp),
+            locked=(not dict(head).get("revised_by_id")
+                    and not dict(head).get("rev_pending")))

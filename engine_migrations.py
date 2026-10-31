@@ -221,6 +221,17 @@ def _ensure_customer_site_business_tables(con: sqlite3.Connection) -> None:
 
 def migrate_legacy_schema(con: sqlite3.Connection) -> None:
     _ensure_customer_site_business_tables(con)
+    # Build 'as' (Jason 2026-10-30, Item 6): the write-in charge
+    # above the subtotal — born on invoices in the 2026-10-20
+    # invoice round — stands on every money document kind. Existing
+    # books gain the same three columns the invoice carries.
+    for _t in ("quotes", "change_orders", "credit_memos",
+               "work_orders", "sales", "tickets"):
+        _tcols = [r[1] for r in con.execute(f"PRAGMA table_info({_t})")]
+        if _tcols and "adjustment" not in _tcols:
+            con.execute(f"ALTER TABLE {_t} ADD COLUMN adjustment REAL")
+            con.execute(f"ALTER TABLE {_t} ADD COLUMN adj_label TEXT")
+            con.execute(f"ALTER TABLE {_t} ADD COLUMN adj_taxable INTEGER")
     # Build 'v': once a book carries surrogate keys, the pre-'v' data
     # backfills below (written against the number-keyed shape) must
     # never run again — their work is done and their column references
@@ -277,6 +288,15 @@ def migrate_legacy_schema(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE company ADD COLUMN backup_schedule TEXT NOT NULL DEFAULT 'weekly'")
     if ccols and "backup_every_days" not in ccols:
         con.execute("ALTER TABLE company ADD COLUMN backup_every_days INTEGER NOT NULL DEFAULT 7")
+    # Build 'at' (Jason 2026-10-30): period-rate minimums beside
+    # min_days — the minimum weeks on a weekly-rate contract and
+    # the minimum months on a monthly-rate contract, factory 1
+    # each. Period rates bill whole periods rounded up, so these
+    # floors stand where min_days stands for daily rates.
+    if ccols and "min_weeks" not in ccols:
+        con.execute("ALTER TABLE company ADD COLUMN min_weeks INTEGER NOT NULL DEFAULT 1")
+    if ccols and "min_months" not in ccols:
+        con.execute("ALTER TABLE company ADD COLUMN min_months INTEGER NOT NULL DEFAULT 1")
     tcols = [r[1] for r in con.execute("PRAGMA table_info(tickets)")]
     if tcols and "customer_transport" not in tcols:
         con.execute("ALTER TABLE tickets ADD COLUMN customer_transport INTEGER NOT NULL DEFAULT 0")
@@ -307,6 +327,17 @@ def migrate_legacy_schema(con: sqlite3.Connection) -> None:
         # "<note> · by <clerk> · <when>", and shown on the ticket page
         # wherever its status shows.
         con.execute("ALTER TABLE tickets ADD COLUMN billed_note TEXT NOT NULL DEFAULT ''")
+    if tcols and "rental_override" not in tcols:
+        # Build 'at' Item 2 (Jason, 2026-10-30): the operator may
+        # write over the ticket's computed rental charge with a
+        # figure of his own, on the ticket form itself. The written
+        # amount is stored here; the computed amount is never
+        # destroyed — clearing the field restores it. The note
+        # column carries the audit stamp of the latest set or
+        # clear ("… · by <clerk> · <when>"), the fit_override /
+        # billed_note pattern.
+        con.execute("ALTER TABLE tickets ADD COLUMN rental_override REAL")
+        con.execute("ALTER TABLE tickets ADD COLUMN rental_override_note TEXT NOT NULL DEFAULT ''")
     if tcols and "transport_fee" not in tcols:
         con.execute("ALTER TABLE tickets ADD COLUMN transport_fee REAL NOT NULL DEFAULT 0")
     if tcols and "tax_loc_id" not in tcols:

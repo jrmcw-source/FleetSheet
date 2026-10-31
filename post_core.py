@@ -34,6 +34,33 @@ def _desk_name(handler, con):
         return ""
 
 
+def _pdf_variant(doc):
+    """A document's PDF path: '.pdf' before any query string
+    (the printpack pairing, e.g. /print/work/<id> ↔
+    /print/work/<id>.pdf)."""
+    base, sep, qs = (doc or "").partition("?")
+    return base + ".pdf" + (sep + qs if sep else "")
+
+
+def _printafter_url(data, back, doc=None):
+    """Print-after-commit (build 'av'): when the universal print
+    box's commit mode posted fs_print_dest, the save's landing is
+    the /printafter page instead of the handler's default redirect.
+    Document kinds pass their /print/ screen path (doc); page-mode
+    kinds (doc=None) carry dest as page<paper|screen|location>.
+    Returns None when no print destination was posted."""
+    dest = (data.get("fs_print_dest") or "").strip()
+    if dest not in ("paper", "screen", "location"):
+        return None
+    if doc is None:
+        return ("/printafter?dest=" + quote_plus("page" + dest)
+                + "&back=" + quote_plus(back))
+    return ("/printafter?dest=" + quote_plus(dest)
+            + "&doc=" + quote_plus(doc)
+            + "&pdf=" + quote_plus(_pdf_variant(doc))
+            + "&back=" + quote_plus(back))
+
+
 def _rerender(handler, con, title, path, body, err=""):
     """Re-render a page in place after a failed POST (Batch 3 #1):
     the operator stays on the page they were on, the error is stated
@@ -53,6 +80,22 @@ def _chain_redirect(handler, adv):
     """Redirect to a chain advance target, carrying its step message."""
     sep = "&" if "?" in adv[0] else "?"
     handler._redirect(adv[0] + sep + "from=setup&msg=" + quote_plus(adv[1]))
+
+
+def _sale_writein(con, head_key, data):
+    """Build 'as' (Item 6): the Sale form's write-in stands on the
+    group's head row and counts once into the sale's total
+    (doc_total reads it from there)."""
+    engine.ensure_adj_cols(con, "sales")
+    try:
+        amt = round(float(data.get("adjustment") or 0), 2)
+    except (TypeError, ValueError):
+        amt = 0.0
+    con.execute(
+        "UPDATE sales SET adjustment=?, adj_label=?, adj_taxable=? "
+        "WHERE id=?",
+        (amt or None, (data.get("adj_label") or "").strip() or None,
+         1 if data.get("adj_taxable") == "1" else None, head_key))
 
 
 def _post_sale_edit(handler, con, data, u):
@@ -182,16 +225,27 @@ def _post_sale_edit(handler, con, data, u):
             con.execute("UPDATE sales SET sale_id=? WHERE id=?",
                         (_new_no, gkey))
             grp = _new_no
+        _sale_writein(con, gkey, data)
         con.commit()
-        engine.clear_revision_pending(con, "sale", gkey)
+        # Build 'av': this Save is the pending revision's commit —
+        # finalize voids the original group and stands this sale as
+        # chain head. A finalize ValueError surfaces through this
+        # handler's except (rollback + editor redirect with err).
+        engine.finalize_revision(
+            con, "sale", grp, (data.get("rev_note") or "").strip(),
+            handler.desk(con))
         up = (handler._files or {}).get("job_attach")
         if up and up[2]:
             engine.save_job_attachment(con, "sale", grp, up[0], up[2],
                                        handler.desk(con))
+        # The handler already logs this save's Done entry.
         engine.add_done_manual(
             con, f"Edited Sale {grp}", f"/sale/{grp}",
             handler.desk(con))
-        handler._redirect(f"/sale/{grp}?msg=" + quote_plus("Sale saved"))
+        _back = f"/sale/{grp}?msg=" + quote_plus("Sale saved")
+        # The Sale form prints page-mode (no /print/ sheet) —
+        # print-after is the page form.
+        handler._redirect(_printafter_url(data, _back) or _back)
     except Exception as e:
         con.rollback()
         handler._redirect(
@@ -298,6 +352,8 @@ def _post_sale_save(handler, con, data, u):
                 sale_group=(ids[0] if ids else None),
                 plant_confirm=(data.get("plant_confirm") == "1"),
                 fleet_confirm=(data.get("fleet_confirm") == "1")))
+        _sale_writein(con, engine.doc_key(con, "sale", ids[0]), data)
+        con.commit()
         up = (handler._files or {}).get("job_attach")
         if up and up[2]:
             engine.save_job_attachment(con, "sale", ids[0], up[0], up[2], handler.desk(con))
@@ -937,8 +993,8 @@ def _post_setup_billing(handler, con, data, u):
     if _master_terms and _dterms not in _master_terms:
         _en_terms = enabled_values(con, "terms")
         _dterms = _en_terms[0] if _en_terms else _master_terms[0]
-    con.execute("UPDATE company SET invoice_prefix=?, billing_email=?, default_terms=?, min_days=?, bill_both_dates=? WHERE id=1",
-                (data.get("invoice_prefix") or "INV", data.get("billing_email") or "", _dterms, int(data.get("min_days") or 1), 1 if data.get("bill_both_dates") == "1" else 0))
+    con.execute("UPDATE company SET invoice_prefix=?, billing_email=?, default_terms=?, min_days=?, min_weeks=?, min_months=?, bill_both_dates=? WHERE id=1",
+                (data.get("invoice_prefix") or "INV", data.get("billing_email") or "", _dterms, int(data.get("min_days") or 1), int(data.get("min_weeks") or 1), int(data.get("min_months") or 1), 1 if data.get("bill_both_dates") == "1" else 0))
     try:
         engine.set_option(con, "quote_valid_days", str(max(1, int(data.get("quote_valid_days") or 30))))
     except (TypeError, ValueError):
@@ -1315,22 +1371,41 @@ def _folder_return(target):
     return "/backup" if target == "backup" else "/setup/admin"
 
 
+def _folder_ret(data):
+    """The folder picker's return address (build 'av'): the print
+    box's Change… door threads the page it came from through the
+    picker as `ret`, so picking a folder lands back on that page.
+    Only a local path is honored — starts with "/", never "//",
+    never a scheme URL."""
+    ret = (data.get("ret") or "").strip()
+    if ret.startswith("/") and not ret.startswith("//") \
+            and "://" not in ret:
+        return ret
+    return ""
+
+
 def _post_folder_pick(handler, con, data, u):
     # Folder browser pick (Batch 3 #10e): store the browsed folder for
     # the backup setting (company.backup_dir) or the print setting
     # (print_folder option). An empty path clears to the default.
     target = data.get("target") if data.get("target") in ("backup", "print") else "backup"
     path = (data.get("path") or "").strip()
+    ret = _folder_ret(data)
     if path and not Path(path).is_dir():
         handler._redirect("/setup/folders?for=" + target + "&path=" +
-                          quote_plus(path) + "&err=" + quote_plus("That folder was not found. Browse to a folder that exists, then pick it."))
+                          quote_plus(path) + "&err=" + quote_plus("That folder was not found. Browse to a folder that exists, then pick it.")
+                          + (("&ret=" + quote_plus(ret)) if ret else ""))
         return
     if target == "print":
         engine.set_option(con, "print_folder", path)
     else:
         con.execute("UPDATE company SET backup_dir=? WHERE id=1", (path,))
         con.commit()
-    handler._redirect(_folder_return(target) + "?msg=" + quote_plus("Folder saved"))
+    if ret:
+        handler._redirect(ret + ("&" if "?" in ret else "?")
+                          + "msg=" + quote_plus("Folder saved"))
+    else:
+        handler._redirect(_folder_return(target) + "?msg=" + quote_plus("Folder saved"))
 
 
 def _post_folder_new(handler, con, data, u):
@@ -1339,11 +1414,14 @@ def _post_folder_new(handler, con, data, u):
     target = data.get("target") if data.get("target") in ("backup", "print") else "backup"
     base = Path((data.get("path") or "").strip() or ".")
     name = (data.get("name") or "").strip()
+    ret = _folder_ret(data)
+    _ret_qs = ("&ret=" + quote_plus(ret)) if ret else ""
     if (not name or name in (".", "..") or "/" in name or "\\" in name
             or len(name) > 80):
         handler._redirect("/setup/folders?for=" + target + "&path=" +
                           quote_plus(str(base)) + "&err=" +
-                          quote_plus("That folder name is not allowed. Use a single folder name, up to 80 characters, with no slashes."))
+                          quote_plus("That folder name is not allowed. Use a single folder name, up to 80 characters, with no slashes.")
+                          + _ret_qs)
         return
     newp = base / name
     try:
@@ -1352,10 +1430,12 @@ def _post_folder_new(handler, con, data, u):
         pass
     except OSError:
         handler._redirect("/setup/folders?for=" + target + "&path=" +
-                          quote_plus(str(base)) + "&err=" + quote_plus("That folder could not be created. Check that the location is available and writable, then try again."))
+                          quote_plus(str(base)) + "&err=" + quote_plus("That folder could not be created. Check that the location is available and writable, then try again.")
+                          + _ret_qs)
         return
     handler._redirect("/setup/folders?for=" + target + "&path=" +
-                      quote_plus(str(newp)) + "&msg=" + quote_plus("Folder created"))
+                      quote_plus(str(newp)) + "&msg=" + quote_plus("Folder created")
+                      + _ret_qs)
 
 
 def _print_folder(con):
@@ -1430,128 +1510,6 @@ def _post_print_save_page(handler, con, data, u):
     return True
 
 
-_REVISE_LABELS = {
-    "ticket": "Rental Ticket", "sale": "Sales Ticket", "wo": "Work Order",
-    "quote": "Quote", "change": "Change Order", "invoice": "Invoice",
-    "credit": "Credit Memo", "payment": "Payment",
-    "cash": "Cash Entry", "petty": "Petty Cash Entry",
-}
-
-_REVISE_SUMMARY = {
-    "ticket": "/ticket/{r}", "sale": "/sale/{r}",
-    "wo": "/summary/wo/{r}", "quote": "/summary/quote/{r}",
-    "change": "/summary/change/{r}", "invoice": "/invoice/{r}",
-    "credit": "/summary/credit/{r}", "payment": "/summary/payment/{r}",
-    # Registers, not summaries: the Done entry lands on the
-    # register/form that carries the chain (redirect #2).
-    "cash": "/money?tab=cash&edit={r}", "petty": "/petty?edit={r}",
-}
-
-
-def _revise_payment(con, ref, reason, name):
-    """The payment arm of void-and-revise (build 'ab'): confirm
-    voids the original batch on the ledgers — signed with the
-    reason, the operator's name, and the timestamp — and names its
-    replacement batch '<original> Rev. N'. The replacement carries
-    no rows until its form's Apply posts them; the target name
-    rides a session option the correction post checks."""
-    if not reason:
-        raise ValueError("A revision needs its reason")
-    if not name:
-        raise ValueError("A revision needs the operator's name")
-    block = engine.payment_edit_block(con, ref)
-    if block:
-        raise ValueError(block)
-    info = engine.payment_batch_info(con, ref)
-    depth = 0
-    seen = set()
-    cur = info.get("corrects")
-    while cur and cur not in seen:
-        seen.add(cur)
-        depth += 1
-        nxt = engine.payment_batch_info(con, cur)
-        cur = nxt.get("corrects") if nxt.get("rows") else None
-    existing = set()
-    for tbl in ("collections", "doc_collections"):
-        try:
-            existing |= {r[0] for r in con.execute(
-                f"SELECT DISTINCT COALESCE(batch_id, pay_id) FROM {tbl}")}
-        except Exception:
-            pass
-    n = depth + 1
-    cand = f"{engine.rev_base(ref)} Rev. {n}"
-    while cand in existing:
-        n += 1
-        cand = f"{engine.rev_base(ref)} Rev. {n}"
-    at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    engine.void_payment_batch(con, ref, name, cand, reason=reason, at=at)
-    engine.set_option(con, f"revtarget:payment:{cand}", ref)
-    # Refresh the statuses of invoices the voided batch touched —
-    # collections rows name them by engine key (invoice_id); doc
-    # rows settled documents, whose money reads are chain-aware
-    # already and need no status write.
-    for r in con.execute(
-            "SELECT DISTINCT invoice_id FROM collections "
-            "WHERE COALESCE(batch_id, pay_id)=?", (ref,)):
-        _ino = engine.num_of(con, "invoices", r[0])
-        if _ino:
-            engine._refresh_invoice_status(con, _ino)
-    con.commit()
-    return cand
-
-
-def _post_revise(handler, con, data, u):
-    """POST /revise — the Edit act on a locked-open document form
-    (Jason 2026-10-26, void-and-revise): reason + operator name,
-    confirmed, void the original and create its revision in one
-    engine operation (JC-AB0), then land on the revision's own form
-    under its session marker."""
-    kind = (data.get("rev_kind") or "").strip()
-    ref = (data.get("rev_ref") or "").strip()
-    reason = (data.get("rev_reason") or "").strip()
-    name = (data.get("rev_name") or "").strip()
-    label = _REVISE_LABELS.get(kind, "Document")
-    back = _REVISE_SUMMARY.get(kind, "/").format(r=quote_plus(ref))
-    try:
-        if kind == "payment":
-            new_ref = _revise_payment(con, ref, reason, name)
-            form_url = (f"/money?tab=pay&edit={quote_plus(ref)}"
-                        f"&rev={quote_plus(new_ref)}")
-        elif kind in _REVISE_LABELS:
-            new_ref = engine.create_revision(con, kind, ref, reason, name)
-            form_url = {
-                "ticket": f"/ticket/new?kind=rental&edit={quote_plus(new_ref)}",
-                "sale": f"/sale?edit={quote_plus(new_ref)}",
-                "wo": f"/wo/{quote_plus(new_ref)}",
-                "quote": f"/quote/{quote_plus(new_ref)}",
-                "change": f"/ticket/new?kind=change&co_no={quote_plus(new_ref)}",
-                "invoice": f"/invoice/new?edit={quote_plus(new_ref)}",
-                "credit": f"/money?tab=credit&cm_no={quote_plus(new_ref)}",
-                "cash": f"/money?tab=cash&edit={quote_plus(new_ref)}",
-                "petty": f"/petty?edit={quote_plus(new_ref)}",
-            }[kind]
-            if kind == "credit":
-                _cmr = con.execute(
-                    "SELECT customer_id FROM credit_memos "
-                    "WHERE cm_no=?", (new_ref,)).fetchone()
-                if _cmr:
-                    form_url += "&customer_id=" + quote_plus(
-                        engine.cust_code(con, _cmr["customer_id"]) or "")
-        else:
-            raise ValueError("Unknown document kind")
-    except ValueError as e:
-        handler._redirect(back + "?err=" + quote_plus(str(e)[:160]))
-        return True
-    engine.add_done_manual(
-        con, f"{label} {ref} voided — revised as {new_ref}: {reason}",
-        _REVISE_SUMMARY[kind].format(r=quote_plus(new_ref)), name)
-    handler._redirect(
-        form_url + ("&" if "?" in form_url else "?") + "msg="
-        + quote_plus(f"{label} {ref} voided. Revision {new_ref} — "
-                     f"edit and Save."))
-    return True
-
-
 def _post_summary_upload(handler, con, data, u):
     """A summary's Paperwork upload (build 'af', Jason 2026-10-28):
     add-only — the file field on a summary files the upload through
@@ -1582,7 +1540,6 @@ def _post_summary_upload(handler, con, data, u):
 
 _POST_ROUTES = {
     "/summary/upload": _post_summary_upload,
-    "/revise": _post_revise,
     "/print/save": _post_print_save,
     "/print/save-page": _post_print_save_page,
     "/sale/save": _post_sale_save,

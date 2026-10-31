@@ -1,6 +1,6 @@
 """FleetSheet POST actions — accounting flow: invoices, payments, credit, quotes, petty cash, customers, export."""
 import re
-from datetime import date
+from datetime import date, datetime
 
 import engine
 from urllib.parse import quote_plus
@@ -18,6 +18,33 @@ def _desk(handler, con):
         return (handler.desk(con) or "").strip()[:40]
     except Exception:
         return ""
+
+
+def _pdf_variant(doc):
+    """A document's PDF path: '.pdf' before any query string
+    (the printpack pairing, e.g. /print/work/<id> ↔
+    /print/work/<id>.pdf)."""
+    base, sep, qs = (doc or "").partition("?")
+    return base + ".pdf" + (sep + qs if sep else "")
+
+
+def _printafter_url(data, back, doc=None):
+    """Print-after-commit (build 'av'): when the universal print
+    box's commit mode posted fs_print_dest, the save's landing is
+    the /printafter page instead of the handler's default redirect.
+    Document kinds pass their /print/ screen path (doc); page-mode
+    kinds (doc=None) carry dest as page<paper|screen|location>.
+    Returns None when no print destination was posted."""
+    dest = (data.get("fs_print_dest") or "").strip()
+    if dest not in ("paper", "screen", "location"):
+        return None
+    if doc is None:
+        return ("/printafter?dest=" + quote_plus("page" + dest)
+                + "&back=" + quote_plus(back))
+    return ("/printafter?dest=" + quote_plus(dest)
+            + "&doc=" + quote_plus(doc)
+            + "&pdf=" + quote_plus(_pdf_variant(doc))
+            + "&back=" + quote_plus(back))
 
 
 def _post_invoice_create(handler, con, data, u):
@@ -129,6 +156,15 @@ def _post_invoice_create(handler, con, data, u):
             return 0.0
     q0, r0 = _f(data.get("qty")), _f(data.get("rate"))
     sub = round(q0 * r0, 2)
+
+    def _lid_of(v):
+        # Build 'ay': a revision form's grid rows carry the clone
+        # line's id (hidden input); Add Item rows post it blank.
+        try:
+            n = int(v)
+            return n if n > 0 else None
+        except (TypeError, ValueError):
+            return None
     rows = []
     # A row with no Item text, no Description, and a $0 rate is an
     # untouched form row (the form defaults Qty to 1) — skip it, never
@@ -140,7 +176,8 @@ def _post_invoice_create(handler, con, data, u):
         rows.append((it0, ds0, q0, r0,
                      engine.clean_line_type(con, data.get("type")),
                      engine.clean_line_uom(con, data.get("uom")),
-                     (data.get("taxable") == "1") if tax_ui else True))
+                     (data.get("taxable") == "1") if tax_ui else True,
+                     _lid_of(data.get("line_id"))))
     for i in range(1, 61):
         qi, ri = _f(data.get(f"qty{i}")), _f(data.get(f"rate{i}"))
         it = (data.get(f"item{i}") or "").strip()
@@ -151,7 +188,8 @@ def _post_invoice_create(handler, con, data, u):
         rows.append((it, ds, qi, ri,
                      engine.clean_line_type(con, data.get(f"type{i}")),
                      engine.clean_line_uom(con, data.get(f"uom{i}")),
-                     (data.get(f"taxable{i}") == "1") if tax_ui else True))
+                     (data.get(f"taxable{i}") == "1") if tax_ui else True,
+                     _lid_of(data.get(f"line_id{i}"))))
     tr = _f(data.get("tax_rate")) / 100.0
     adj = _f(data.get("adjustment"))
     # Invoice-round tax model (Jason 2026-10-20): the operator's
@@ -169,6 +207,23 @@ def _post_invoice_create(handler, con, data, u):
         exempt = False
     exempt = exempt or op_exempt
     tax = 0.0 if exempt else round(sub * tr, 2)
+    _inv_key = engine.doc_key(con, "invoice", ino)
+    _is_rev = False
+    _existing = {}
+    if replace:
+        # Build 'ay': a pending revision's Save owns ALL the clone's
+        # lines — the revision form rendered every one of them in
+        # its grid. Any other in-place save keeps the standing rule
+        # below (typed lines only; sourced lines stay untouched).
+        try:
+            _is_rev = bool(engine.revision_is_pending(
+                con, "invoice", _inv_key))
+        except Exception:
+            _is_rev = False
+        if _is_rev:
+            _existing = {r["line_id"]: r for r in con.execute(
+                "SELECT * FROM invoice_lines WHERE invoice_id=?",
+                (_inv_key,))}
     if replace:
         # Update in place (Save pressed on a saved invoice): the form
         # owns the free-typed lines, so they are replaced wholesale
@@ -177,9 +232,21 @@ def _post_invoice_create(handler, con, data, u):
         # the form's and stay untouched. The header fields the create
         # path sets at insert (date, terms, PO) are updated here, and
         # the shared PO record is kept current as create_invoice does.
-        con.execute(
-            "DELETE FROM invoice_lines WHERE invoice_id=? AND source_type='quick'",
-            (engine.doc_key(con, "invoice", ino),))
+        # Build 'ay': on a pending revision the form owns every line
+        # of the clone — a line whose id never posted back was
+        # deleted from the grid and leaves the revision here; the
+        # lines that did post are updated in place in the loop below.
+        if _is_rev:
+            _posted_ids = {t[7] for t in rows if t[7] in _existing}
+            for _old_id in _existing:
+                if _old_id not in _posted_ids:
+                    con.execute(
+                        "DELETE FROM invoice_lines WHERE line_id=?",
+                        (_old_id,))
+        else:
+            con.execute(
+                "DELETE FROM invoice_lines WHERE invoice_id=? AND source_type='quick'",
+                (_inv_key,))
         con.execute(
             "UPDATE invoices SET invoice_date=?, terms=?, po=? WHERE invoice_no=?",
             (data.get("invoice_date") or None,
@@ -197,9 +264,37 @@ def _post_invoice_create(handler, con, data, u):
          (data.get("shipped_by") or "").strip()[:120],
          (data.get("contact_name") or "").strip()[:120],
          (data.get("bar_text") or "").strip()[:500], ino))
-    for it, ds, qi, ri, cat, uom, txable in rows:
+    _used_ids = set()
+    for it, ds, qi, ri, cat, uom, txable, lid in rows:
         amt = round(qi * ri, 2)
         line_exempt = exempt or not txable
+        if _is_rev and lid in _existing and lid not in _used_ids:
+            # Build 'ay': a grid row that carries one of the clone's
+            # own line ids updates THAT row in place — its sourceage
+            # (source_type / source_id / source_line_id), PO line,
+            # clerk, tax name / location and note stand exactly as
+            # copied; only the operator-facing values move. The
+            # source ticket / work order is never written here.
+            _used_ids.add(lid)
+            _ex = _existing[lid]
+            if (_ex["source_type"] or "") != "quick" and \
+                    _ex["tax_rate"] is not None:
+                # A sourced (or legacy) line keeps its own recorded
+                # tax rate — the invoice's standing totals were
+                # built on it, and the form's header rate does not
+                # describe this line (INV-1001's header rate is
+                # empty; its lines carry 9.25%).
+                _lr = float(_ex["tax_rate"])
+            else:
+                _lr = tr
+            ltax = 0.0 if line_exempt else round(amt * _lr, 2)
+            con.execute(
+                "UPDATE invoice_lines SET category=?, item=?, "
+                "description=?, qty=?, uom=?, rate=?, amount=?, "
+                "tax_amount=?, tax_exempt=? WHERE line_id=?",
+                (cat, it, ds or "Item", qi, uom, ri, amt, ltax,
+                 int(line_exempt), lid))
+            continue
         ltax = 0.0 if line_exempt else round(amt * tr, 2)
         con.execute(
             """INSERT INTO invoice_lines(invoice_id,po_line,category,item,description,qty,uom,rate,amount,
@@ -209,10 +304,15 @@ def _post_invoice_create(handler, con, data, u):
              0.0 if line_exempt else tr, ltax, int(line_exempt),
              "" if line_exempt else "Tax", "", "quick", ""))
     if replace:
-        # The revision's first Save completes it (build 'ab'): an
-        # operator-renamed number validates against the kind's whole
-        # history — voided numbers stay taken — then the session
-        # marker clears; the form reopens locked from here on.
+        # The revision's Save is its commit (build 'av', pending
+        # model): an operator-renamed number validates against the
+        # kind's whole history — voided numbers stay taken — then
+        # finalize_revision voids the original (desk user +
+        # timestamp, the optional revision note as its reason) and
+        # stands this revision as chain head; the form reopens
+        # locked from here on. A ValueError from finalize (the
+        # original already revised) propagates like this handler's
+        # other ValueErrors.
         _new_no = (data.get("invoice_no") or "").strip()
         if _new_no and _new_no != ino:
             engine.validate_new_doc_no(con, "invoices", "invoice_no",
@@ -220,8 +320,9 @@ def _post_invoice_create(handler, con, data, u):
             con.execute("UPDATE invoices SET invoice_no=? "
                         "WHERE invoice_no=?", (_new_no, ino))
             ino = _new_no
-        engine.clear_revision_pending(
-            con, "invoice", engine.doc_key(con, "invoice", ino))
+        _rev_note = (data.get("rev_note") or "").strip()
+        _orig_no = engine.finalize_revision(
+            con, "invoice", ino, _rev_note, _desk(handler, con))
         # The completed revision is a new issuance (redirect #3):
         # it wears the company identity current at this posting.
         engine.stamp_company_snapshot(
@@ -229,19 +330,29 @@ def _post_invoice_create(handler, con, data, u):
     con.commit()
     if not replace:
         # A create is an explicit operator action — Done Today gets
-        # it (look-see batch 2, 2026-10-21). The replace path (Save
-        # on an already-saved invoice) is an edit and does not log.
+        # it (look-see batch 2, 2026-10-21).
         engine.add_done_manual(
             con, f"Created invoice {ino}", f"/invoice/{ino}",
             _desk(handler, con))
+    else:
+        # Build 'av': the revision's commit IS an operator action —
+        # the void-and-revise lands in Done at the commit, not at
+        # the Edit act (the 'ab' confirm-time entry is gone).
+        engine.add_done_manual(
+            con, f"Invoice {_orig_no} voided — revised as {ino}"
+            + (f": {_rev_note}" if _rev_note else ""),
+            f"/invoice/{quote_plus(ino)}", _desk(handler, con))
     up = (handler._files or {}).get("job_attach")
     if up and up[2]:
         engine.save_job_attachment(con, "invoice", ino, up[0], up[2], _desk(handler, con))
     if action == "save":
         # Stay on the form: the same editor, now editing this invoice.
-        handler._redirect(f"/invoice/new?edit={ino}&msg=Invoice+{ino}+saved")
+        _back = f"/invoice/new?edit={ino}&msg=Invoice+{ino}+saved"
     else:
-        handler._redirect(f"/invoice/{ino}?msg=Invoice+{ino}+created")
+        _back = f"/invoice/{ino}?msg=Invoice+{ino}+created"
+    _pa = _printafter_url(data, _back, f"/print/invoice/{ino}") \
+        if replace else None
+    handler._redirect(_pa or _back)
 
 
 def _post_invoice_po(handler, con, data, u):
@@ -394,25 +505,32 @@ def _pay_add_splits(data, splits, co_splits):
 
 
 def _post_pay_correction(handler, con, data, u):
-    """Apply the payment revision (build 'ab', void-and-revise —
-    the correction model, approved by Jason 2026-10-26: "the
-    payment mechanic is sound... The records must stay"). The
-    original was voided at the revise CONFIRM (signed with the
-    reason, the operator's name, the timestamp; JC-AB0) and its
-    replacement batch '<original> Rev. N' minted there; this post
-    is the revision form's Apply, licensed by the session marker
-    the confirm set (target_batch names the minted batch, the
-    marker names the original). The splits post into the minted
-    batch through the ordinary record paths — balance reads
-    already exclude the voided original, so they validate against
-    the restored state. The posted pay_no may rename the batch
-    (a free-text number under the same law); the void's
-    replaced-by stamp follows the final name. The batch names
-    the original (void_corrects); Done carries the posting (the
-    void's Done entry was written at the confirm)."""
+    """Apply the payment revision (the correction model, approved
+    by Jason 2026-10-26: "the payment mechanic is sound... The
+    records must stay"). Build 'av' (pending model): the Edit act
+    only NAMES the replacement batch '<original> Rev. N'
+    (engine.prepare_payment_revision) and sets the pending marker
+    paypend:<target> naming the original — the original is NOT
+    voided yet and stays live while the revision form stands.
+    This post is the revision form's Save: every validation below
+    runs against the still-live original, and only immediately
+    before the repost does the original void — inside this
+    handler's own transaction (void_payment_batch commits
+    nothing itself), signed with the desk user, the timestamp,
+    and the OPTIONAL revision note. The splits then post into the
+    named batch through the ordinary record paths. The posted
+    pay_no may rename the batch (a free-text number under the
+    same law); the void's replaced-by stamp follows the final
+    name. The batch names the original (void_corrects); Done
+    carries the posting. LEGACY: a form opened before build 'av'
+    (revtarget marker standing, paypend absent — its original
+    was voided at the old revise confirm) takes the same path
+    with NO void call, exactly as build 'ab' applied it."""
     target = (data.get("target_batch") or "").strip()
-    orig = engine.get_option(con, f"revtarget:payment:{target}") \
+    _pend = engine.get_option(con, f"paypend:{target}") \
         if target else ""
+    orig = _pend or (engine.get_option(
+        con, f"revtarget:payment:{target}") if target else "")
     if not target or not orig:
         raise ValueError(
             "That payment is posted — revise it (Edit on its form) "
@@ -472,6 +590,49 @@ def _post_pay_correction(handler, con, data, u):
     allocs = _line_allocs_from(data, "pl")
     allocs = {ino: v for ino, v in allocs.items()
               if ("invoice", ino) not in _moved}
+    # Build 'ay' (Jason 2026-10-31, the class sweep): a correction
+    # whose post carries no line breakdown for a document the
+    # ORIGINAL batch broke down by line loses that breakdown to
+    # the void — the payment form has carried no breakdown block
+    # since build 'ak', so an unchanged correction posts none,
+    # and the repost below would stand the split blanket while
+    # the invoice's lines read fully open. When the split stands
+    # at the original's amount and the document was not itself
+    # revised away (not in _moved — its lines are the same rows),
+    # the original's line allocations carry onto the correction
+    # verbatim. A changed split no longer matches the recorded
+    # allocations' sum and posts blanket, as a fresh payment
+    # would; a document with no recorded breakdown is untouched.
+    def _carried_lines(kind, ref):
+        try:
+            _dk = engine.doc_key(con, kind, ref)
+            _rows = con.execute(
+                "SELECT line_id, amount FROM payment_allocations "
+                "WHERE batch_id=? AND doc_kind=? AND doc_id=? "
+                "AND source='payment' AND COALESCE(voided,0)=0 "
+                "ORDER BY alloc_id", (orig, kind, _dk)).fetchall()
+        except Exception:
+            return None
+        _lines = [(int(r["line_id"]), float(r["amount"]))
+                  for r in _rows if r["line_id"] is not None]
+        if not _lines:
+            return None
+        return _lines, sum(float(r["amount"]) for r in _rows)
+
+    for ino, amt in splits:
+        if ino in allocs or ("invoice", ino) in _moved:
+            continue
+        _c = _carried_lines("invoice", ino)
+        if _c and abs(_c[1] - amt) < 0.005:
+            allocs[ino] = _c[0]
+    _ds2 = []
+    for k2, r2, a2, l2 in doc_splits:
+        if l2 is None and (k2, r2) not in _moved:
+            _c = _carried_lines(k2, r2)
+            if _c and abs(_c[1] - a2) < 0.005:
+                l2 = _c[0]
+        _ds2.append((k2, r2, a2, l2))
+    doc_splits = _ds2
     _split_inos = {ino for ino, _a in splits}
     for ino in allocs:
         if ino not in _split_inos:
@@ -534,6 +695,22 @@ def _post_pay_correction(handler, con, data, u):
         if ino:
             orig_inos.append(ino)
     try:
+        if _pend:
+            # Build 'av': the commit act for a payment revision —
+            # every validation above has passed, so the original
+            # voids NOW, inside this transaction (the tree's
+            # void_payment_batch commits nothing itself; the
+            # except below rolls the void back with everything
+            # else on any failure). The edit-block gate that the
+            # old confirm act applied is checked here, at the
+            # void, and surfaces as this branch's ValueErrors do.
+            _block = engine.payment_edit_block(con, orig)
+            if _block:
+                raise ValueError(_block)
+            engine.void_payment_batch(
+                con, orig, _desk(handler, con) or clerk, target,
+                reason=(data.get("rev_note") or "").strip(),
+                at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         if new_batch != target:
             for _tbl in ("collections", "doc_collections"):
                 con.execute(
@@ -581,6 +758,13 @@ def _post_pay_correction(handler, con, data, u):
         con.rollback()
         raise
     engine.set_option(con, f"revtarget:payment:{target}", "")
+    if _pend:
+        # Build 'av': the pending markers clear with the commit —
+        # the void they named has happened (above, same act).
+        engine.set_option(con, f"paypend:{target}", "")
+        engine.set_option(con, f"paypend_of:{orig}", "")
+    # The handler already logs the commit's Done entry (the
+    # correction posting itself) — no second entry for the void.
     engine.add_done_manual(
         con, f"Payment {new_batch} recorded — correction of {orig}",
         f"/summary/payment/{new_batch}", clerk)
@@ -588,11 +772,39 @@ def _post_pay_correction(handler, con, data, u):
     if up and up[2] and pay_ids:
         engine.save_job_attachment(
             con, "pay", str(pay_ids[0]), up[0], up[2], clerk)
-    handler._redirect(
-        f"/summary/payment/{new_batch}?msg=" + quote_plus(
-            f"Payment {new_batch} recorded — correction of {orig}; "
-            f"the original stands void"))
+    _back = (f"/summary/payment/{new_batch}?msg=" + quote_plus(
+        f"Payment {new_batch} recorded — correction of {orig}; "
+        f"the original stands void"))
+    # The payment form prints page-mode (its _btn_row carries no
+    # /print/ document menu) — print-after is the page form.
+    handler._redirect(_printafter_url(data, _back) or _back)
     return
+
+
+def _pay_posted_batch(con, data):
+    """A new payment's number (build 'as', Jason 2026-10-29): the
+    blank form opens on the peeked next number like every sibling
+    form, and the posted pay_no is the payment's number — the
+    creation-time number law (Batch 3 #14): the operator's text
+    wins, validated untaken across both ledgers under the same
+    check the correction path applies to a rename. A cleared
+    field falls back to the batch mint, exactly as before this
+    build (when the new-payment path read no pay_no at all)."""
+    _pay_no = (data.get("pay_no") or "").strip()
+    if not _pay_no:
+        return engine.next_batch_id(con)
+    _taken = False
+    for _tbl in ("collections", "doc_collections"):
+        try:
+            _taken = _taken or bool(con.execute(
+                f"SELECT 1 FROM {_tbl} "
+                f"WHERE COALESCE(batch_id, pay_id)=? LIMIT 1",
+                (_pay_no,)).fetchone())
+        except Exception:
+            pass
+    if _taken:
+        raise ValueError(f"Payment number {_pay_no} is taken")
+    return _pay_no
 
 
 def _post_pay(handler, con, data, u):
@@ -677,7 +889,7 @@ def _post_pay(handler, con, data, u):
         # One batch: a shared batch id + one commit for all splits. A
         # mid-batch failure raises before the commit, and con.close()
         # without commit discards the open transaction — no partial post.
-        batch_id = engine.next_batch_id(con)
+        batch_id = _pay_posted_batch(con, data)
         pay_ids, applied_rows, cms = [], [], []
         for ino, amt in splits:
             res = engine.record_payment(
@@ -762,7 +974,7 @@ def _post_pay(handler, con, data, u):
         con, _single_ino, float(data.get("amount") or 0),
         data.get("pay_date") or date.today().isoformat(),
         data.get("method") or "", data.get("ref") or "", _desk(handler, con),
-        batch_id=engine.next_batch_id(con), commit=False,
+        batch_id=_pay_posted_batch(con, data), commit=False,
         line_allocs=allocs.get(_single_ino),
     )
     # Save extra fields (a settled-invoice payment posts no row —
@@ -957,6 +1169,171 @@ def _post_credit(handler, con, data, u):
             "source_invoice_no": data.get(f"srcinv{sfx}") or "",
             "source_line_id": _i(data.get(f"srcline{sfx}")),
         })
+    # Build 'av' (pending model): a credit revision's Save. The
+    # credit save carried NO revision branch before this build —
+    # issue_credit_memo below only ever inserts a new memo (and
+    # stamps its company snapshot, as does finalize_revision;
+    # both stamps stand, the finalize stamp last). A Save naming
+    # a PENDING revision (edit_target, or the posted cm_no naming
+    # the pending clone) completes the clone IN PLACE under its
+    # session marker — header + lines rewritten from the posted
+    # form, mirroring issue_credit_memo's cleaning — then
+    # finalize_revision voids the original and stands the clone
+    # as chain head. Posted applications ride apply_open_credit
+    # (chain-aware: the ancestors' applications count against the
+    # clone's face). With no line rows posted, the clone keeps
+    # its carried lines and face; only its header fields update.
+    _cm_target = (data.get("edit_target") or "").strip()
+    _cm_row = None
+    if _cm_target:
+        _cm_row = con.execute(
+            "SELECT * FROM credit_memos WHERE cm_no=?",
+            (_cm_target,)).fetchone()
+        if _cm_row is None:
+            raise ValueError(f"Unknown credit memo {_cm_target}")
+    else:
+        _cm_posted = (data.get("cm_no") or "").strip()
+        if _cm_posted:
+            _cand = con.execute(
+                "SELECT * FROM credit_memos WHERE cm_no=?",
+                (_cm_posted,)).fetchone()
+            if _cand is not None and engine.revision_is_pending(
+                    con, "credit", _cand["id"]):
+                _cm_target, _cm_row = _cm_posted, _cand
+    if _cm_row is not None:
+        _cm_key = _cm_row["id"]
+        if not engine.revision_pending(con, "credit", _cm_key):
+            raise ValueError(
+                f"Credit Memo {_cm_target} is posted — revise it "
+                f"(Edit on its form) to change it")
+        _cust = (data.get("customer_id") or "").strip()
+        if not con.execute(
+                "SELECT 1 FROM customers WHERE customer_id=?",
+                (_cust,)).fetchone():
+            raise ValueError("Unknown customer")
+        _reason = (data.get("reason") or "").strip()
+        if not _reason:
+            raise ValueError("Reason is required")
+        _final_no = _cm_target
+        _posted_no = (data.get("cm_no") or "").strip()
+        if _posted_no and _posted_no != _cm_target:
+            engine.validate_new_doc_no(
+                con, "credit_memos", "cm_no", _posted_no,
+                "credit memo")
+            con.execute(
+                "UPDATE credit_memos SET cm_no=? WHERE id=?",
+                (_posted_no, _cm_key))
+            _final_no = _posted_no
+        _cm_date = data.get("cm_date") or str(_cm_row["cm_date"])[:10]
+        _cm_notes = data.get("notes") or ""
+        if rows:
+            _cleaned = []
+            for ln in rows:
+                try:
+                    _q = float(ln.get("qty") or 1)
+                except (TypeError, ValueError):
+                    _q = 1
+                if _q <= 0:
+                    _q = 1
+                _r = float(ln.get("rate") or 0)
+                _amt = round(_q * _r, 2)
+                if not ln.get("item") and not ln.get("description") \
+                        and _r == 0 and _amt == 0:
+                    continue
+                _cleaned.append({
+                    "category": engine.clean_line_type(
+                        con, ln.get("category")),
+                    "item": ln.get("item") or "",
+                    "description": ln.get("description") or "",
+                    "qty": _q, "rate": _r, "amount": _amt,
+                    "uom": engine.clean_line_uom(con, ln.get("uom")),
+                    "tax_exempt": int(bool(ln.get("tax_exempt"))),
+                    "source_invoice_no": ln.get("source_invoice_no") or "",
+                    "source_line_id": int(ln.get("source_line_id") or 0),
+                })
+            _adj = round(_f(data.get("adjustment")), 2)
+            _face = round(round(
+                sum(ln["amount"] for ln in _cleaned), 2) + _adj, 2)
+            if _face == 0:
+                raise ValueError("Credit amount must not be zero")
+            if _face < 0 and not _cm_notes.strip():
+                raise ValueError(
+                    "A negative credit memo requires a note — the "
+                    "note is the record of why the amount was "
+                    "re-opened")
+            con.execute(
+                "DELETE FROM credit_memo_lines WHERE cm_id=?",
+                (_cm_key,))
+            con.executemany(
+                """INSERT INTO credit_memo_lines(cm_id, category,
+                   item, description, qty, uom, rate, amount,
+                   tax_exempt, source_invoice_id, source_line_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                [(_cm_key, ln["category"], ln["item"],
+                  ln["description"], ln["qty"], ln["uom"], ln["rate"],
+                  ln["amount"], ln["tax_exempt"],
+                  engine.key_of(con, "invoices",
+                                ln["source_invoice_no"])
+                  if ln["source_invoice_no"] else None,
+                  ln["source_line_id"]) for ln in _cleaned])
+            con.execute(
+                """UPDATE credit_memos SET cm_date=?, customer_id=?,
+                   face_amount=?, reason=?, notes=?, clerk=?,
+                   adjustment=?, adj_label=?, adj_taxable=?
+                   WHERE id=?""",
+                (_cm_date, engine.cust_key(con, _cust), _face,
+                 _reason, _cm_notes, _desk(handler, con),
+                 _adj or None,
+                 (data.get("adj_label") or "").strip() or None,
+                 1 if data.get("adj_taxable") == "1" else None,
+                 _cm_key))
+            _cmcols = [r[1] for r in con.execute(
+                "PRAGMA table_info(credit_memos)")]
+            if "category" in _cmcols and "uom" in _cmcols \
+                    and _cleaned:
+                con.execute(
+                    "UPDATE credit_memos SET category=?, uom=? "
+                    "WHERE id=?",
+                    (_cleaned[0]["category"], _cleaned[0]["uom"],
+                     _cm_key))
+        else:
+            con.execute(
+                """UPDATE credit_memos SET cm_date=?, customer_id=?,
+                   reason=?, notes=?, clerk=? WHERE id=?""",
+                (_cm_date, engine.cust_key(con, _cust), _reason,
+                 _cm_notes, _desk(handler, con), _cm_key))
+        # The save stamps its snapshot (as issue_credit_memo does);
+        # finalize_revision stamps again at the commit — both stand.
+        engine.stamp_company_snapshot(con, "credit_memos", _cm_key)
+        con.commit()
+        _doc_applies = _doc_applies_from(data)
+        if applies or _doc_applies:
+            engine.apply_open_credit(
+                con, _final_no, applies, data.get("cm_date") or None,
+                _desk(handler, con), line_allocs_map=credit_allocs,
+                doc_applies=_doc_applies)
+        _cm_note = (data.get("rev_note") or "").strip()
+        _cm_orig = engine.finalize_revision(
+            con, "credit", _final_no, _cm_note, _desk(handler, con))
+        engine.add_done_manual(
+            con, f"Credit Memo {_cm_orig} voided — revised as "
+            f"{_final_no}" + (f": {_cm_note}" if _cm_note else ""),
+            f"/summary/credit/{quote_plus(_final_no)}",
+            _desk(handler, con))
+        up = (handler._files or {}).get("job_attach")
+        if up and up[2]:
+            engine.save_job_attachment(
+                con, "credit", _final_no, up[0], up[2],
+                _desk(handler, con))
+        up2 = (handler._files or {}).get("cm_upload")
+        if up2 and up2[2]:
+            engine.save_job_attachment(
+                con, "credit", _final_no, up2[0], up2[2],
+                _desk(handler, con))
+        _back = f"/money?tab=credit&msg=Credit+memo+{_final_no}+saved"
+        _pa = _printafter_url(data, _back, f"/print/credit/{_final_no}")
+        handler._redirect(_pa or _back)
+        return
     cno = engine.issue_credit_memo(
         con,
         data.get("customer_id") or "",
@@ -970,6 +1347,10 @@ def _post_credit(handler, con, data, u):
         cm_no=data.get("cm_no") or None,
         line_allocs_map=credit_allocs,
         doc_applies=_doc_applies_from(data),
+        # Build 'as' (Item 6): the form's write-in row.
+        adj_amount=_f(data.get("adjustment")),
+        adj_label=data.get("adj_label") or "",
+        adj_taxable=data.get("adj_taxable") == "1",
     )
     up = (handler._files or {}).get("job_attach")
     if up and up[2]:
@@ -1046,6 +1427,10 @@ def _post_quote_save(handler, con, data, u):
         "notes": data.get("notes"),
         "status": data.get("status") or "Draft",
         "clerk": _desk(handler, con),
+        # Build 'as' (Item 6): the form's write-in row.
+        "adjustment": data.get("adjustment"),
+        "adj_label": data.get("adj_label"),
+        "adj_taxable": data.get("adj_taxable") == "1",
     }, lines)
     # Against picker (2026-10-15): attach the picked WO/ticket to this
     # quote — the "type up a quote against that work order" step.
@@ -1067,13 +1452,26 @@ def _post_quote_save(handler, con, data, u):
         engine.add_done_manual(
             con, f"Created quote {qn}", f"/summary/quote/{qn}",
             _desk(handler, con))
+    _q_orig = None
     if _q_target:
-        engine.clear_revision_pending(
-            con, "quote", engine.doc_key(con, "quote", qn))
+        # Build 'av': this Save is the pending revision's commit —
+        # finalize voids the original and stands this quote as
+        # chain head. A finalize ValueError propagates like this
+        # handler's other ValueErrors.
+        _q_note = (data.get("rev_note") or "").strip()
+        _q_orig = engine.finalize_revision(
+            con, "quote", qn, _q_note, _desk(handler, con))
+        engine.add_done_manual(
+            con, f"Quote {_q_orig} voided — revised as {qn}"
+            + (f": {_q_note}" if _q_note else ""),
+            f"/summary/quote/{quote_plus(qn)}", _desk(handler, con))
     up = (handler._files or {}).get("job_attach")
     if up and up[2]:
         engine.save_job_attachment(con, "quote", qn, up[0], up[2], _desk(handler, con))
-    handler._redirect(f"/quotes?msg=Quote+saved")
+    _back = "/quotes?msg=Quote+saved"
+    _pa = _printafter_url(data, _back, f"/print/quote/{qn}") \
+        if _q_target else None
+    handler._redirect(_pa or _back)
 
 
 def _post_quote_status(handler, con, data, u):
@@ -1144,6 +1542,10 @@ def _post_change_save(handler, con, data, u):
         raise ValueError(
             f"Change Order {co_no} is issued — revise it (Edit on "
             f"its form) to change it")
+    # Build 'as' (Item 6): the form's write-in row rides both paths.
+    _wadj_kw = {"adj_amount": data.get("adjustment"),
+                "adj_label": data.get("adj_label"),
+                "adj_taxable": data.get("adj_taxable") == "1"}
     if exists:
         cno = engine.save_change_order(
             con, co_no, data.get("customer_id") or "",
@@ -1151,10 +1553,19 @@ def _post_change_save(handler, con, data, u):
             data.get("co_date") or None, data.get("notes") or "",
             _desk(handler, con), data.get("po") or "",
             assoc_kind=assoc_kind, assoc_ref=assoc_ref,
-            revision=_co_session)
+            revision=_co_session, **_wadj_kw)
         if _co_session:
-            engine.clear_revision_pending(
-                con, "change", engine.doc_key(con, "change", cno))
+            # Build 'av': this Save is the pending revision's
+            # commit — finalize voids the original and stands this
+            # Change Order as chain head.
+            _co_note = (data.get("rev_note") or "").strip()
+            _co_orig = engine.finalize_revision(
+                con, "change", cno, _co_note, _desk(handler, con))
+            engine.add_done_manual(
+                con, f"Change Order {_co_orig} voided — revised "
+                f"as {cno}" + (f": {_co_note}" if _co_note else ""),
+                f"/summary/change/{quote_plus(cno)}",
+                _desk(handler, con))
         _verb = "saved"
     else:
         cno = engine.issue_change_order(
@@ -1163,12 +1574,15 @@ def _post_change_save(handler, con, data, u):
             data.get("co_date") or None, data.get("notes") or "",
             _desk(handler, con), data.get("po") or "",
             co_no=co_no or None,
-            assoc_kind=assoc_kind, assoc_ref=assoc_ref)
+            assoc_kind=assoc_kind, assoc_ref=assoc_ref, **_wadj_kw)
         _verb = "issued"
     up = (handler._files or {}).get("job_attach")
     if up and up[2]:
         engine.save_job_attachment(con, "change", cno, up[0], up[2], _desk(handler, con))
-    handler._redirect(f"/summary/change/{cno}?msg=Change+order+{cno}+{_verb}")
+    _back = f"/summary/change/{cno}?msg=Change+order+{cno}+{_verb}"
+    _pa = _printafter_url(data, _back, f"/print/change/{cno}") \
+        if _co_session else None
+    handler._redirect(_pa or _back)
 
 
 def _post_petty(handler, con, data, u):
@@ -1196,15 +1610,22 @@ def _post_petty(handler, con, data, u):
             data.get("ref_no") or "",
             data.get("notes") or "",
             _desk(handler, con),
-            pc_id=data.get("pc_id") or "")
+            pc_id=data.get("pc_id") or "",
+            # Build 'av': the revision's OPTIONAL note + desk user
+            # ride the finalize signature inside complete_* (the
+            # engine's parameter names are note/by).
+            note=(data.get("rev_note") or "").strip(),
+            by=_desk(handler, con))
         engine.clear_revision_pending(con, "petty", _shell["id"])
+        # The handler already logs this commit's Done entry.
         engine.add_done_manual(
             con, f"Petty cash entry {_new_no} recorded — revision",
             "/petty", _desk(handler, con))
         if (data.get("frag") or "") == "1":
-            handler._redirect("/petty?frag=1&msg=Petty+cash+saved")
+            _back = "/petty?frag=1&msg=Petty+cash+saved"
         else:
-            handler._redirect("/petty?msg=Petty+cash+saved")
+            _back = "/petty?msg=Petty+cash+saved"
+        handler._redirect(_printafter_url(data, _back) or _back)
         return True
     engine.record_petty(
         con,
@@ -1278,14 +1699,21 @@ def _post_cash_save(handler, con, data, u):
             line_allocs=_cash_allocs.get(_ref2),
             sale_group=data.get("sale_group") or "",
             quote_no=data.get("quote_no") or "",
-            co_no=data.get("co_no") or "")
+            co_no=data.get("co_no") or "",
+            # Build 'av': the revision's OPTIONAL note + desk user
+            # ride the finalize signature inside complete_* (the
+            # engine's parameter names are note/by).
+            note=(data.get("rev_note") or "").strip(),
+            by=_desk(handler, con))
         engine.clear_revision_pending(con, "cash", _shell["entry_id"])
+        # The handler already logs this commit's Done entry.
         engine.add_done_manual(
             con, f"Cash entry {data.get('entry_no') or _target} "
                  f"recorded — revision of "
                  f"{_orig[0] if _orig else _target}",
             "/money?tab=cash", _desk(handler, con))
-        handler._redirect("/money?tab=cash&msg=Cash+entry+saved")
+        _back = "/money?tab=cash&msg=Cash+entry+saved"
+        handler._redirect(_printafter_url(data, _back) or _back)
         return True
     _att = {
         "invoice": (data.get("invoice_no") or "").strip(),

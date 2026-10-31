@@ -63,6 +63,9 @@ GET_ROUTES = {
     "/credit": ("Credit memo", lambda self, con, q: self.view_money(con, dict(q or {}, tab="credit"))),
     "/petty": ("Petty cash", lambda self, con, q: self.view_petty(con, q)),
     "/cash": ("Cash", lambda self, con, q: self.view_money(con, {"tab": "cash"})),
+    "/print/folder": ("Print folder", lambda self, con, q: (self._send_json(
+        {"folder": str(post_core._print_folder(con))}), None)[1]),
+    "/printafter": ("Print", lambda self, con, q: self.view_printafter(con, q)),
     "/setup": ("Company", lambda self, con, q: self.view_setup(con, q)),
     "/setup/vendors": ("Vendors", lambda self, con, q: self.view_setup_vendors(con, q)),
     "/setup/vendors/all": ("All vendors", lambda self, con, q: self.view_vendors_all(con)),
@@ -117,12 +120,12 @@ GET_ROUTES = {
 GET_PREFIX_ROUTES = [
     ("/summary/", lambda self, con, rest: self.view_summary_route(con, rest)),
     ("/ticket/", lambda self, con, tid: (tid, self.view_ticket(con, tid))),
-    ("/quote/", lambda self, con, qn: (qn, self.view_quote_form(con, qn))),
+    ("/quote/", lambda self, con, qn, q=None: (qn, self.view_quote_form(con, qn, q=q))),
     ("/invoice/", lambda self, con, ino: (ino, self.view_invoice_lines(con, ino))),
     ("/customer/", lambda self, con, cid: (cid, self.view_customer_form(con, cid))),
     ("/unit/", lambda self, con, aid: (aid, self.view_unit_form(con, aid))),
     ("/site/", lambda self, con, sid: self.view_site_route(con, sid)),
-    ("/wo/", lambda self, con, wid: (wid, self.view_wo_form(con, wid))),
+    ("/wo/", lambda self, con, wid, q=None: (wid, self.view_wo_form(con, wid, q=q))),
     ("/sale/", lambda self, con, grp: (grp, self.view_sale_detail(con, grp))),
     ("/compack/", lambda self, con, pid: (pid, self.view_pack(con, pid))),
     ("/ucompliance/", lambda self, con, aid, q=None: (aid, self.view_unit_compliance(con, aid, (q or {}).get("focus")))),
@@ -937,14 +940,22 @@ class Handler(views_accounting.AccountingViews,
                     return
             if u.path == "/updater/check":
                 # Admin → "Check for Updates…" — menu-only (decision B).
-                # Availability is checked synchronously (no DLL load);
-                # the check itself runs on a worker thread so the page
-                # returns at once while WinSparkle shows its dialog.
+                # Availability is checked synchronously (no DLL load).
+                # check_now() reports whether the check actually
+                # started, and the page says only what is true
+                # (build 'ar': the page claimed "Checking…" even
+                # when the updater had never initialized and no
+                # check existed). win_sparkle_check_update_with_ui
+                # returns once the check is underway — WinSparkle
+                # runs it on its own thread — and the wrapper's kill
+                # timer covers a check that never completes.
                 if updater_winsparkle is not None and updater_winsparkle.available():
-                    threading.Thread(target=updater_winsparkle.check_now,
-                                     daemon=True).start()
-                    self._redirect("/setup/admin?msg=" + quote_plus(
-                        "Checking for updates…"))
+                    if updater_winsparkle.check_now():
+                        self._redirect("/setup/admin?msg=" + quote_plus(
+                            "Checking for updates…"))
+                    else:
+                        self._redirect("/setup/admin?msg=" + quote_plus(
+                            "Update check could not start."))
                 else:
                     self._redirect("/setup/admin?msg=" + quote_plus(
                         "Update checks are not available in this install."))

@@ -28,25 +28,12 @@ Small equipment rental businesses live in spreadsheets, whiteboards, and memory.
 - **Optional:** `reportlab` (PDF packs), `segno` (QR codes), `pypdf` — vendored as wheels for offline install
 
 ## Screenshots
-**Today** — the morning dashboard — alerts ticker, open AR, what needs doing.
 
-![Today dashboard](docs/screenshots/today.png)
-
-**Assets** — the fleet list with cert expirations.
-
-![Assets list](docs/screenshots/assets.png)
-
-**Compliance** — due and overdue items by unit, with the vendor to call.
-
-![Compliance page](docs/screenshots/compliance.png)
-
-**Invoicing / A/R** — an invoice summary with payments, credits, and the open balance.
-
-![Invoice summary](docs/screenshots/invoicing-ar.png)
+> Screenshots coming with the first packaged release. The UI follows a compact design standard: dense professional business software (think Dynamics/Great Plains), every page fitting one screen where possible, zero wasted space.
 
 ## Installation (Windows)
 
-1. Download `FleetSheet-Setup-1.1.1.exe` from the [Releases page](https://github.com/jrmcw-source/FleetSheet/releases)
+1. Download `FleetSheet-Setup-1.1.2.exe` from the [Releases page](https://github.com/jrmcw-source/FleetSheet/releases)
 2. Run the installer — it installs per-user (into your AppData folder), no admin rights needed
 
 The installer is not code-signed. Windows SmartScreen may stop it with a "Windows protected your PC" message — choose **More info**, then **Run anyway**.

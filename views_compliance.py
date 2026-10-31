@@ -41,7 +41,7 @@ from views_core import (
     combo_field,
     combo_opts,
     fmt_date,
-    PRINTMENU_JS,
+    PRINTBOX_BUNDLE,
     CoreViews,)
 
 
@@ -594,8 +594,9 @@ class ComplianceViews(CoreViews):
         the full page. The toggle form is a plain GET form — ticking
         a box resubmits and the menu below is rebuilt for the ticked
         set — so it works inside the fragment, which carries no
-        script bundle; PRINTMENU_JS rides along in that case only,
-        to work the menu's Print to Location choice.
+        script bundle; the print box bundle (PRINTBOX_BUNDLE)
+        rides along in that case only, to work the box's Print to
+        Location choice.
         """
         q = q or {}
         aid = q.get("unit") or ""
@@ -699,5 +700,5 @@ class ComplianceViews(CoreViews):
           {docs_html}
         </form>
         {menu_block}
-        {PRINTMENU_JS if in_frag else ''}
+        {PRINTBOX_BUNDLE if in_frag else ''}
         """

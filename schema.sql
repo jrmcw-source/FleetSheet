@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS company (
   waiver_pct REAL NOT NULL DEFAULT 0.12,
   env_pct REAL NOT NULL DEFAULT 0.02,
   min_days INTEGER NOT NULL DEFAULT 1,
+  min_weeks INTEGER NOT NULL DEFAULT 1,
+  min_months INTEGER NOT NULL DEFAULT 1,
   bill_both_dates INTEGER NOT NULL DEFAULT 1,
   fiscal_start_month INTEGER NOT NULL DEFAULT 1,
   tooltips INTEGER NOT NULL DEFAULT 1,
@@ -192,6 +194,9 @@ CREATE TABLE IF NOT EXISTS assets (
 CREATE TABLE IF NOT EXISTS tickets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ticket_id TEXT NOT NULL UNIQUE,
+  adjustment REAL,
+  adj_label TEXT,
+  adj_taxable INTEGER,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   site_id INTEGER REFERENCES sites(id),
   asset_id INTEGER NOT NULL REFERENCES assets(id),
@@ -201,6 +206,8 @@ CREATE TABLE IF NOT EXISTS tickets (
   po TEXT,
   rate_type TEXT NOT NULL CHECK (rate_type IN ('Day','Week','Hour','Special','Monthly','Standby','Yard')),
   rate_value REAL,
+  rental_override REAL,
+  rental_override_note TEXT NOT NULL DEFAULT '',
   hours_start REAL,
   hours_end REAL,
   on_rent TEXT NOT NULL,
@@ -247,6 +254,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   ref_ticket TEXT,
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT
@@ -278,6 +286,7 @@ CREATE TABLE IF NOT EXISTS invoices (
   shipped_by TEXT,
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT
@@ -376,6 +385,9 @@ CREATE INDEX IF NOT EXISTS idx_invdocs_invoice ON invoice_docs(invoice_id);
 CREATE TABLE IF NOT EXISTS credit_memos (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   cm_no TEXT NOT NULL UNIQUE,
+  adjustment REAL,
+  adj_label TEXT,
+  adj_taxable INTEGER,
   cm_date TEXT NOT NULL,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   face_amount REAL NOT NULL CHECK (face_amount != 0),
@@ -388,6 +400,7 @@ CREATE TABLE IF NOT EXISTS credit_memos (
   cash_entry_id INTEGER REFERENCES cash_entries(entry_id),
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT
@@ -430,6 +443,7 @@ CREATE TABLE IF NOT EXISTS petty_cash (
   -- revise chain links by the engine key (id), never by pc_id.
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT,
@@ -470,6 +484,7 @@ CREATE TABLE IF NOT EXISTS cash_entries (
   entry_no TEXT,
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT,
@@ -488,6 +503,9 @@ CREATE TABLE IF NOT EXISTS lookups (
 CREATE TABLE IF NOT EXISTS work_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   wo_id TEXT NOT NULL UNIQUE,
+  adjustment REAL,
+  adj_label TEXT,
+  adj_taxable INTEGER,
   asset_id INTEGER NOT NULL REFERENCES assets(id),
   ticket_id INTEGER REFERENCES tickets(id),
   customer_id INTEGER REFERENCES customers(id),
@@ -515,6 +533,7 @@ CREATE TABLE IF NOT EXISTS work_orders (
   cost REAL DEFAULT 0,
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT
@@ -525,6 +544,9 @@ CREATE TABLE IF NOT EXISTS work_orders (
 CREATE TABLE IF NOT EXISTS quotes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   quote_no TEXT NOT NULL UNIQUE,
+  adjustment REAL,
+  adj_label TEXT,
+  adj_taxable INTEGER,
   quote_date TEXT NOT NULL,
   customer_id INTEGER NOT NULL REFERENCES customers(id),
   site_id INTEGER REFERENCES sites(id),
@@ -538,6 +560,7 @@ CREATE TABLE IF NOT EXISTS quotes (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT
@@ -568,6 +591,9 @@ CREATE TABLE IF NOT EXISTS quote_lines (
 CREATE TABLE IF NOT EXISTS change_orders (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   co_no TEXT NOT NULL UNIQUE,
+  adjustment REAL,
+  adj_label TEXT,
+  adj_taxable INTEGER,
   customer_id INTEGER REFERENCES customers(id),
   assoc_kind TEXT,
   assoc_id INTEGER,
@@ -580,6 +606,7 @@ CREATE TABLE IF NOT EXISTS change_orders (
   po TEXT,
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT
@@ -610,6 +637,9 @@ CREATE TABLE IF NOT EXISTS crew (
 CREATE TABLE IF NOT EXISTS sales (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   sale_id TEXT NOT NULL UNIQUE,
+  adjustment REAL,
+  adj_label TEXT,
+  adj_taxable INTEGER,
   asset_id INTEGER NOT NULL REFERENCES assets(id),
   customer_id INTEGER REFERENCES customers(id),
   sale_date TEXT NOT NULL,
@@ -627,6 +657,7 @@ CREATE TABLE IF NOT EXISTS sales (
   line_note TEXT NOT NULL DEFAULT '',
   revises_id INTEGER,
   revised_by_id INTEGER,
+  rev_pending INTEGER NOT NULL DEFAULT 0,
   void_reason TEXT,
   void_by TEXT,
   void_at TEXT

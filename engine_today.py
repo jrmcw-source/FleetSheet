@@ -13,6 +13,7 @@ import sqlite3
 from datetime import date, datetime, timedelta
 
 import engine_core as _core
+from engine_revisions import pending_filter as _pending_filter
 
 def today_everything(con: sqlite3.Connection) -> list:
     """Everything the Today ranking looked at — no filter, no sort, just there.
@@ -31,11 +32,12 @@ def today_everything(con: sqlite3.Connection) -> list:
         {"text": f"{r['ticket_id']} — {r['status']} — {r['asset_code']} ({r['cust_code']})",
          "href": f"/ticket/{r['ticket_id']}"}
         for r in con.execute(
-            """SELECT t.ticket_id, t.status, a.asset_id AS asset_code,
+            f"""SELECT t.ticket_id, t.status, a.asset_id AS asset_code,
                       c.customer_id AS cust_code
                FROM tickets t
                JOIN assets a ON a.id = t.asset_id
-               JOIN customers c ON c.id = t.customer_id""")
+               JOIN customers c ON c.id = t.customer_id
+               WHERE 1=1{_pending_filter(con, "tickets")}""")
     ]
     if tickets and _core.module_on(con, "rentals"):
         sections.append(("Rental Tickets", tickets))
@@ -49,8 +51,9 @@ def today_everything(con: sqlite3.Connection) -> list:
             "text": f"EXPIRED CERT — {r['unit_no']} ({r['asset_id']})",
             "href": f"/unit/{r['asset_id']}"})
     for r in con.execute(
-            """SELECT ticket_id FROM tickets
+            f"""SELECT ticket_id FROM tickets
                WHERE status IN ('Quoted','Reserved','Dispatched','On Rent','Standby')
+                 {_pending_filter(con, "tickets")}
                ORDER BY ticket_id"""):
         if ticket_money(con, r["ticket_id"]).get("fit", "PASS") != "PASS":
             compliance.append({
@@ -67,9 +70,10 @@ def today_everything(con: sqlite3.Connection) -> list:
         {"text": f"{r['quote_no']} — {r['status']} — {r['account_name']}",
          "href": f"/summary/quote/{r['quote_no']}"}
         for r in con.execute(
-            """SELECT q.quote_no, q.status, c.account_name FROM quotes q
+            f"""SELECT q.quote_no, q.status, c.account_name FROM quotes q
                JOIN customers c ON c.id = q.customer_id
                WHERE q.status NOT IN ('Void','Declined','Expired','Converted')
+                 {_pending_filter(con, "quotes")}
                ORDER BY q.quote_no""")
     ]
     if quotes and _core.module_on(con, "quotes"):
@@ -179,9 +183,10 @@ def _money_candidates(con: sqlite3.Connection, today: date) -> list:
 
     cands = []
     for inv in con.execute(
-        """SELECT i.invoice_no, i.invoice_date, i.terms, c.account_name
+        f"""SELECT i.invoice_no, i.invoice_date, i.terms, c.account_name
            FROM invoices i JOIN customers c ON c.id = i.customer_id
-           WHERE i.status NOT IN ('Paid','Write-off','Draft')"""
+           WHERE i.status NOT IN ('Paid','Write-off','Draft')
+             {_pending_filter(con, "invoices")}"""
     ):
         bal = balances.get(inv["invoice_no"], 0.0)
         if bal <= 0.009:
@@ -202,11 +207,12 @@ def _money_candidates(con: sqlite3.Connection, today: date) -> list:
                  f"Invoice {inv['invoice_no']} due today — {inv['account_name']} ${bal:,.2f}{tag}",
                  f"/invoice/{inv['invoice_no']}"))
     for p in con.execute(
-        """SELECT i.invoice_no, c.amount, cu.account_name
+        f"""SELECT i.invoice_no, c.amount, cu.account_name
            FROM collections c JOIN invoices i ON i.id = c.invoice_id
            JOIN customers cu ON cu.id = i.customer_id
            WHERE date(c.pay_date) = date('now') AND c.kind = 'payment'
-             AND COALESCE(c.voided,0) = 0"""
+             AND COALESCE(c.voided,0) = 0
+             {_pending_filter(con, "invoices")}"""
     ):
         cands.append(
             # Paid is a daily event, not a persistent condition: the date
@@ -222,10 +228,11 @@ def _money_candidates(con: sqlite3.Connection, today: date) -> list:
     try:
         from engine import doc_balance, doc_total
         for co in con.execute(
-            """SELECT co.co_no, co.co_date, cu.account_name
+            f"""SELECT co.co_no, co.co_date, cu.account_name
                FROM change_orders co
                JOIN customers cu ON cu.id = co.customer_id
-               WHERE co.status = 'Issued'"""
+               WHERE co.status = 'Issued'
+                 {_pending_filter(con, "change_orders")}"""
         ):
             bal = doc_balance(con, "change", co["co_no"])
             if bal <= 0.009:
@@ -292,11 +299,12 @@ def _top_asset_item(con: sqlite3.Connection) -> dict | None:
 
     cands = []
     for r in con.execute(
-            """SELECT t.ticket_id, t.status, t.on_rent, a.unit_no, c.account_name
+            f"""SELECT t.ticket_id, t.status, t.on_rent, a.unit_no, c.account_name
                FROM tickets t
                JOIN assets a ON a.id = t.asset_id
                JOIN customers c ON c.id = t.customer_id
-               WHERE t.status IN ('Reserved','Dispatched')"""):
+               WHERE t.status IN ('Reserved','Dispatched')
+                 {_pending_filter(con, "tickets")}"""):
         fit = ticket_money(con, r["ticket_id"]).get("fit", "PASS")
         if fit != "PASS":
             cands.append({"ticket_id": r["ticket_id"], "unit_no": r["unit_no"],
@@ -365,24 +373,26 @@ def today_must_do(con: sqlite3.Connection) -> list:
     _rentals = _core.module_on(con, "rentals")
     if _rentals:
         for t in con.execute(
-            """SELECT t.ticket_id, c.customer_id AS cust_code,
+            f"""SELECT t.ticket_id, c.customer_id AS cust_code,
                       a.asset_id AS asset_code
                FROM tickets t
                JOIN customers c ON c.id = t.customer_id
                JOIN assets a ON a.id = t.asset_id
                WHERE t.status = 'Dispatched'
                  AND (t.on_rent IS NULL OR date(t.on_rent) <= date('now'))
+                 {_pending_filter(con, "tickets")}
                ORDER BY t.ticket_id"""
         ):
             out.append({"text": f"Dispatch {t['ticket_id']} — {t['asset_code']} to {t['cust_code']}",
                         "href": f"/ticket/{t['ticket_id']}", "key": f"must:disp:{t['ticket_id']}"})
         for t in con.execute(
-            """SELECT t.ticket_id, c.customer_id AS cust_code,
+            f"""SELECT t.ticket_id, c.customer_id AS cust_code,
                       a.asset_id AS asset_code
                FROM tickets t
                JOIN customers c ON c.id = t.customer_id
                JOIN assets a ON a.id = t.asset_id
-               WHERE t.status = 'On Rent' AND date(t.off_rent) = date('now')"""
+               WHERE t.status = 'On Rent' AND date(t.off_rent) = date('now')
+                 {_pending_filter(con, "tickets")}"""
         ):
             out.append({"text": f"Due back today {t['ticket_id']} — {t['asset_code']} ({t['cust_code']})",
                         "href": f"/ticket/{t['ticket_id']}", "key": f"must:back:{t['ticket_id']}"})
@@ -408,7 +418,8 @@ def today_can_do(con: sqlite3.Connection) -> list:
     _compliance = _core.module_on(con, "compliance")
     if _rentals and _core.module_on(con, "billing"):
         n = con.execute(
-            "SELECT COUNT(*) FROM tickets WHERE status = 'Ready to Bill'").fetchone()[0]
+            "SELECT COUNT(*) FROM tickets WHERE status = 'Ready to Bill'"
+            + _pending_filter(con, "tickets")).fetchone()[0]
         if n:
             out.append({"text": f"{n} Rental Tickets ready to bill", "href": "/invoice/new",
                         "key": "can:bill"})
@@ -443,15 +454,17 @@ def today_can_do(con: sqlite3.Connection) -> list:
         # Quiet money note: open-ended rentals only earn a shoulder-tap when
         # another job is contending for the iron (the alert strip decides that).
         nooff = con.execute(
-            """SELECT COUNT(*) FROM tickets
-               WHERE status IN ('On Rent','Standby') AND (off_rent IS NULL OR off_rent='')"""
+            f"""SELECT COUNT(*) FROM tickets
+               WHERE status IN ('On Rent','Standby') AND (off_rent IS NULL OR off_rent='')
+                 {_pending_filter(con, "tickets")}"""
         ).fetchone()[0]
         if nooff:
             out.append({"text": f"{nooff} on rent with no end date",
                         "href": "/tickets?flag=nooff", "key": "can:nooff"})
     if _core.module_on(con, "quotes"):
         nq = con.execute(
-            "SELECT COUNT(*) FROM quotes WHERE status NOT IN ('Void','Declined','Expired','Converted')").fetchone()[0]
+            "SELECT COUNT(*) FROM quotes WHERE status NOT IN ('Void','Declined','Expired','Converted')"
+            + _pending_filter(con, "quotes")).fetchone()[0]
         if nq:
             out.append({"text": f"{nq} live quotes waiting on follow-up", "href": "/quotes",
                         "key": "can:quotes"})
@@ -530,10 +543,11 @@ def today_tomorrow(con: sqlite3.Connection) -> list:
     if not _core.module_on(con, "rentals"):
         return out
     for t in con.execute(
-        """SELECT t.ticket_id, a.asset_id AS asset_code FROM tickets t
+        f"""SELECT t.ticket_id, a.asset_id AS asset_code FROM tickets t
            JOIN assets a ON a.id = t.asset_id
            WHERE date(t.on_rent) = date('now', '+1 day')
              AND t.status IN ('Reserved', 'Dispatched')
+             {_pending_filter(con, "tickets")}
            ORDER BY t.ticket_id LIMIT 5"""
     ):
         out.append({"text": f"Tomorrow: {t['ticket_id']} — {t['asset_code']}",

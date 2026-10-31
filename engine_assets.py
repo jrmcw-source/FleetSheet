@@ -4,6 +4,7 @@ import sqlite3
 from calendar import monthrange
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
+import math
 from pathlib import Path
 import re
 import secrets
@@ -130,7 +131,7 @@ from engine_core import (
 
 """FleetSheet engine: assets flow — units, sites, tickets, work orders, rental calculations, availability reports."""
 
-__all__ = ['billable_days', 'applied_rate', 'rental_amount', 'compliance', 'fit_reason', 'possession_rules', 'ticket_money', 'ticket_lines', 'save_ticket_lines', 'sync_flat_charges_to_lines', 'FREIGHT_CATS', 'asset_status', 'next_ticket_id', 'create_ticket', 'update_ticket', 'SoftReserveConflict', 'update_ticket_transport', 'condition_worse', 'save_ticket_condition', 'save_ticket_photo', 'read_ticket_photo', 'set_status', 'ready_work_orders', 'next_asset_id', 'save_asset', 'next_site_id', 'save_site', 'report_availability', 'report_upcoming', 'report_stays', 'report_maintenance', 'next_wo_id', 'wo_cost', 'save_wo', 'wo_lines', 'report_work_orders', 'HAUL_BY', 'DELIVER_TO', 'HAUL_LABELS', 'DELIVER_LABELS', 'clean_haul_by', 'clean_deliver_to', 'haul_consequence', 'haul_from', 'RATE_UNITS', 'clean_rate_unit', 'ticket_hours',
+__all__ = ['billable_days', 'applied_rate', 'rental_amount', 'rental_periods', 'compliance', 'fit_reason', 'possession_rules', 'ticket_money', 'ticket_lines', 'save_ticket_lines', 'sync_flat_charges_to_lines', 'FREIGHT_CATS', 'asset_status', 'next_ticket_id', 'create_ticket', 'update_ticket', 'SoftReserveConflict', 'update_ticket_transport', 'condition_worse', 'save_ticket_condition', 'save_ticket_photo', 'read_ticket_photo', 'set_status', 'ready_work_orders', 'next_asset_id', 'save_asset', 'next_site_id', 'save_site', 'report_availability', 'report_upcoming', 'report_stays', 'report_maintenance', 'next_wo_id', 'wo_cost', 'save_wo', 'wo_lines', 'report_work_orders', 'HAUL_BY', 'DELIVER_TO', 'HAUL_LABELS', 'DELIVER_LABELS', 'clean_haul_by', 'clean_deliver_to', 'haul_consequence', 'haul_from', 'RATE_UNITS', 'clean_rate_unit', 'ticket_hours',
  'day_equivalent', 'ASSET_STATUSES', 'clean_asset_status', 'rentable_or_raise',
  'create_sale', 'update_sale', 'sale_edit_block', 'list_sales', 'next_sale_id', 'peek_next_sale_id']
 
@@ -155,8 +156,12 @@ def ticket_hours(t) -> float:
     return max(he - hs, 0.0) if hs > 0 and he > 0 else 0.0
 
 def day_equivalent(unit, value) -> float:
-    """A rate expressed per day, for at-a-glance totals. Week/Monthly prorate
-    exactly as billing does; Hour and Special have no day equivalent (0)."""
+    """A rate expressed per day, for at-a-glance display totals
+    only. This is NOT the billing figure: since build 'at',
+    period rates bill whole periods rounded up (see
+    rental_periods), so no per-day proration states what a
+    rental charges. Hour and Special have no day equivalent
+    (0)."""
     unit = _LEGACY_RATE_UNIT.get(unit or "", unit or "")
     v = float(value or 0)
     if unit == "Week":
@@ -307,14 +312,37 @@ def applied_rate(asset: sqlite3.Row, rate_type: str, override: float | None) -> 
     if col and col in cols:
         return float(asset[col] or 0)
     return 0.0
-def rental_amount(rate: float, rate_type: str, days: int, hours: float = 0.0) -> float:
+# Days in one billed month for a monthly rate (build 'at',
+# Jason 2026-10-30): a month is 28 consecutive days — the
+# rental industry's standard month. proof_at.py is
+# parameterized on this constant.
+MONTH_DAYS = 28
+
+def rental_periods(rate_type: str, days: int, min_weeks: int = 1,
+                   min_months: int = 1) -> int | None:
+    """Whole periods a period-rate rental bills (build 'at', Jason
+    2026-10-30): a weekly rate buys the whole week and a monthly
+    rate the whole month, so a partial period rounds UP to the
+    next whole period, floored at the company's minimum weeks /
+    minimum months for the contract. One day out on a weekly
+    rate is one week. Day and Hour rates bill by their own
+    count, not by periods, and return None."""
     unit = _LEGACY_RATE_UNIT.get(rate_type or "", rate_type or "")
     if unit == "Week":
-        return rate * max(days / 7.0, 1 / 7.0)
+        return max(math.ceil(days / 7), max(int(min_weeks or 1), 1))
     if unit == "Monthly":
-        return rate * max(days / 30.0, 1 / 30.0)
+        return max(math.ceil(days / MONTH_DAYS),
+                   max(int(min_months or 1), 1))
+    return None
+
+def rental_amount(rate: float, rate_type: str, days: int, hours: float = 0.0,
+                  min_weeks: int = 1, min_months: int = 1) -> float:
+    unit = _LEGACY_RATE_UNIT.get(rate_type or "", rate_type or "")
     if unit == "Hour":
         return rate * max(hours or 0.0, 0.0)
+    periods = rental_periods(rate_type, days, min_weeks, min_months)
+    if periods is not None:
+        return rate * periods
     return rate * days
 def compliance(asset: sqlite3.Row, site_j: sqlite3.Row, today: date | None = None,
                cert_expiry=None) -> str:
@@ -560,6 +588,7 @@ def ticket_money(con: sqlite3.Connection, ticket_id: str) -> dict:
                c.account_name, c.waiver_default,
                COALESCE(c.tax_exempt, 0) AS cust_tax_exempt,
                co.waiver_pct, co.env_pct, co.min_days, co.bill_both_dates,
+               co.min_weeks, co.min_months,
                co.default_tax, co.yard_loc_id,
                yj.tax_rate AS yard_tax_rate, yj.tax_name AS yard_tax_name,
                yj.display_name AS yard_loc_name,
@@ -580,7 +609,27 @@ def ticket_money(con: sqlite3.Connection, ticket_id: str) -> dict:
     days = billable_days(t["on_rent"], t["off_rent"], date.today(), t["min_days"], bool(t["bill_both_dates"]))
     rate = applied_rate(t, t["rate_type"], _row_get(t, "rate_value", _row_get(t, "special_override")))
     hours = ticket_hours(t)
-    rental = rental_amount(rate, t["rate_type"], days, hours)
+    # Build 'at' (Jason 2026-10-30): period rates bill whole periods
+    # rounded up, floored at the company's minimum weeks / months;
+    # the computed line's quantity is that same period count, so
+    # quantity, unit, rate, and amount tell one story.
+    _min_weeks = int(_row_get(t, "min_weeks", 1) or 1)
+    _min_months = int(_row_get(t, "min_months", 1) or 1)
+    periods = rental_periods(t["rate_type"], days, _min_weeks, _min_months)
+    rental = rental_amount(rate, t["rate_type"], days, hours,
+                           _min_weeks, _min_months)
+    # Build 'at' Item 2 (Jason, 2026-10-30): a written-over rental
+    # charge replaces the computed amount in full — the ticket's
+    # lines, its waiver and environmental percentages, its total,
+    # and the invoice carry all take the written figure from this
+    # one substitution, with no special-casing downstream. The
+    # computed figure is kept alongside (rental_computed) so the
+    # ticket form can state what the written charge replaced;
+    # clearing the override restores the computed amount exactly.
+    computed_rental = rental
+    _ovr = _row_get(t, "rental_override", None)
+    if _ovr is not None:
+        rental = round(float(_ovr), 2)
     waiver = rental * float(t["waiver_pct"]) if t["waiver_yn"] else 0.0
     env = rental * float(t["env_pct"])
     rental_sub = rental + waiver + env
@@ -600,7 +649,8 @@ def ticket_money(con: sqlite3.Connection, ticket_id: str) -> dict:
     if rental:
         lines.append({"category": "Rental", "item": t["unit_no"],
                       "description": (t["description"] or "").strip(),
-                      "qty": hours if _unit_word == "Hours" else days,
+                      "qty": hours if _unit_word == "Hours"
+                             else (periods if periods is not None else days),
                       "uom": _unit_word, "rate": round(rate, 2),
                       "amount": round(rental, 2), "taxed": True,
                       "computed": True})
@@ -620,8 +670,27 @@ def ticket_money(con: sqlite3.Connection, ticket_id: str) -> dict:
     transport = sum(ln["amount"] for ln in stored if ln["category"] in FREIGHT_CATS)
     other = sum(ln["amount"] for ln in stored if ln["category"] not in FREIGHT_CATS)
     sub = rental_sub + transport + other
+    # Build 'as' (Item 6): the write-in rides as a stored line of its
+    # own — it counts in the ticket's subtotal and, when its Tax flag
+    # stands, in the tax base, exactly like a stored charge line. Per
+    # the build 's' law it does not flow onto an invoice as a line:
+    # extras are typed on the invoice, which carries its own seat.
+    _wadj_raw = _row_get(t, "adjustment", None)
+    _wadj = round(float(_wadj_raw), 2) if _wadj_raw else 0.0
+    _wadj_taxed = bool(_row_get(t, "adj_taxable", 0))
+    if _wadj:
+        lines.append({"category": "Other", "item": "",
+                      "description": (_row_get(t, "adj_label", "")
+                                      or "").strip() or "Write-in",
+                      "qty": 1, "uom": "Each", "rate": _wadj,
+                      "amount": _wadj, "taxed": _wadj_taxed,
+                      "computed": False})
+        other += _wadj
+        sub += _wadj
     # Per-line tax base: only lines carrying their own Tax flag.
     tax_base = rental_sub + sum(ln["amount"] for ln in stored if ln["taxed"])
+    if _wadj and _wadj_taxed:
+        tax_base += _wadj
     tax = 0.0 if pos["tax_exempt"] else tax_base * pos["tax_rate"]
     _mob = sum(ln["amount"] for ln in stored if ln["description"] == "Mobilization")
     _demob = sum(ln["amount"] for ln in stored if ln["description"] == "Demobilization")
@@ -636,6 +705,7 @@ def ticket_money(con: sqlite3.Connection, ticket_id: str) -> dict:
         "hours": round(hours, 2),
         "rate": rate,
         "rental": round(rental, 2),
+        "rental_computed": round(computed_rental, 2),
         "transport": round(transport, 2),
         "mob": round(_mob, 2),
         "demob": round(_demob, 2),
@@ -871,6 +941,41 @@ def update_ticket(con: sqlite3.Connection, ticket_id: str, data: dict) -> str:
             ticket_id,
         ),
     )
+    # Build 'at' Item 2 (Jason, 2026-10-30): the rental-charge
+    # write-over. The ticket form always posts the field — a figure
+    # sets the override, an empty field clears it; a caller that
+    # does not post the field leaves the override untouched. Set
+    # and clear are recorded with the clerk: the stamp on the
+    # ticket carries the latest, and the done log carries every
+    # change (the record is the protection).
+    if "rental_override" in data:
+        _raw = data.get("rental_override")
+        _new = None
+        if _raw not in (None, ""):
+            try:
+                _new = round(float(_raw), 2)
+            except (TypeError, ValueError):
+                raise ValueError("Rental charge must be a number")
+        _old = _row_get(t, "rental_override", None)
+        _old = None if _old is None else round(float(_old), 2)
+        if _new != _old:
+            _who = data.get("clerk") or "clerk"
+            _when = datetime.now().strftime("%Y-%m-%d %H:%M")
+            if _new is None:
+                _what = (f"Rental charge override cleared "
+                         f"(was ${_old:,.2f})")
+            else:
+                _what = f"Rental charge set to ${_new:,.2f}"
+            con.execute(
+                "UPDATE tickets SET rental_override=?, "
+                "rental_override_note=? WHERE ticket_id=?",
+                (_new, f"{_what} · by {_who} · {_when}", ticket_id))
+            from engine_today import add_done_manual
+            add_done_manual(
+                con,
+                f"Rental Ticket {ticket_id}: "
+                f"{_what[0].lower() + _what[1:]}",
+                f"/ticket/{ticket_id}", _who)
     stamp_company_snapshot(con, "tickets", key_of(con, "tickets", ticket_id))
     con.commit()
     return ticket_id
@@ -1738,7 +1843,9 @@ def save_wo(con, data: dict, wo_id: str | None = None) -> str:
     wcols = [r[1] for r in con.execute("PRAGMA table_info(work_orders)")]
     for col, ddl in [("ref_ticket", "TEXT"), ("wo_date", "TEXT"), ("item", "TEXT"),
                      ("qty", "REAL DEFAULT 1"), ("cost", "REAL DEFAULT 0"),
-                     ("po", "TEXT")]:
+                     ("po", "TEXT"),
+                     ("adjustment", "REAL"), ("adj_label", "TEXT"),
+                     ("adj_taxable", "INTEGER")]:
         if col not in wcols:
             con.execute(f"ALTER TABLE work_orders ADD COLUMN {col} {ddl}")
     aid = data.get("asset_id") or ""
@@ -1769,6 +1876,10 @@ def save_wo(con, data: dict, wo_id: str | None = None) -> str:
     # Bill (2026-10-15): one WO with line items — the bill IS the sum of
     # the lines. The form never sends bill_amount (it never had a Bill
     # field), so a lines-less save keeps the old bill_amount path.
+    # Build 'as' (Item 6): the write-in counts into the bill like a
+    # line — stored on the WO row, taxed where the WO is taxed.
+    wadj = _money(data.get("adjustment") or 0).quantize(
+        CENT, rounding=ROUND_HALF_UP) if "adjustment" in data else None
     lines = data.get("lines")
     if lines is not None:
         # Money is Decimal in computation, REAL at rest: sum the
@@ -1777,11 +1888,13 @@ def save_wo(con, data: dict, wo_id: str | None = None) -> str:
         line_total = Decimal("0.00")
         for ln in lines:
             line_total += (_money(ln.get("qty") or 0) * _money(ln.get("cost") or 0)).quantize(CENT, rounding=ROUND_HALF_UP)
+        if wadj:
+            line_total += wadj
         bill = float(line_total) if charge == "customer" else 0.0
     elif charge == "internal":
         bill = 0.0
     else:
-        bill = _mf(data.get("bill_amount") or 0)
+        bill = _mf(data.get("bill_amount") or 0) + (float(wadj) if wadj else 0.0)
     if charge == "customer" and status == "Complete" and bill <= 0:
         raise ValueError("Completed customer work needs a positive bill amount")
     open_d = data.get("open_date") or date.today().isoformat()
@@ -1797,6 +1910,18 @@ def save_wo(con, data: dict, wo_id: str | None = None) -> str:
         bill = float(prior["bill_amount"] or 0)
         cust = prior["customer_id"]
         status = prior["status"]
+    # The write-in as stored: a supplied value writes (unless the WO
+    # stands invoiced, when the record stands as issued); otherwise
+    # the stored value carries over.
+    if wadj is not None and not (prior and prior["invoice_id"]):
+        _wadj_row = (float(wadj) or None,
+                     (data.get("adj_label") or "").strip() or None,
+                     1 if data.get("adj_taxable") else None)
+    elif prior is not None:
+        _wadj_row = (prior["adjustment"], prior["adj_label"],
+                     prior["adj_taxable"])
+    else:
+        _wadj_row = (None, None, None)
     row = (
         asset_key(con, aid),
         key_of(con, "tickets", tid) if tid else None,
@@ -1808,19 +1933,21 @@ def save_wo(con, data: dict, wo_id: str | None = None) -> str:
         data.get("yard_or_site") or "", data.get("notes") or "",
         data.get("ref_ticket") or "", data.get("wo_date") or "",
         (data.get("po") or "").strip(),
+    ) + _wadj_row + (
         wid,
     )
     exists = con.execute("SELECT 1 FROM work_orders WHERE wo_id=?", (wid,)).fetchone()
     sql_u = """UPDATE work_orders SET asset_id=?, ticket_id=?, customer_id=?, charge_to=?,
                work_type=?, description=?, vendor=?, open_date=?, close_date=?,
                labor=?, parts=?, other_cost=?, bill_amount=?, status=?, warranty=?,
-               yard_or_site=?, notes=?, ref_ticket=?, wo_date=?, po=?
+               yard_or_site=?, notes=?, ref_ticket=?, wo_date=?, po=?,
+               adjustment=?, adj_label=?, adj_taxable=?
                WHERE wo_id=?"""
     sql_i = """INSERT INTO work_orders (asset_id, ticket_id, customer_id, charge_to,
                work_type, description, vendor, open_date, close_date, labor, parts,
                other_cost, bill_amount, status, warranty, yard_or_site, notes,
-               ref_ticket, wo_date, po, wo_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
+               ref_ticket, wo_date, po, adjustment, adj_label, adj_taxable, wo_id)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"""
     con.execute(sql_u if exists else sql_i, row)
     # Line items (2026-10-15): the WO row no longer carries item/qty/cost
     # (those columns are dormant). Replace the whole line set on every

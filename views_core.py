@@ -21,6 +21,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlparse
 import engine
 import printpack
 import exportpack
+from printbox import PRINTBOX_CSS, PRINTBOX_HTML, PRINTBOX_JS, print_trigger
 try:
     import updater_winsparkle
 except Exception:
@@ -254,6 +255,12 @@ select{padding-right:26px;appearance:none;-webkit-appearance:none;cursor:pointer
    are width:100% in grid cells, where the block span is correct. */
 #inv-totals .dollar{display:inline-block;vertical-align:middle}
 #inv-totals>div{white-space:nowrap}
+/* The write-in row (build 'as', Item 6): the same mid-sentence seat
+   as the invoice totals — a flex row keeps the label, the charge,
+   its Tax flag, and its clear ✕ on one line at the right, and the
+   block .dollar span sizes to its input as a flex item instead of
+   detaching the $ across the page. */
+.writein-row{display:flex;gap:8px;align-items:center;justify-content:flex-end}
 /* Lookup selects (Issue 4): the Other/-Add- text input + buttons live in
    a block wrapper so they sit under the select in its grid cell. */
 .lookup-wrap{display:block}
@@ -415,25 +422,15 @@ details>.row:first-of-type{margin-top:8px}
    (e.g. Compliance) stuck tight under the card above it. Cards move
    within/between columns; the columns themselves never move. */
 .dashgrid .card-col{display:flex;flex-direction:column;gap:8px}
-/* Print menu (Jason 2026-10-18): every Print button offers Print to
-   Screen, Print to Location, PRINT. A <details> dropdown — no JS needed
-   to open it; PRINTMENU_JS wires the actions and closes it on
-   outside clicks. */
-.pmenu{position:relative;display:inline-block;vertical-align:middle}
-.pmenu summary.pmenu-sum{list-style:none;cursor:pointer;background:var(--frame);color:#fff;border:0;padding:9px 14px;border-radius:6px;font:inherit;display:inline-block}
-.pmenu summary.pmenu-sum::-webkit-details-marker{display:none}
-.pmenu summary.pmenu-link{list-style:none;cursor:pointer;color:var(--frame);text-decoration:underline;display:inline}
-.pmenu summary.pmenu-link::-webkit-details-marker{display:none}
-.pmenu .popts{position:absolute;right:0;top:calc(100% + 4px);background:#fff;border:1px solid #c5cdd6;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.18);padding:6px;z-index:1400;min-width:216px;text-align:left;max-height:calc(100vh - 24px);overflow-y:auto}
-/* Print menu anchoring (Jason 2026-10-24, 'm' look-see item 2): a menu
-   whose button sits low on the page opens UP instead of running below
-   the crease — PRINTMENU_JS adds .up when the downward menu would
-   overflow the viewport. The max-height cap + internal scroll is the
-   backstop for very short viewports. */
-.pmenu.up .popts{top:auto;bottom:calc(100% + 4px)}
-.pmenu .popts a,.pmenu .popts button{display:block;width:100%;box-sizing:border-box;text-align:left;background:none;border:0;color:#1B2A4A;padding:7px 9px;border-radius:5px;font:inherit;text-decoration:none;cursor:pointer}
-.pmenu .popts a:hover,.pmenu .popts button:hover{background:#eef2f7}
-.pmenu .pstat{display:block;font-size:11px;color:#49606e;padding:2px 9px;max-width:300px;white-space:normal}
+/* Print trigger (Jason 2026-10-18; container changed build 'av',
+   2026-10-30): every Print button offers PRINT, Print to Screen,
+   Print to Location — since build 'av' in the ONE centered print
+   box (printbox.py), never a dropdown anchored to the button.
+   These two rules are the trigger button's established appearance
+   and size, kept as the trigger became a <button>: .pmenu-sum the
+   standard button, .pmenu-link the compact in-row link. */
+.pmenu-sum{list-style:none;cursor:pointer;background:var(--frame);color:#fff;border:0;padding:9px 14px;border-radius:6px;font:inherit;display:inline-block}
+.pmenu-link{list-style:none;cursor:pointer;background:none;color:var(--frame);text-decoration:underline;display:inline;border:0;padding:0;font:inherit}
 
 /* Line-item rows (Jason 2026-10-18): one row = one item. A faint but
    noticeable border delineates each row, and the row grows when its
@@ -442,7 +439,7 @@ details>.row:first-of-type{margin-top:8px}
    auto-grows it as the operator types, and grows it on load for
    saved text. */
 .lineitem-row,.iline{border:1px solid #aebbcb;border-radius:6px;padding:6px 8px;margin:0 0 6px;background:#fff}
-.iline{display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;align-items:start}
+.iline{display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px 104px;gap:8px;align-items:start}
 table.colines{border-collapse:separate;border-spacing:0 6px}
 table.colines th{border-bottom:0}
 table.colines td{border-top:1px solid #aebbcb;border-bottom:1px solid #aebbcb;background:#fff;vertical-align:top}
@@ -461,7 +458,7 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
    ~540px; below 720px the row wraps to two columns and the
    description (third cell in every line editor) takes its own
    full-width line, still inside its border. */
-.linehead{display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px;gap:8px;background:#e8eef4;color:var(--frame);font-weight:600;font-size:12.5px;padding:5px 8px;border:1px solid #aebbcb;border-bottom:0;border-radius:6px 6px 0 0}
+.linehead{display:grid;grid-template-columns:104px 1fr 2fr 84px 104px 104px 104px;gap:8px;background:#e8eef4;color:var(--frame);font-weight:600;font-size:12.5px;padding:5px 8px;border:1px solid #aebbcb;border-bottom:0;border-radius:6px 6px 0 0}
 .linehead.flex{display:flex;gap:6px}
 .linehead + .iline,.linehead + .lineitem-row{border-top-left-radius:0;border-top-right-radius:0}
 @media (max-width:720px){
@@ -530,6 +527,22 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
 .fhead .fh-doc{margin-left:auto;text-align:right}
 .fhead .fh-no{font-size:20px;font-weight:800;color:var(--frame);line-height:1.25;white-space:nowrap}
 .fhead .fh-no input{font-size:18px;font-weight:800;color:var(--frame);text-align:right;width:150px;max-width:none}
+/* Build 'az' (2026-10-31): the fixed 150px box above clipped the
+   tail of the numbers the product itself generates — a pending
+   revision's prefill ("INV-1002 Rev. 1", worst case
+   "INV-100001 Rev. 12") overflowed it and the last digit of
+   "Rev. N" was cut off. Where the browser supports it, the box
+   now sizes to its content: the 150px floor keeps the standing
+   head look for short numbers, and the 360px cap keeps the head
+   geometry. Browsers without field-sizing keep the rule above.
+   Cash and petty number inputs (.numfit — they stand in .frow
+   rows, not the .fh-no head) carry the same mechanism with
+   their own floor: their standing 180px cap, growing only when
+   a long Rev. N number needs the room, capped at 300px. */
+@supports (field-sizing:content){
+.fhead .fh-no input{field-sizing:content;width:auto;min-width:150px;max-width:360px}
+input.numfit{field-sizing:content;width:auto;min-width:180px;max-width:300px}
+}
 .fhead .fh-no a{color:var(--frame);text-decoration:none}
 .fhead .fh-date{margin-top:2px}
 .fhead label{margin:0 0 1px}
@@ -544,6 +557,11 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
 .fhead .fh-row2{display:flex;flex-wrap:wrap;gap:8px 24px;align-items:flex-start;margin-top:10px}
 .fhead .fh-cust2{flex:1 1 240px;min-width:200px}
 .fhead .fh-job{border:1.5px solid var(--frame);padding:8px 10px;min-width:300px;flex:0 1 470px;margin-left:auto;height:122px;overflow:hidden}
+/* Build 'ar' (2026-10-29): the stacked head (Payment — no Job Info
+   box) reserves the box's own slot in Row 2 with an empty cell of
+   the same geometry, so its bar stands at the same height as on
+   the forms that carry the box. */
+.fhead .fh-jobspace{flex:0 1 470px;min-width:300px;margin-left:auto;height:122px}
 .fhead .fh-job-h{font-weight:700;color:var(--frame);margin-bottom:3px}
 .fhead .fh-job div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 /* Universal View row (Jason 2026-10-25, build 'r'): every form page
@@ -705,6 +723,10 @@ textarea.ldesc{width:100%;box-sizing:border-box;font:inherit;resize:none;overflo
    (the print block above removes it from paper). _LOCK_JS stands
    it at the locked form's head. */
 .lockbanner{border:2px solid #b00020;background:#fdecea;color:#b00020;font-weight:700;font-size:15px;padding:6px 12px;margin:0 0 10px;border-radius:6px;text-align:center}
+/* Revision banner (build 'av', Jason 2026-10-30): a form standing
+   on a PENDING revision says what Save/Print will do — same box
+   geometry as .lockbanner, in the form's head seat. */
+.revbanner{border:2px solid var(--frame);background:#eef2f7;color:#1B2A4A;font-weight:700;font-size:15px;padding:6px 12px;margin:0 0 10px;border-radius:6px;text-align:center}
 /* Revised-to line (build 'al', Jason 2026-10-28): a voided
    original names its revision across its top — on its summary
    and on its printed document. It PRINTS (no print rule hides
@@ -901,7 +923,6 @@ LOOKUP_SELECT_JS = """
     } else if(mode === 'add'){
       if(p.inp.dataset.mode !== 'add'){ p.inp.value = ''; }
       p.inp.dataset.mode = 'add';
-      p.sel.dataset.prev = p.sel.value;
       p.inp.name = p.sel.dataset.field + '_new';
       p.inp.required = false;
       p.sel.hidden = true; p.sel.disabled = true;
@@ -915,9 +936,22 @@ LOOKUP_SELECT_JS = """
       if(p.err){ p.err.hidden = true; p.err.textContent = ''; }
     }
   }
+  function notePrev(sel){
+    /* The last genuine list value — what the ↩ list button restores.
+       'Other' and '-Add-' are triggers, never values to return to.
+       (Build 'ar', 2026-10-29: the -Add- path used to capture its
+       "previous" value inside setMode, after the pick had already
+       changed the select to '__add__', so ↩ list restored the
+       trigger itself and appeared to do nothing; the Other path
+       never restored a value at all and left the literal word
+       'Other' standing as the field's value.) */
+    if(sel && sel.value !== 'Other' && sel.value !== '__add__')
+      sel.dataset.prev = sel.value;
+  }
   function syncFromSelect(sel){
     var wrap = wrapOf(sel);
     if(!wrap) return;
+    notePrev(sel);
     if(sel.value === 'Other') setMode(wrap, 'other');
     else if(sel.value === '__add__') setMode(wrap, 'add');
     else setMode(wrap, 'list');
@@ -953,6 +987,7 @@ LOOKUP_SELECT_JS = """
         }
       });
       p.sel.value = val;
+      notePrev(p.sel);
       setMode(wrap, 'list');
       p.sel.dispatchEvent(new Event('change', {bubbles: true}));
       return true;
@@ -972,8 +1007,17 @@ LOOKUP_SELECT_JS = """
     if(backBtn){
       var w2 = wrapOf(backBtn); if(!w2) return;
       var p2 = parts(w2);
-      if(p2.inp.dataset.mode === 'add' && p2.sel.dataset.prev) p2.sel.value = p2.sel.dataset.prev;
+      // ↩ list abandons the type-over (build 'ar'): in BOTH modes
+      // the field returns to its last genuine list value, not to
+      // the trigger that opened the type-over. A value no longer
+      // among the options falls back to the first option.
+      var prev = p2.sel.dataset.prev;
+      if(prev !== undefined){
+        p2.sel.value = prev;
+        if(p2.sel.value !== prev) p2.sel.selectedIndex = 0;
+      }
       setMode(w2, 'list');
+      p2.sel.dispatchEvent(new Event('change', {bubbles: true}));
     }
   });
   document.addEventListener('keydown', function(e){
@@ -2170,19 +2214,21 @@ SUM_NOTE_JS = r"""
     if(cell){ openBox(cell); return; }
     if(e.target.closest('#sumnotebox .snb-min')){ minimize(); }
   });
-  /* The Print door carries the note post: on a click on a print
-     option (never the menu's own summary toggle), edited notes
-     post first — capture phase, ahead of the option's own
-     handler — then the chosen print action proceeds. */
+  /* The Print door carries the note post: on a click on one of
+     the print box's choice buttons (never the Print trigger
+     itself, which only opens the box — build 'av'), edited notes
+     post first — capture phase, ahead of the choice's own
+     handler — then the chosen print action proceeds, replayed
+     through the box's own action entry (fsPBAct). */
   document.addEventListener('click', function(e){
-    var opts = e.target.closest('.pmenu .popts');
-    if(!opts) return;
+    var choice = e.target.closest(
+      '#fsprintbox-print, #fsprintbox-screen, #fsprintbox-location');
+    if(!choice) return;
     var keys = Object.keys(dirty);
     if(!keys.length) return;
-    var a = e.target.closest('a');
-    var btn = e.target.closest('button');
-    if(!a && !btn) return;
     e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation();
+    var dest = choice.id === 'fsprintbox-print' ? 'paper'
+      : (choice.id === 'fsprintbox-screen' ? 'screen' : 'location');
     var seq = Promise.resolve();
     keys.forEach(function(k){
       var d = dirty[k];
@@ -2196,20 +2242,7 @@ SUM_NOTE_JS = r"""
     });
     seq.then(function(){
       dirty = {};
-      if(a && a.getAttribute('href')){
-        window.open(a.getAttribute('href'), '_blank');
-      } else if(btn && btn.hasAttribute('data-doc')){
-        if(window.fsSaveLoc) window.fsSaveLoc(btn);
-      } else if(btn){
-        var oc = btn.getAttribute('onclick') || '';
-        if(oc.indexOf('fsPrintScreen') >= 0){
-          if(window.fsPrintScreen) window.fsPrintScreen();
-        } else if(oc.indexOf('fsSavePage') >= 0){
-          if(window.fsSavePage) window.fsSavePage(btn);
-        } else {
-          window.print();
-        }
-      }
+      if(window.fsPBAct) window.fsPBAct(dest);
     });
   }, true);
 })();
@@ -2884,101 +2917,14 @@ def news_strip(alerts, path="/", top_items=None, alert_total=None, cats=None):
 # field blank, 0, or (qty fields only) the untouched default 1. Backends
 # read fixed index ranges and skip blanks, so gaps left by a removed middle
 # row are harmless — no renumbering needed.
-PRINTMENU_JS = """
-<script>
-/* Print menu actions (Jason 2026-10-18). Print to Screen builds a
-   document-like view of the CURRENT page (live values included):
-   controls become their values, app chrome is stripped. Print to
-   Location files that same view (form pages) or the document's file
-   (document menus) into the operator's print folder. */
-var FS_PV_CSS = 'body{font:13px/1.45 Calibri,Segoe UI,sans-serif;color:#1a1a1a;margin:24px}'
-  + 'table{border-collapse:collapse}td,th{border-bottom:1px solid #e5e7eb;padding:4px 6px}'
-  + '.pv-val{white-space:pre-wrap;word-break:break-word}'
-  + 'h1,h2,h3{color:#1B2A4A}';
-function fsBuildPrintHTML(){
-  var clone = document.documentElement.cloneNode(true);
-  var src = document.querySelectorAll('input,select,textarea');
-  var dst = clone.querySelectorAll('input,select,textarea');
-  for (var i = 0; i < src.length && i < dst.length; i++){
-    var el = src[i], c = dst[i];
-    if (el.type === 'checkbox' || el.type === 'radio'){
-      if (el.checked) c.setAttribute('checked',''); else c.removeAttribute('checked');
-    } else if (el.tagName === 'SELECT'){
-      Array.prototype.forEach.call(c.options, function(o){ o.selected = (o.value === el.value); });
-    } else {
-      c.setAttribute('value', el.value);
-      if (el.tagName === 'TEXTAREA') c.textContent = el.value;
-    }
-  }
-  // Controls become their values — a document, not a form.
-  Array.prototype.slice.call(clone.querySelectorAll('input,select,textarea')).forEach(function(c){
-    var span = clone.ownerDocument.createElement('span');
-    span.className = 'pv-val';
-    if (c.tagName === 'SELECT'){
-      var o = c.options[c.selectedIndex];
-      span.textContent = o ? o.textContent : '';
-    } else if (c.type === 'checkbox' || c.type === 'radio'){
-      span.textContent = c.checked ? '\u2611' : '\u2610';
-    } else {
-      span.textContent = c.value || '';
-    }
-    c.parentNode.replaceChild(span, c);
-  });
-  Array.prototype.slice.call(clone.querySelectorAll(
-    'script,header,footer,nav,button,.pmenu,.mark,#morebelow,.pbox-lock,.news-wrap'
-  )).forEach(function(n){ n.remove(); });
-  var st = clone.ownerDocument.createElement('style');
-  st.textContent = FS_PV_CSS;
-  clone.querySelector('head').appendChild(st);
-  return '<!doctype html>' + clone.outerHTML;
-}
-function fsPrintScreen(){
-  var w = window.open('', '_blank');
-  if (!w) return;
-  w.document.write(fsBuildPrintHTML());
-  w.document.close();
-}
-function fsPstat(btn, msg){
-  var m = btn.closest('.pmenu');
-  var st = m ? m.querySelector('.pstat') : null;
-  if (st) st.textContent = msg;
-}
-function fsSaveLoc(btn){
-  fsPstat(btn, 'Saving\u2026');
-  var body = new URLSearchParams(); body.set('doc', btn.getAttribute('data-doc'));
-  fetch('/print/save', {method:'POST', body: body}).then(function(r){ return r.json(); })
-    .then(function(j){ fsPstat(btn, j.ok ? ('Saved to ' + j.path) : ('Could not save: ' + (j.error || 'error'))); })
-    .catch(function(e){ fsPstat(btn, 'Could not save.'); });
-}
-function fsSavePage(btn){
-  fsPstat(btn, 'Saving\u2026');
-  var body = new URLSearchParams();
-  body.set('name', document.title || 'FleetSheet document');
-  body.set('html', fsBuildPrintHTML());
-  fetch('/print/save-page', {method:'POST', body: body}).then(function(r){ return r.json(); })
-    .then(function(j){ fsPstat(btn, j.ok ? ('Saved to ' + j.path) : ('Could not save: ' + (j.error || 'error'))); })
-    .catch(function(e){ fsPstat(btn, 'Could not save.'); });
-}
-document.addEventListener('click', function(e){
-  document.querySelectorAll('details.pmenu[open]').forEach(function(d){
-    if (!d.contains(e.target)) d.removeAttribute('open');
-  });
-});
-/* Anchoring (Jason 2026-10-24): when a print menu opens, flip it up
-   (.up) if the downward options would run past the viewport bottom —
-   the menu always renders fully on-screen. */
-document.addEventListener('toggle', function(e){
-  var d = e.target;
-  if (!d.classList || !d.classList.contains('pmenu')) return;
-  if (!d.open) { d.classList.remove('up'); return; }
-  var p = d.querySelector('.popts');
-  if (!p) return;
-  d.classList.remove('up');
-  var r = p.getBoundingClientRect();
-  if (r.bottom > window.innerHeight - 8) d.classList.add('up');
-}, true);
-</script>
-"""
+# The universal print box bundle (build 'av', Jason 2026-10-30):
+# printbox.py owns the CSS, the overlay HTML, and the JS (the
+# carried-over fsBuildPrintHTML / fsSaveLoc /
+# fsSavePage actions plus the box logic). page() emits the pieces
+# in the shell; fragment renders that carry no shell (the unit
+# Paperwork popup in views_compliance) include this bundle whole.
+PRINTBOX_BUNDLE = ("<style>" + PRINTBOX_CSS + "</style>"
+                   + PRINTBOX_HTML + PRINTBOX_JS)
 
 LINEDEL_JS = """
 <script>(function(){
@@ -3040,6 +2986,17 @@ LINEDEL_JS = """
     }
     var btn=e.target&&e.target.closest?e.target.closest("button.line-del"):null;
     if(!btn) return;
+    // The write-in's ✕ clears its fields in place (build 'as',
+    // Item 6): the write-in is a label-and-charge seat, not a row,
+    // so clearing — not removing — is its delete.
+    var wr=btn.closest(".writein-row");
+    if(wr){
+      wr.querySelectorAll("input").forEach(function(i){
+        if(i.type==="checkbox") i.checked=false; else i.value="";
+      });
+      wr.dispatchEvent(new Event("input",{bubbles:true}));
+      return;
+    }
     var row=rowOf(btn); if(!row) return;
     if(isFirstRow(row)) return;
     if(!rowEmpty(row)&&!window.confirm("Delete this line item?")) return;
@@ -3418,7 +3375,7 @@ def page(title, body, company="FleetSheet", path="", alerts=None, top_items=None
     inp.value = v;
   }});
 }})();
-</script>{AUDIT_POPUP_JS}{NOTE_POPUP_JS}{SUM_NOTE_JS}<script>window.FS_IDLE_MINS={IDLE_MINS};window.FS_LOCK_MINS={LOCK_MINS};</script>{HEARTBEAT_JS}{LINEDEL_JS}{PRINTMENU_JS}
+</script>{AUDIT_POPUP_JS}{NOTE_POPUP_JS}{SUM_NOTE_JS}<script>window.FS_IDLE_MINS={IDLE_MINS};window.FS_LOCK_MINS={LOCK_MINS};</script>{HEARTBEAT_JS}{LINEDEL_JS}<style>{PRINTBOX_CSS}</style>{PRINTBOX_HTML}{PRINTBOX_JS}
 </body></html>"""
 
 
@@ -5174,7 +5131,7 @@ class CoreViews:
     def _sum_page(self, kind_label, ref, facts_pairs, lines_html,
                   doors_html, popups_html, view_url, view_title,
                   extra_top="", sections_html="", fact_groups=None,
-                  paper_html="", pay_doc=None):
+                  paper_html="", pay_doc=None, locked=False):
         """The one summary layout: title, fact table, lines, the
         standard sections (build 'ac': a kind's standing blocks
         after its lines — totals, panels, payments — composed as
@@ -5205,6 +5162,7 @@ class CoreViews:
                         f"Payment</a>")
         return f"""
         <h1>Summary of {html.escape(kind_label)}# {html.escape(str(ref))}</h1>
+        {'<div class="lockbanner">LOCKED</div>' if locked else ''}
         {extra_top}
         {facts_html}
         {lines_html}
@@ -5292,14 +5250,21 @@ class CoreViews:
         lines, so its head renders the same two-row anatomy minus
         the box: Row 1 Company (left), form # + Date (right); the
         bar; Row 2 Customer (left) — the Customer below the
-        Company, like every other money form, not to its right."""
+        Company, like every other money form, not to its right.
+        Build 'ar' (Jason 2026-10-29): the stacked Row 2 also
+        carries an empty .fh-jobspace cell with the Job Info box's
+        geometry, reserving the space the box holds open on the
+        other forms — without it the row collapsed to the Customer
+        field's height and the bar sat higher than everywhere
+        else."""
         if job_lines is None:
             if stacked:
                 return (f"<div class=\"fhead fhead2\">"
                         f"<div class=\"fh-row1\">{self._company_band(con)}"
                         f"<div class=\"fh-doc\"><div class=\"fh-no\">{doc_html}</div>"
                         f"<div class=\"fh-date\">{date_html}</div></div></div>"
-                        f"<div class=\"fh-row2\"><div class=\"fh-cust2\">{cust_html}</div></div></div>")
+                        f"<div class=\"fh-row2\"><div class=\"fh-cust2\">{cust_html}</div>"
+                        f"<div class=\"fh-jobspace\"></div></div></div>")
             return (f"<div class=\"fhead\">{self._company_band(con)}"
                     f"<div class=\"fh-cust\">{cust_html}</div>"
                     f"<div class=\"fh-doc\"><div class=\"fh-no\">{doc_html}</div>"
@@ -5565,6 +5530,20 @@ class CoreViews:
         Folder — no path is typed anywhere. Lists directory names
         only; nothing is set until "Use this folder" posts."""
         q = q or {}
+        # Build 'av' (Jason 2026-10-30): ret is the page that sent
+        # the operator here (the print box's Change… link) — when
+        # it is a plain in-app path, it threads through every link
+        # and form on this page and Close returns to it instead of
+        # the default back target. Anything else (absent, external,
+        # protocol-relative) keeps today's behavior exactly.
+        ret = (q.get("ret") or "").strip()
+        if not (ret.startswith("/") and not ret.startswith("//")
+                and "://" not in ret):
+            ret = ""
+        ret_q = f"&ret={quote_plus(ret)}" if ret else ""
+        ret_hidden = (f'<input type=hidden name=ret '
+                      f'value="{html.escape(ret, quote=True)}">'
+                      if ret else "")
         target = q.get("for") if q.get("for") in ("backup", "print") else "backup"
         if target == "backup":
             _row = con.execute(
@@ -5603,10 +5582,10 @@ class CoreViews:
         rows = ""
         if cur.parent != cur:
             rows += (f"<p style='margin:2px 0'><a href='/setup/folders?for={target}"
-                     f"&path={quote_plus(str(cur.parent))}'>\u2191 Up</a></p>")
+                     f"&path={quote_plus(str(cur.parent))}{ret_q}'>\u2191 Up</a></p>")
         rows += "".join(
             f"<p style='margin:2px 0'><a href='/setup/folders?for={target}"
-            f"&path={quote_plus(str(p))}'>{html.escape(p.name)}/</a></p>"
+            f"&path={quote_plus(str(p))}{ret_q}'>{html.escape(p.name)}/</a></p>"
             for p in subs)
         if not subs and not list_err:
             rows += "<p class='hint'>No folders here.</p>"
@@ -5619,23 +5598,98 @@ class CoreViews:
         <form method=post action="/setup/folders/pick" style="margin-top:8px;display:inline">
           <input type=hidden name=target value="{target}">
           <input type=hidden name=path value="{cur_s}">
+          {ret_hidden}
           <button>Use this folder</button>
         </form>
         <form method=post action="/setup/folders/pick" style="display:inline">
           <input type=hidden name=target value="{target}">
           <input type=hidden name=path value="">
+          {ret_hidden}
           <button class="secondary">Use default folder</button>
         </form>
-        <a class="btn secondary" href="{back}">Close</a>
+        <a class="btn secondary" href="{html.escape(ret, quote=True) if ret else back}">Close</a>
         <form method=post action="/setup/folders/new" style="margin-top:10px">
           <input type=hidden name=target value="{target}">
           <input type=hidden name=path value="{cur_s}">
+          {ret_hidden}
           <div class="frow">
             <div><label>New folder name</label><input name=name class=w-md required maxlength=80></div>
             <div style="align-self:end"><button class="secondary">New Folder</button></div>
           </div>
         </form>
         """
+
+    def view_printafter(self, con, q=None):
+        """Print-after-commit landing (build 'av', Jason
+        2026-10-30): the POST layer commits a revision form whose
+        Print was chosen, then lands here to perform the print
+        itself. A bare standalone page — NOT the app page() shell —
+        with one status line and a Back link; the action rides a
+        small inline script and every value interpolated into it
+        is JSON-escaped.
+        dest=paper/screen act on doc (a /print/ path); paper adds
+        autoprint=1. dest=location files doc (pdf when given, else
+        doc) through POST /print/save and reports the saved path
+        in the status line, without navigating. dest=page* sends
+        the operator back to `back` with fsprint=<dest> appended,
+        where the print box's on-load handler performs the action
+        on the live page. Invalid dest/doc/back values render the
+        page with an error status and no script."""
+        q = q or {}
+        dest = (q.get("dest") or "").strip()
+        doc = q.get("doc") or ""
+        pdf = q.get("pdf") or ""
+        back = q.get("back") or "/"
+        if not (back.startswith("/") and not back.startswith("//")):
+            back = "/"
+        back_esc = html.escape(back, quote=True)
+        status = "Working\u2026"
+        script = ""
+        if dest not in ("paper", "screen", "location",
+                        "pagepaper", "pagescreen", "pagelocation"):
+            status = "Unknown print destination."
+        elif dest.startswith("page"):
+            _target = (back + ("&" if "?" in back else "?")
+                       + "fsprint=" + dest[4:])
+            script = (f"<script>location.replace("
+                      f"{json.dumps(_target)});</script>")
+            status = "Returning\u2026"
+        else:
+            _target = (pdf or doc) if dest == "location" else doc
+            if not (_target.startswith("/print/")
+                    and ".." not in _target):
+                status = "That document cannot be printed from here."
+            elif dest == "paper":
+                _url = (doc + ("&" if "?" in doc else "?")
+                        + "autoprint=1")
+                script = (f"<script>location.replace("
+                          f"{json.dumps(_url)});</script>")
+                status = "Opening\u2026"
+            elif dest == "screen":
+                script = (f"<script>location.replace("
+                          f"{json.dumps(doc)});</script>")
+                status = "Opening\u2026"
+            else:
+                status = "Saving\u2026"
+                script = (
+                    f"<script>(function(){{"
+                    f"var body = new URLSearchParams();"
+                    f"body.set('doc', {json.dumps(_target)});"
+                    f"fetch('/print/save', {{method:'POST', body: body}})"
+                    f".then(function(r){{ return r.json(); }})"
+                    f".then(function(j){{"
+                    f"document.getElementById('st').textContent = "
+                    f"j.ok ? ('Saved to ' + j.path) "
+                    f": ('Could not save: ' + (j.error || 'error')); }})"
+                    f".catch(function(e){{"
+                    f"document.getElementById('st').textContent = "
+                    f"'Could not save.'; }});"
+                    f"}})();</script>")
+        return (f"<!doctype html><html><head><meta charset=utf-8>"
+                f"<title>Print</title></head><body>"
+                f"<p id=\"st\">{html.escape(status)}</p>"
+                f"<p><a href=\"{back_esc}\">Back</a></p>"
+                f"{script}</body></html>")
 
     def _sticky_notes(self, con, q):
         """Sticky notes (2026-10-17 glimpse rules).
@@ -5955,42 +6009,31 @@ class CoreViews:
         """
 
     def _print_menu(self, screen=None, pdf=None, page=False, compact=False,
-                    docs=None):
+                    docs=None, commit=False, title=None, doc_label=None):
         """The Print button, globally (Jason 2026-10-18): one button, three
-        choices — Print to Screen (the document on screen), Print to
-        Location (filed into the operator's print folder), PRINT (the
-        printer of their choice, via the browser's print dialog).
-        page=True for form pages: the choices act on the current page,
-        live values included. Otherwise screen/pdf are /print/ paths.
-        docs=[(label, screen, pdf), ...] (build 'aa', 2026-10-26,
-        JC-AA1): a kind whose printable papers are several documents
-        (the Rental's Work Ticket and Delivery Ticket) gets ONE Print
-        control whose menu carries one three-choice entry per
-        document — never a standalone print link per paper."""
-        sumcls = "pmenu-link" if compact else "pmenu-sum"
-        if docs:
-            groups = ""
-            for _lab, _scr, _pdf in docs:
-                _sep = "&" if "?" in (_scr or "") else "?"
-                groups += (
-                    f'<span class="hint" style="display:block">'
-                    f'{html.escape(_lab)}</span>'
-                    f'<a href="{html.escape(_scr or "", quote=True)}" target="_blank" rel="noopener">Print to Screen</a>'
-                    f'<a href="{html.escape(_scr or "", quote=True)}{_sep}autoprint=1" target="_blank" rel="noopener">PRINT</a>'
-                    f'<button type=button data-doc="{html.escape(_pdf or _scr or "", quote=True)}" onclick="fsSaveLoc(this)">Print to Location</button>')
-            return (f'<details class="pmenu"><summary class="{sumcls}">Print</summary>'
-                    f'<div class="popts">{groups}<span class="pstat"></span></div></details>')
-        if page:
-            opts = ('<button type=button onclick="fsPrintScreen()">Print to Screen</button>'
-                    '<button type=button onclick="window.print()">PRINT</button>'
-                    '<button type=button onclick="fsSavePage(this)">Print to Location</button>')
-        else:
-            sep = "&" if "?" in (screen or "") else "?"
-            opts = (f'<a href="{html.escape(screen or "", quote=True)}" target="_blank" rel="noopener">Print to Screen</a>'
-                    f'<a href="{html.escape(screen or "", quote=True)}{sep}autoprint=1" target="_blank" rel="noopener">PRINT</a>'
-                    f'<button type=button data-doc="{html.escape(pdf or screen or "", quote=True)}" onclick="fsSaveLoc(this)">Print to Location</button>')
-        return (f'<details class="pmenu"><summary class="{sumcls}">Print</summary>'
-                f'<div class="popts">{opts}<span class="pstat"></span></div></details>')
+        choices — PRINT (the printer of their choice, via the browser's
+        print dialog), Print to Screen (the document on screen), Print
+        to Location (filed into the operator's print folder).
+        Build 'av' (Jason 2026-10-30): the button is ONLY the trigger
+        for the ONE centered universal print box (printbox.py) — it
+        returns printbox.print_trigger and nothing else; the box
+        carries the choices. page=True for form pages: the choices
+        act on the current page, live values included. Otherwise
+        screen/pdf are /print/ paths. docs=[(label, screen, pdf),
+        ...] (build 'aa', 2026-10-26, JC-AA1): a kind whose printable
+        papers are several documents (the Rental's Work Ticket and
+        Delivery Ticket) gets ONE Print control whose box carries a
+        paper selector — never a standalone print link per paper.
+        commit=True (build 'av'): the box's choice submits the
+        trigger's form with fs_print_dest / fs_print_doc set, so the
+        record commits before it prints. doc_label names the
+        document in the box's head (an alias for title — title wins
+        when both are passed)."""
+        return print_trigger(
+            title=title if title is not None else doc_label,
+            screen=screen, pdf=pdf,
+            page=page, docs=docs, commit=commit,
+            compact=compact)
 
     def _company_band(self, con):
         """The company block in the printed invoice's format, for editor
@@ -6028,20 +6071,23 @@ class CoreViews:
 
     def _btn_row(self, save_label="Save", jobpop=None, add_item=False, extra="",
                  submit_name="", submit_value="", print_menu=None,
-                 edit_pop=None):
+                 edit_pop=None, edit_href=None):
         """The universal form row (Jason 2026-10-26, void-and-revise
         ruling): ONE row, split — LEFT cluster, the content doors
         (Add Item, Job Info, Edit); RIGHT cluster, the action doors
         (Print, Save). Edit stands only in the locked-open state of
-        a posted document's form and opens the revision prompt
-        (edit_pop names the prompt's element); new/draft forms
-        carry no Edit. The split governs placement, not which
+        a posted document's form. Build 'av' (Jason 2026-10-30):
+        Edit is ONE editor with two doors — edit_href is the
+        kind's revise-start URL (its editor URL plus revise=1),
+        rendered as a plain link in the same seat; the old
+        revision prompt (edit_pop) is gone. New/draft forms carry
+        no Edit. The split governs placement, not which
         doors a form has: a form whose row never carried Add Item
         still lacks it.
-        save_label=None in the locked-open state (edit_pop set)
+        save_label=None in the locked-open state (edit_href set)
         renders Save disabled — present per the template, inert
         while locked (build 'am', Jason 2026-10-28); without
-        edit_pop it omits Save (forms whose commit is their own,
+        edit_href it omits Save (forms whose commit is their own,
         carried in extra by the form).
         submit_name/submit_value put a discriminator on the Save
         submit. print_menu overrides the row's Print menu HTML —
@@ -6055,9 +6101,12 @@ class CoreViews:
             left.append(f'<button type=button onclick="document.getElementById(\'{jobpop}\').style.display=\'block\'">Job Info</button>')
         if edit_pop:
             left.append(f'<button type=button onclick="document.getElementById(\'{edit_pop}\').style.display=\'block\'">Edit</button>')
+        elif edit_href:
+            left.append(f'<a class="btn" href="'
+                        f'{html.escape(edit_href, quote=True)}">Edit</a>')
         right = []
         right.append(print_menu if print_menu is not None else self._print_menu(page=True))
-        if save_label is None and edit_pop:
+        if save_label is None and (edit_pop or edit_href):
             # Build 'am' (Jason 2026-10-28): Save stands on the
             # locked form too — the universal row carries it in
             # every state. Locked, it is inert (disabled): the
@@ -6089,14 +6138,16 @@ class CoreViews:
                 f'<span style="display:inline-flex;gap:8px;align-items:center;'
                 f'text-align:right;font-size:14px;text-transform:none">{_right}</span></div>')
 
-    # The locked-open revision model (Jason 2026-10-26, build 'ab'):
-    # a form opened on an existing posted/issued document renders
-    # LOCKED — the record: viewable, printable — and its Edit door
-    # opens the revision prompt; confirming voids the original and
-    # lands the operator on the revision's own form, unlocked,
-    # under the engine's session marker. The POST layer is the real
-    # lock: no in-place save of an existing document lands without
-    # that marker.
+    # The locked-open revision model (Jason 2026-10-26, build 'ab';
+    # build 'av', 2026-10-30): a form opened on an existing
+    # posted/issued document renders LOCKED — the record: viewable,
+    # printable — and its Edit door is the kind's revise-start URL
+    # (one editor, two doors): the GET creates or resumes the
+    # PENDING revision and renders ITS form, unlocked, under the
+    # engine's session marker, while the original stays live and
+    # unvoided until the revision's Save or Print commits. The
+    # POST layer is the real lock: no in-place save of an existing
+    # document lands without that marker.
     _LOCK_JS = (
         "<script>(function(){var f=document.currentScript.closest('form')"
         "||document.querySelector('form');if(!f)return;"
@@ -6130,26 +6181,66 @@ class CoreViews:
         return (f'<div class="revto">*Revised to: '
                 f'{html.escape(str(info["revised_by"]))}</div>')
 
-    def _revise_popup(self, con, kind, ref):
-        """The revision prompt (a form popup under the popup law):
-        Reason (required) and the operator's Name (required,
-        prefilled with the desk user). Its Confirm posts the host
-        form to /revise — in the locked render the only enabled
-        fields are the hidden kind/ref and these two, so the post
-        carries exactly the act. Confirming voids the original and
-        creates the revision (JC-AB0)."""
-        inner = (
-            f'<input type=hidden name=rev_kind value="{html.escape(kind, quote=True)}">'
-            f'<input type=hidden name=rev_ref value="{html.escape(str(ref), quote=True)}">'
-            f'<div><label>Reason</label>'
-            f'<input name=rev_reason style="width:100%" required></div>'
-            f'<div><label>Name</label>'
-            f'<input name=rev_name value="{html.escape(self.desk(con), quote=True)}" required></div>'
-            f'<p>Save voids this document and opens its revision. '
-            f'The record keeps the void, the reason, and the name.</p>'
-            f'<button type=submit formaction="/revise" formmethod="post">'
-            f'Save</button>')
-        return self._pop_wrap("revpop", f"Revise {ref}", inner)
+    def _rev_banner(self, orig):
+        """The pending-revision banner (build 'av', Jason
+        2026-10-30): stands INSIDE the revision's form, at the
+        seat the locked banner holds on a locked form, and carries
+        the OPTIONAL revision note field — the note rides the
+        void record at the revision's Save/Print commit when the
+        operator offers one; nothing is required."""
+        o = html.escape(str(orig or ""))
+        return (f'<div class="revbanner">Revision of {o} — Save or '
+                f'Print voids {o} and posts this revision. '
+                f'<label>Revision note</label> '
+                f'<input name="rev_note" class="w-md"></div>')
+
+    def _pending_rev(self, con, kind, key, row):
+        """(banner_html, orig_number) when the row at engine key
+        `key` is a PENDING revision (build 'av'), else ("", "").
+        The editor dress reads it: the banner above and the
+        commit-mode Print (doc_label '<Kind> <orig>')."""
+        try:
+            if not key or not engine.revision_is_pending(con, kind, key):
+                return "", ""
+            orig = engine.revision_info(con, kind, row).get(
+                "revision_of") or ""
+            return self._rev_banner(orig), orig
+        except Exception:
+            return "", ""
+
+    def _revise_target(self, con, kind, ref):
+        """The GET revise=1 resolution (build 'av'): returns
+        (target_ref, error). The target is ref's pending revision
+        — the one already standing, or a fresh pending clone
+        (engine.create_pending_revision; the original is NOT
+        voided). A ref that is itself a pending revision resolves
+        to itself (reopening Edit resumes it). When the engine
+        refuses (ValueError — an invoiced rental, a plain-void
+        record, a revised-away paper), target is None and error
+        carries the operator-facing reason; the caller renders
+        the loaded document's locked form with the error at its
+        head."""
+        try:
+            key = engine.doc_key(con, kind, ref)
+        except Exception:
+            key = None
+        if key:
+            try:
+                if engine.revision_is_pending(con, kind, key):
+                    return ref, None
+            except Exception:
+                pass
+        try:
+            target = engine.pending_revision_ref(con, kind, ref)
+        except Exception:
+            target = None
+        if target:
+            return target, None
+        try:
+            return (engine.create_pending_revision(
+                con, kind, ref, (self.desk(con) or "")), None)
+        except ValueError as e:
+            return None, str(e)
 
     def _chain_facts(self, con, kind, row, summary_url):
         """The revision chain stated in a summary's fact table
@@ -6186,15 +6277,49 @@ class CoreViews:
         return (f'<div style="text-align:right;margin:2px 0 6px">'
                 f'<button type=submit{attrs}>{label}</button></div>')
 
-    def _line_head(self, last="Rate $"):
+    def _line_head(self, last="Rate $", total=True):
         """The one header band above the first line-item row (tweak
         round 2026-10-20, Jason): the change-order table's header-bar
         coloring (#e8eef4), placed ONCE per line editor — never per
         row. Add Item clones rows only, so adding rows adds no bands.
-        Grid editors share the rows' six-column template."""
+        Grid editors share the rows' column template. Build 'as'
+        (Jason 2026-10-30, Item 5): the band ends in the row Total —
+        the universal line-row layout is quantity, unit, price, and
+        the row's total at the right end. The rental booking row is
+        not a money line (its charge is rate × duration, computed by
+        the engine) and passes total=False."""
         labels = ("Type", "Item", "Description", "Qty", "Unit", last)
+        if total:
+            labels = labels + ("Total",)
         spans = "".join(f"<span>{l}</span>" for l in labels)
         return f'<div class="linehead" aria-hidden="true">{spans}</div>'
+
+    def _writein_row(self, label="", amount=None, taxable=False):
+        """The write-in charge above the subtotal (build 'as', Jason
+        2026-10-30, Item 6): a label and a charge — not a line row.
+        It stands on every money form, blank when blank, because a
+        user cannot fill in a field he cannot see; filled, it counts
+        into the document's total, carries a Tax flag like a line
+        row's, prints, and clears by its ✕ like a line row's delete.
+        Mirrors the invoice's Write-in row (2026-10-20) field for
+        field; the invoice keeps its own copy for its calc ids."""
+        try:
+            val = "" if amount is None else f"{float(amount):.2f}"
+        except (TypeError, ValueError):
+            val = ""
+        chk = " checked" if taxable else ""
+        lab = html.escape(label or "", quote=True)
+        return (
+            f'<div class=writein-row>Write-in '
+            f'<input name=adj_label placeholder="Describe (optional)" '
+            f'class=w-sm style="width:150px;display:inline-block" '
+            f'value="{lab}"> '
+            f'<input name=adjustment type=number step=0.01 class=w-xs '
+            f'style="width:96px;display:inline-block" value="{val}"> '
+            f'<label><input type=checkbox name=adj_taxable value=1{chk}> '
+            f'Tax</label> '
+            f'<button type=button class=line-del '
+            f'title="Clear write-in">✕</button></div>')
 
     def _job_info_popup(self, pid, vals=None, extra=""):
         """Universal job info popup with all 9 fields (Jason 2026-10-07).
@@ -6377,7 +6502,12 @@ class CoreViews:
           <div class="brow">
             <div><label>Default Payment Terms</label>{lookup_select(con, "terms", "default_terms", current=g('default_terms','Net 30'))}</div>
             <div><label>Minimum Rental Billing Days</label><input name=min_days type=number min=1 class=w-xs value="{html.escape(g('min_days','1'))}"></div>
-          </div>""" if _billing_on else "")
+          </div>
+          <div class="brow">
+            <div><label>Minimum Rental Billing Weeks</label><input name=min_weeks type=number min=1 class=w-xs value="{html.escape(g('min_weeks','1'))}"></div>
+            <div><label>Minimum Rental Billing Months</label><input name=min_months type=number min=1 class=w-xs value="{html.escape(g('min_months','1'))}"></div>
+          </div>
+          <p class="hint" style="margin:2px 0 0">For a monthly rate, a month is 28 consecutive days.</p>""" if _billing_on else "")
         _both_dates = (f"""
             <div style="align-self:end;padding-bottom:2px"><label><input type=checkbox name=bill_both_dates value=1 {"checked" if g('bill_both_dates','0') in ('1','True') else ""}> Bill both the on-rent and off-rent dates</label></div>""" if _billing_on else "")
         _jobinfo = (f"""
@@ -6465,8 +6595,23 @@ class CoreViews:
         # gone too — the version line and the check control stand in
         # the System Administration card's lower area, right of
         # Backup Settings (below), behavior intact.
-        updates_inner = """
-          <form method=post action="/updater/check"><p class=actions><button>Check for Updates…</button></p></form>""" if _updater_on else """
+        # Build 'ar': the updater's recorded state stands under the
+        # button as one short line — the page no longer leaves the
+        # operator guessing whether a check can run at all.
+        _updater_line = ""
+        if _updater_on:
+            try:
+                _updater_line = updater_winsparkle.status()["line"]
+            except Exception:
+                _updater_line = ""
+        if _updater_on:
+            updates_inner = """
+          <form method=post action="/updater/check"><p class=actions><button>Check for Updates…</button></p></form>"""
+            if _updater_line:
+                updates_inner += f"""
+          <p class='hint'>{html.escape(_updater_line)}</p>"""
+        else:
+            updates_inner = """
           <p class='hint'>Update checks are not available in this install.</p>"""
 
         try:
@@ -6950,7 +7095,7 @@ class CoreViews:
         if len(parts) != 2:
             self._send(page("Print", "<p>Need a document id.</p>"), 404)
             return
-        kind, doc = parts[0], parts[1]
+        kind, doc = parts[0], unquote(parts[1])
         if kind == "done":
             self._log_print(con, raw, as_pdf)
             self._send_print(printpack.html_done(con, (q.get("period") or "week")))

@@ -129,11 +129,11 @@ from engine_core import (
     set_main_company_phone,
 )
 
-from engine_assets import create_ticket, ticket_money, clean_rate_unit, RATE_UNITS, rentable_or_raise
+from engine_assets import create_ticket, ticket_money, clean_rate_unit, RATE_UNITS, rentable_or_raise, MONTH_DAYS
 
 """FleetSheet engine: accounting flow — quotes, invoices, payments, credit memos, petty cash, exports, revenue reports."""
 
-__all__ = ['next_invoice_id', 'create_invoice', 'invoice_has_lines', '_next_pay_id', '_refresh_invoice_status', 'record_payment', 'payment_batch_rows', 'payment_batch_info', 'payment_edit_block', 'void_payment_batch', 'stamp_payment_correction', 'next_batch_id', 'next_cm_id', 'credit_applied', 'credit_open', 'credit_lines', '_apply_credit_rows', 'issue_credit_memo', 'apply_open_credit', 'list_open_credits', 'list_open_invoices', 'big_fish_invoices', 'next_quote_id', 'next_co_id', '_line_amount', 'save_quote', 'set_quote_status', 'issue_change_order', 'save_change_order', 'change_order_assoc', 'associated_change_orders', 'record_doc_payment', 'apply_doc_credit', 'doc_total', 'doc_balance', 'doc_settled', 'doc_line_states', 'set_doc_line_note', 'doc_has_line_allocations', 'PAYABLE_KINDS', 'DOC_LABELS', 'quote_totals', 'quote_pack', 'convert_quote', 'next_pc_id', 'petty_balance', 'petty_book', 'set_pc_float', 'record_petty', 'CASH_ENTRY_METHODS', 'record_cash_entry', 'list_cash_entries', 'peek_cash_entry_no', 'complete_cash_revision', 'complete_petty_revision', 'invoice_line_states', 'invoice_has_line_allocations', 'list_payment_allocations', 'set_invoice_line_note', 'invoice_totals', 'invoice_totals_batch', 'invoice_balance', 'invoice_locked', 'set_invoice_po', 'upsert_po_record', 'po_record', 'backfill_po_records', 'po_check', 'quote_check',
+__all__ = ['next_invoice_id', 'create_invoice', 'invoice_has_lines', '_next_pay_id', '_refresh_invoice_status', 'record_payment', 'payment_batch_rows', 'payment_batch_info', 'payment_edit_block', 'void_payment_batch', 'stamp_payment_correction', 'next_batch_id', 'next_cm_id', 'credit_applied', 'credit_open', 'credit_lines', '_apply_credit_rows', 'issue_credit_memo', 'apply_open_credit', 'list_open_credits', 'list_open_invoices', 'big_fish_invoices', 'next_quote_id', 'next_co_id', '_line_amount', 'save_quote', 'set_quote_status', 'issue_change_order', 'save_change_order', 'change_order_assoc', 'associated_change_orders', 'record_doc_payment', 'apply_doc_credit', 'doc_total', 'doc_balance', 'doc_settled', 'doc_line_states', 'set_doc_line_note', 'doc_has_line_allocations', 'PAYABLE_KINDS', 'DOC_LABELS', 'quote_totals', 'quote_pack', 'convert_quote', 'next_pc_id', 'petty_balance', 'petty_book', 'set_pc_float', 'record_petty', 'CASH_ENTRY_METHODS', 'record_cash_entry', 'list_cash_entries', 'peek_cash_entry_no', 'peek_next_pay_id', 'complete_cash_revision', 'complete_petty_revision', 'invoice_line_states', 'invoice_has_line_allocations', 'list_payment_allocations', 'set_invoice_line_note', 'invoice_totals', 'invoice_totals_batch', 'invoice_balance', 'invoice_locked', 'set_invoice_po', 'upsert_po_record', 'po_record', 'backfill_po_records', 'po_check', 'quote_check',
  'save_invoice_doc', 'get_invoice_doc', 'read_invoice_doc', 'delete_invoice_doc', 'set_invoice_doc_print', 'list_invoice_docs', 'invoice_job_box', 'INV_DOC_KINDS', 'add_invoice_line', 'drop_invoice_line', 'PO_STATUSES', '_ensure_saved_exports', 'list_saved_exports', 'save_export', 'delete_saved_export', 'next_customer_id', 'save_customer', 'report_invoicing', 'report_revenue', 'report_recap']
 
 # PO register status (Batch 3 #15): a stored, operator-set value —
@@ -299,6 +299,18 @@ def create_invoice(con: sqlite3.Connection, customer_id: str, ticket_ids: list[s
                     if _row_get(ln, "line_id", 0):
                         _wmap[int(ln["line_id"])] = int(_cur.lastrowid)
                     _wtot = _ms(_wtot, amt, tax)
+                # Build 'as' (Item 6): the write-in stands in the
+                # bill but not in the lines — carry it as one more
+                # invoice line so invoicing never drops it. Its own
+                # Tax flag governs its tax, like a line's.
+                _wadj, _wlabel, _wtaxed = doc_writein(
+                    con, "work_orders", "wo_id", w["wo_id"])
+                if _wadj:
+                    _wtax = (Decimal("0.00") if (exempt or not _wtaxed)
+                             else (_wadj * rate).quantize(
+                                 CENT, rounding=ROUND_HALF_UP))
+                    con.execute("""INSERT INTO invoice_lines(invoice_id,po_line,category,item,description,qty,uom,rate,amount,clerk,tax_rate,tax_amount,tax_exempt,tax_name,tax_loc,source_type,source_id,source_line_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(ikey,"","Other","",_wlabel or "Write-in",1,"Each",float(_wadj),float(_wadj),"",float(0 if exempt else rate),float(_wtax),int(exempt),tax_name,tax_loc,"work_order",w["wo_id"],0))
+                    _wtot = _ms(_wtot, _wadj, _wtax)
             else:
                 amt=_money(w["bill_amount"])
                 tax=Decimal("0.00") if exempt else (amt*rate).quantize(CENT,rounding=ROUND_HALF_UP)
@@ -389,6 +401,28 @@ def _next_pay_id(con) -> str:
             taken = con.execute("SELECT 1 FROM doc_collections WHERE pay_id=?", (pid,)).fetchone()
         if not taken:
             return pid
+def peek_next_pay_id(con) -> str:
+    # Build 'as' (Jason 2026-10-29): what _next_pay_id would mint,
+    # WITHOUT minting — the same counter read, the same floor, the
+    # same prefix, the same skip over both payment ledgers, but the
+    # counter is never written, so rendering a form burns nothing.
+    # Every sibling form opens on its peek (peek_next_invoice_no
+    # and kin); Payment never had one, so its blank form stood
+    # numberless while the others showed theirs. The walk mirrors
+    # the mint step for step: where the mint re-reads the counter
+    # it has just advanced, the peek advances its local count —
+    # the candidate sequence is identical.
+    row=con.execute("SELECT next_payment FROM company WHERE id=1").fetchone()
+    n=max(int(row["next_payment"] or 1) if row else 1, doc_number_floor("pay"))
+    _pfx = doc_prefix(con, "pay")
+    while True:
+        pid = f"{_pfx}-{n:03d}"
+        taken = con.execute("SELECT 1 FROM collections WHERE pay_id=?", (pid,)).fetchone()
+        if not taken and _doc_collections_exist(con):
+            taken = con.execute("SELECT 1 FROM doc_collections WHERE pay_id=?", (pid,)).fetchone()
+        if not taken:
+            return pid
+        n += 1
 def _refresh_invoice_status(con, invoice_no: str) -> None:
     tot=invoice_totals(con,invoice_no); cur=con.execute("SELECT status FROM invoices WHERE invoice_no=?",(invoice_no,)).fetchone()
     if not cur: return
@@ -498,6 +532,16 @@ def _chain_ready(con: sqlite3.Connection) -> bool:
         return False
     cols = [r[1] for r in con.execute("PRAGMA table_info(credit_memos)")]
     return "revised_by_id" in cols
+
+
+def _rev_pending_filter(con, table: str) -> str:
+    """engine_revisions.pending_filter, lazy-imported (the
+    accounting/revisions import idiom in this module): the SQL
+    fragment that keeps a rev_pending=1 row — a pending revision,
+    build 'av' — out of a money or list read, or "" when the
+    table carries no such column yet."""
+    from engine_revisions import pending_filter
+    return pending_filter(con, table)
 
 
 def _ensure_void_cols(con: sqlite3.Connection) -> None:
@@ -1110,15 +1154,20 @@ def doc_total(con, doc_kind: str, doc_ref: str) -> Decimal:
         v = con.execute("SELECT COALESCE(SUM(amount),0) FROM sales "
                         "WHERE group_id=?",
                         (doc_key(con, "sale", doc_ref),)).fetchone()
-        return _money(v[0]) if v else Decimal("0.00")
+        # Build 'as' (Item 6): the write-in stands on the group's
+        # head row and counts once into the sale's total.
+        return ((_money(v[0]) if v else Decimal("0.00"))
+                + doc_writein(con, "sales", "sale_id", doc_ref)[0])
     if doc_kind == "quote":
         # A quote's face is its own lines (quote_totals owns that
         # arithmetic; build 'v' removed the change-order folding).
         return _money(quote_totals(con, doc_ref)["face"])
     if doc_kind == "change":
-        return sum((_money(d["total"]) for d in
-                    _doc_line_rows(con, "change", doc_ref)),
-                   Decimal("0.00"))
+        # Build 'as' (Item 6): the write-in counts into the total.
+        return (sum((_money(d["total"]) for d in
+                     _doc_line_rows(con, "change", doc_ref)),
+                    Decimal("0.00"))
+                + doc_writein(con, "change_orders", "co_no", doc_ref)[0])
     return Decimal("0.00")
 
 
@@ -1163,6 +1212,17 @@ def doc_settled(con, doc_kind: str, doc_ref: str) -> dict:
 def doc_balance(con, doc_kind: str, doc_ref: str) -> Decimal:
     """Total minus settled. May stand negative (overpaid) or positive
     (underpaid) indefinitely — nothing in the app nets or closes it."""
+    if doc_kind == "invoice":
+        # JC#4 (build 'ax'): an invoice's balance is its chain's
+        # balance. doc_total reads the named row's own lines, so a
+        # voided ancestor — whose settled money already resolves
+        # across the chain — handed back a phantom balance of its
+        # own. Delegate to the one chain-aware computation, read on
+        # the chain head: invoice_totals on the head totals the
+        # head's lines and settles them with every link's money.
+        from engine_revisions import chain_head_ref  # lazy
+        head = chain_head_ref(con, "invoice", doc_ref) or doc_ref
+        return _money(invoice_totals(con, head)["balance"])
     return _ms(doc_total(con, doc_kind, doc_ref),
                -doc_settled(con, doc_kind, doc_ref)["total"])
 
@@ -1554,6 +1614,55 @@ def stamp_payment_correction(con, batch: str, orig_batch: str) -> None:
             "UPDATE doc_collections SET void_corrects=? "
             "WHERE COALESCE(batch_id, pay_id)=? AND COALESCE(voided,0)=0",
             (orig_batch, batch))
+
+
+def prepare_payment_revision(con, ref: str) -> str:
+    """Name payment batch ref's PENDING revision (build 'av'):
+    the correction model under the pending-revision ruling — the
+    Edit act no longer voids anything. This only NAMES the
+    replacement batch '<original> Rev. N' (chain-depth walk over
+    payment_batch_info "corrects" + collision scan over both
+    ledgers' batch ids, engine_revisions.rev_base — the candidate
+    arithmetic the retired post_core payment-revise helper
+    carried) and
+    records the pending markers the correction Save reads:
+    revtarget:payment:<cand> = ref (the session marker the
+    correction form has always checked), paypend:<cand> = ref
+    (the pending marker: the original is NOT voided yet — the
+    correction Save voids it at its commit, inside its own
+    transaction), paypend_of:<ref> = cand. Idempotent: when
+    paypend_of:<ref> already names a candidate whose
+    paypend:<cand> still equals ref, that candidate stands.
+    NO voiding here."""
+    cand = get_option(con, f"paypend_of:{ref}")
+    if cand and get_option(con, f"paypend:{cand}") == ref:
+        return cand
+    from engine_revisions import rev_base  # lazy: import order
+    info = payment_batch_info(con, ref)
+    depth = 0
+    seen = set()
+    cur = info.get("corrects") if info else None
+    while cur and cur not in seen:
+        seen.add(cur)
+        depth += 1
+        nxt = payment_batch_info(con, cur)
+        cur = nxt.get("corrects") if nxt and nxt.get("rows") else None
+    existing = set()
+    for tbl in ("collections", "doc_collections"):
+        try:
+            existing |= {r[0] for r in con.execute(
+                f"SELECT DISTINCT COALESCE(batch_id, pay_id) FROM {tbl}")}
+        except Exception:
+            pass
+    n = depth + 1
+    cand = f"{rev_base(ref)} Rev. {n}"
+    while cand in existing:
+        n += 1
+        cand = f"{rev_base(ref)} Rev. {n}"
+    set_option(con, f"revtarget:payment:{cand}", ref)
+    set_option(con, f"paypend:{cand}", ref)
+    set_option(con, f"paypend_of:{ref}", cand)
+    return cand
 
 
 def _apply_doc_credit_rows(con, cm_no: str, customer_id: str,
@@ -1967,6 +2076,9 @@ def issue_credit_memo(
     cm_no: str | None = None,
     line_allocs_map: dict | None = None,
     doc_applies: list | None = None,
+    adj_amount: float = 0.0,
+    adj_label: str = "",
+    adj_taxable: bool = False,
 ) -> str:
     """Open a credit memo. Apply all, part, or none to existing invoices of that customer.
 
@@ -2013,8 +2125,13 @@ def issue_credit_memo(
             "source_invoice_no": str(ln.get("source_invoice_no") or ""),
             "source_line_id": int(ln.get("source_line_id") or 0),
         })
+    # Build 'as' (Item 6): the write-in counts into the memo's face.
+    try:
+        _wadj = round(float(adj_amount or 0), 2)
+    except (TypeError, ValueError):
+        _wadj = 0.0
     if cleaned:
-        face = round(sum(ln["amount"] for ln in cleaned), 2)
+        face = round(round(sum(ln["amount"] for ln in cleaned), 2) + _wadj, 2)
         if face == 0:
             raise ValueError("Credit amount must not be zero")
     else:
@@ -2022,6 +2139,7 @@ def issue_credit_memo(
             face = float(face_amount)
         except (TypeError, ValueError):
             raise ValueError("Credit amount must be a number") from None
+        face += _wadj
         if face == 0:
             raise ValueError("Credit amount must not be zero")
     reason = (reason or "").strip()
@@ -2041,10 +2159,13 @@ def issue_credit_memo(
     _cm_in = (cm_no or "").strip()
     cm_no = (validate_new_doc_no(con, "credit_memos", "cm_no", _cm_in, "credit memo")
              if _cm_in else next_cm_id(con))
+    ensure_adj_cols(con, "credit_memos")
     con.execute(
-        """INSERT INTO credit_memos(cm_no, cm_date, customer_id, face_amount, reason, notes, clerk)
-           VALUES (?,?,?,?,?,?,?)""",
-        (cm_no, d, cust_key(con, customer_id), face, reason, notes or "", who),
+        """INSERT INTO credit_memos(cm_no, cm_date, customer_id, face_amount, reason, notes, clerk, adjustment, adj_label, adj_taxable)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (cm_no, d, cust_key(con, customer_id), face, reason, notes or "", who,
+         _wadj or None, (adj_label or "").strip() or None,
+         1 if adj_taxable else None),
     )
     cmkey = key_of(con, "credit_memos", cm_no)
     if not cleaned:
@@ -2124,6 +2245,11 @@ def list_open_credits(con: sqlite3.Connection, customer_id: str | None = None) -
     if _chain_ready(con):
         q += (" AND" if customer_id else " WHERE")
         q += " revised_by_id IS NULL"
+    # Build 'av': a pending credit clone is not open credit yet.
+    _pfc = _rev_pending_filter(con, "credit_memos")
+    if _pfc:
+        q += (" AND" if (customer_id or _chain_ready(con)) else " WHERE")
+        q += " COALESCE(rev_pending,0)=0"
     q += " ORDER BY cm_date DESC, cm_no DESC"
     out = []
     for r in con.execute(q, args):
@@ -2138,6 +2264,11 @@ def list_open_invoices(con: sqlite3.Connection, customer_id: str | None = None) 
     if customer_id:
         q += " WHERE i.customer_id=?"
         args.append(cust_key(con, customer_id))
+    else:
+        q += " WHERE 1=1"
+    # Build 'av': a pending invoice clone is invisible here (the
+    # payment form's per-customer picker reads this list).
+    q += _rev_pending_filter(con, "invoices")
     q += " ORDER BY i.invoice_date DESC"
     balances = invoice_totals_batch(con)
     out = []
@@ -2267,20 +2398,46 @@ def save_quote(con, header: dict, lines: list) -> str:
         header.get("status") or (exists["status"] if exists else "Draft"),
         header.get("notes") or "", require_clerk(header.get("clerk")), qno,
     )
+    # Build 'as' (Item 6): the write-in rides the header when the
+    # caller supplies it; a caller that does not leaves it untouched.
+    _wadj_vals = None
+    if "adjustment" in header:
+        ensure_adj_cols(con, "quotes")
+        try:
+            _wadj = round(float(header.get("adjustment") or 0), 2)
+        except (TypeError, ValueError):
+            _wadj = 0.0
+        _wadj_vals = (_wadj or None,
+                      (header.get("adj_label") or "").strip() or None,
+                      1 if header.get("adj_taxable") else None)
     if exists:
-        con.execute(
-            """UPDATE quotes SET quote_date=?, customer_id=?, site_id=?, job_name=?, afe=?, po=?,
-               valid_until=?, status=?, notes=?, clerk=? WHERE quote_no=?""",
-            vals,
-        )
+        if _wadj_vals is not None:
+            con.execute(
+                """UPDATE quotes SET quote_date=?, customer_id=?, site_id=?, job_name=?, afe=?, po=?,
+                   valid_until=?, status=?, notes=?, clerk=?, adjustment=?, adj_label=?, adj_taxable=? WHERE quote_no=?""",
+                vals[:-1] + _wadj_vals + (qno,),
+            )
+        else:
+            con.execute(
+                """UPDATE quotes SET quote_date=?, customer_id=?, site_id=?, job_name=?, afe=?, po=?,
+                   valid_until=?, status=?, notes=?, clerk=? WHERE quote_no=?""",
+                vals,
+            )
         con.execute("DELETE FROM quote_lines WHERE quote_id=?",
                     (key_of(con, "quotes", qno),))
     else:
-        con.execute(
-            """INSERT INTO quotes(quote_date, customer_id, site_id, job_name, afe, po,
-               valid_until, status, notes, clerk, quote_no) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            vals,
-        )
+        if _wadj_vals is not None:
+            con.execute(
+                """INSERT INTO quotes(quote_date, customer_id, site_id, job_name, afe, po,
+                   valid_until, status, notes, clerk, quote_no, adjustment, adj_label, adj_taxable) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                vals + _wadj_vals,
+            )
+        else:
+            con.execute(
+                """INSERT INTO quotes(quote_date, customer_id, site_id, job_name, afe, po,
+                   valid_until, status, notes, clerk, quote_no) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                vals,
+            )
     qkey = key_of(con, "quotes", qno)
     con.executemany(
         """INSERT INTO quote_lines(quote_id, kind, asset_id, item, description, qty, rate, rate_unit, uom, amount)
@@ -2345,7 +2502,7 @@ def _clean_co_assoc(con, customer_id: str, assoc_kind, assoc_ref):
     return kind, akey
 
 
-def issue_change_order(con, customer_id: str, reason: str, lines: list, co_date: str | None = None, notes: str = "", clerk: str = "", po: str = "", co_no: str | None = None, assoc_kind: str | None = None, assoc_ref: str | None = None) -> str:
+def issue_change_order(con, customer_id: str, reason: str, lines: list, co_date: str | None = None, notes: str = "", clerk: str = "", po: str = "", co_no: str | None = None, assoc_kind: str | None = None, assoc_ref: str | None = None, adj_amount=None, adj_label=None, adj_taxable=None) -> str:
     """Issue a Change Order (build 'v', Jason 2026-10-25): a
     standalone money document. Nothing requires anything — no quote
     parent, no required association. It carries its own customer,
@@ -2366,12 +2523,22 @@ def issue_change_order(con, customer_id: str, reason: str, lines: list, co_date:
     cno = (validate_new_doc_no(con, "change_orders", "co_no", _co_in, "change order")
            if _co_in else next_co_id(con))
     who = require_clerk(clerk)
+    # Build 'as' (Item 6): the write-in stores with the order.
+    ensure_adj_cols(con, "change_orders")
+    _wadj_vals = (None, None, None)
+    if adj_amount is not None:
+        try:
+            _wadj = round(float(adj_amount or 0), 2)
+        except (TypeError, ValueError):
+            _wadj = 0.0
+        _wadj_vals = (_wadj or None, (adj_label or "").strip() or None,
+                      1 if adj_taxable else None)
     cur = con.execute(
-        """INSERT INTO change_orders(co_no, co_date, customer_id, reason, po, status, notes, clerk, assoc_kind, assoc_id)
-           VALUES (?,?,?,?,?, 'Issued', ?, ?, ?, ?)""",
+        """INSERT INTO change_orders(co_no, co_date, customer_id, reason, po, status, notes, clerk, assoc_kind, assoc_id, adjustment, adj_label, adj_taxable)
+           VALUES (?,?,?,?,?, 'Issued', ?, ?, ?, ?, ?, ?, ?)""",
         (cno, co_date or date.today().isoformat(),
          cust_key(con, customer_id), reason, (po or "").strip(),
-         notes or "", who, akind, akey),
+         notes or "", who, akind, akey) + _wadj_vals,
     )
     con.executemany(
         """INSERT INTO change_order_lines(co_id, direction, kind, item, description, qty, rate, uom, amount)
@@ -2383,7 +2550,7 @@ def issue_change_order(con, customer_id: str, reason: str, lines: list, co_date:
     return cno
 
 
-def save_change_order(con, co_no: str, customer_id: str, reason: str, lines: list, co_date: str | None = None, notes: str = "", clerk: str = "", po: str = "", assoc_kind: str | None = None, assoc_ref: str | None = None, revision: bool = False) -> str:
+def save_change_order(con, co_no: str, customer_id: str, reason: str, lines: list, co_date: str | None = None, notes: str = "", clerk: str = "", po: str = "", assoc_kind: str | None = None, assoc_ref: str | None = None, revision: bool = False, adj_amount=None, adj_label=None, adj_taxable=None) -> str:
     """Edit an issued Change Order (header + lines + association).
     The record is the protection: once money has settled against a
     Change Order its lines and amount stand as issued — the edit is
@@ -2423,13 +2590,26 @@ def save_change_order(con, co_no: str, customer_id: str, reason: str, lines: lis
     clean = _clean_co_lines(con, lines)
     akind, akey = _clean_co_assoc(con, customer_id, assoc_kind, assoc_ref)
     who = require_clerk(clerk)
+    # Build 'as' (Item 6): the write-in updates when the caller
+    # supplies it; a caller that does not leaves it untouched.
+    _wadj_sql = ""
+    _wadj_vals = ()
+    if adj_amount is not None:
+        ensure_adj_cols(con, "change_orders")
+        try:
+            _wadj = round(float(adj_amount or 0), 2)
+        except (TypeError, ValueError):
+            _wadj = 0.0
+        _wadj_sql = ", adjustment=?, adj_label=?, adj_taxable=?"
+        _wadj_vals = (_wadj or None, (adj_label or "").strip() or None,
+                      1 if adj_taxable else None)
     con.execute(
-        """UPDATE change_orders SET co_date=?, customer_id=?, reason=?,
-           po=?, notes=?, clerk=?, assoc_kind=?, assoc_id=?
+        f"""UPDATE change_orders SET co_date=?, customer_id=?, reason=?,
+           po=?, notes=?, clerk=?, assoc_kind=?, assoc_id=?{_wadj_sql}
            WHERE co_no=?""",
         (co_date or str(co["co_date"])[:10], cust_key(con, customer_id),
-         reason, (po or "").strip(), notes or "", who, akind, akey,
-         co_no),
+         reason, (po or "").strip(), notes or "", who, akind, akey)
+        + _wadj_vals + (co_no,),
     )
     con.execute("DELETE FROM change_order_lines WHERE co_id=?", (co["id"],))
     con.executemany(
@@ -2469,6 +2649,8 @@ def quote_totals(con, quote_no: str) -> dict:
         "SELECT COALESCE(SUM(amount),0) FROM quote_lines WHERE quote_id=?",
         (key_of(con, "quotes", quote_no),)
     ).fetchone()[0] or 0)
+    # Build 'as' (Item 6): the write-in counts into the quote's total.
+    base += float(doc_writein(con, "quotes", "quote_no", quote_no)[0])
     # Build 'v' (Jason 2026-10-25): a quote's numbers are its own —
     # Change Orders no longer fold into the quote's face. A Change
     # Order associated with a quote stands on its own as a fact
@@ -2571,7 +2753,13 @@ def convert_quote(con, quote_no: str, on_rent: str | None = None) -> list[str]:
         qty = float(ln["qty"] or 1)
         off = None
         if unit != "Hour" and _parse(on):
-            mult = {"Week": 7, "Monthly": 30}.get(unit, 1)
+            # Build 'au' (Jason 2026-10-30): the planned span is
+            # reckoned on the same period basis billing charges
+            # on — a week is 7 days and a month is MONTH_DAYS
+            # (28) consecutive days, the one constant
+            # rental_periods bills by — so a quote kept out its
+            # full planned span bills exactly the quoted periods.
+            mult = {"Week": 7, "Monthly": MONTH_DAYS}.get(unit, 1)
             off = (_parse(on) + timedelta(days=max(int(round(qty * mult)) - 1, 0))).isoformat()
         tid = create_ticket(con, {
             "customer_id": q["customer_id"],
@@ -2610,8 +2798,15 @@ def _petty_chain_ready(con: sqlite3.Connection) -> bool:
 def petty_balance(con: sqlite3.Connection) -> float:
     # Build 'ab' (redirect #2): the box holds the chain heads — a
     # voided entry's money stands in its revision, not twice.
-    _flt = (" WHERE revised_by_id IS NULL"
-            if _petty_chain_ready(con) else "")
+    # Build 'av': a pending clone is not in the box either — the
+    # original alone stands until the clone's Save finalizes it
+    # (a pending clone counted here would double-count the entry).
+    _conds = []
+    if _petty_chain_ready(con):
+        _conds.append("revised_by_id IS NULL")
+    if _rev_pending_filter(con, "petty_cash"):
+        _conds.append("COALESCE(rev_pending,0)=0")
+    _flt = (" WHERE " + " AND ".join(_conds)) if _conds else ""
     row = con.execute(
         """SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0)
            FROM petty_cash""" + _flt
@@ -2624,7 +2819,10 @@ def petty_book(con: sqlite3.Connection) -> dict:
     _chain = _petty_chain_ready(con)
     rows = []
     run = 0.0
-    for r in con.execute("SELECT * FROM petty_cash ORDER BY txn_date, pc_id"):
+    for r in con.execute(
+            "SELECT * FROM petty_cash WHERE 1=1"
+            + _rev_pending_filter(con, "petty_cash")
+            + " ORDER BY txn_date, pc_id"):
         d = dict(r)
         amt = float(r["amount"])
         _voided = bool(_chain and d.get("revised_by_id"))
@@ -3017,6 +3215,8 @@ def list_cash_entries(con: sqlite3.Connection) -> list[dict]:
                LEFT JOIN assets a ON a.id = ce.asset_id
                ORDER BY ce.entry_date DESC, ce.entry_id DESC"""):
         d = dict(r)
+        if d.get("rev_pending"):
+            continue  # build 'av': a pending cash clone is invisible
         d["customer_id"] = cust_code(con, d.get("customer_id"))
         d["asset_id"] = asset_code(con, d.get("asset_id"))
         d["invoice_no"] = num_of(con, "invoices", d.pop("invoice_id", None))
@@ -3055,6 +3255,37 @@ def _invoice_writein(con: sqlite3.Connection, invoice_no: str) -> Decimal:
         return _money(r[0]) if r and r[0] is not None else Decimal("0.00")
     except Exception:
         return Decimal("0.00")
+def ensure_adj_cols(con: sqlite3.Connection, table: str) -> None:
+    """Lazy guard for the write-in columns (build 'as', Item 6),
+    following the app's lazy-column idiom: schema.sql owns the DDL
+    for new books and engine_migrations adds them to old ones; this
+    keeps a write safe on a book not re-opened since the build."""
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+    if cols and "adjustment" not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN adjustment REAL")
+        con.execute(f"ALTER TABLE {table} ADD COLUMN adj_label TEXT")
+        con.execute(f"ALTER TABLE {table} ADD COLUMN adj_taxable INTEGER")
+
+
+def doc_writein(con: sqlite3.Connection, table: str, keycol: str,
+                ref: str):
+    """(amount Decimal, label, taxable) — the write-in charge above
+    the subtotal on any money document kind (build 'as', Jason
+    2026-10-30, Item 6): the invoice's Write-in row (2026-10-20)
+    generalized to every kind under the pattern rule. Guarded like
+    _invoice_writein: a pre-migration book reads as no write-in."""
+    try:
+        r = con.execute(
+            f"SELECT adjustment, adj_label, adj_taxable FROM {table} "
+            f"WHERE {keycol}=?", (ref,)).fetchone()
+        if r is None:
+            return Decimal("0.00"), "", False
+        return (_money(r[0]) if r[0] is not None else Decimal("0.00"),
+                r[1] or "", bool(r[2]))
+    except Exception:
+        return Decimal("0.00"), "", False
+
+
 def _invoice_tax_extras(con: sqlite3.Connection, invoice_no: str):
     """(writein, writein_taxable, operator_exempt, invoice_rate) for the
     invoice-round tax model (Jason 2026-10-20): the write-in's taxable
@@ -3105,6 +3336,7 @@ def invoice_totals_batch(con: sqlite3.Connection) -> dict:
         "SELECT i.invoice_no, COALESCE(SUM(l.amount),0), "
         "COALESCE(SUM(l.tax_amount),0) "
         "FROM invoice_lines l JOIN invoices i ON i.id = l.invoice_id "
+        "WHERE 1=1" + _rev_pending_filter(con, "invoices") + " "
         "GROUP BY i.invoice_no"):
         sub_d, tax_d = _money(sub), _money(tax)
         line_totals[ino] = (sub_d, tax_d, _ms(sub_d, tax_d))
@@ -3114,14 +3346,16 @@ def invoice_totals_batch(con: sqlite3.Connection) -> dict:
         "COALESCE(SUM(CASE WHEN c.kind='payment' THEN COALESCE(c.applied_amount,c.amount) ELSE 0 END),0), "
         "COALESCE(SUM(CASE WHEN c.kind='credit' THEN COALESCE(c.applied_amount,c.amount) ELSE 0 END),0) "
         "FROM collections c JOIN invoices i ON i.id = c.invoice_id "
-        "WHERE COALESCE(c.voided,0)=0 "
+        "WHERE COALESCE(c.voided,0)=0"
+        + _rev_pending_filter(con, "invoices") + " "
         "GROUP BY i.invoice_no"):
         cash_d, credit_d = _money(cash), _money(credit)
         paid_totals[ino] = (cash_d, credit_d, _ms(cash_d, credit_d))
     adj_totals = {}
     try:
         for ino, adj in con.execute(
-                "SELECT invoice_no, COALESCE(adjustment,0) FROM invoices"):
+                "SELECT invoice_no, COALESCE(adjustment,0) FROM invoices "
+                "WHERE 1=1" + _rev_pending_filter(con, "invoices")):
             if adj:
                 adj_totals[ino] = _money(adj)
     except Exception:
@@ -3130,7 +3364,8 @@ def invoice_totals_batch(con: sqlite3.Connection) -> dict:
     try:
         for ino, adjtx, opex, rate in con.execute(
                 "SELECT invoice_no, COALESCE(adj_taxable,0), "
-                "COALESCE(tax_exempt_op,0), COALESCE(tax_rate,0) FROM invoices"):
+                "COALESCE(tax_exempt_op,0), COALESCE(tax_rate,0) FROM invoices "
+                "WHERE 1=1" + _rev_pending_filter(con, "invoices")):
             inv_extras[ino] = (bool(adjtx), bool(opex), Decimal(str(rate or 0)))
     except Exception:
         inv_extras = {}
@@ -4151,32 +4386,71 @@ def report_recap(con: sqlite3.Connection, kind: str = "mtd") -> dict:
 
 
 def complete_cash_revision(con: sqlite3.Connection, entry_key: int,
+                           note: str = "", by: str = "",
                            **fields) -> int:
-    """Complete a cash-entry revision (build 'ab', redirect #2):
-    the revision created at the confirm act is a shell carrying the
-    original's content; its first Save replaces the shell with a
-    fresh record_cash_entry post — full validation, fresh
-    settlement — under the revision's own number (or the operator's
-    rename of it), and the chain re-points at the posted entry: the
-    voided original's revised_by_id and the new entry's revises_id.
-    Returns the posted entry's id."""
+    """Complete a cash-entry revision (build 'av' pending model;
+    signature extended in 'av' with the revision's OPTIONAL note
+    and the desk user, both for the finalize signature).
+    The pending revision created at Edit is a shell carrying the
+    original's content — the original entry and its settlement
+    still live. Its Save first releases the original's settlement
+    (engine_revisions.void_cash_settlements, in the pending path
+    only), so the invoice or document balance stands open again,
+    then replaces the shell with a fresh record_cash_entry post
+    — full validation, fresh settlement — under the revision's
+    own number (or the operator's rename of it), then finalizes
+    the chain in the same act
+    (engine_revisions.finalize_revision, 'cash'): the original
+    entry voids (desk user + server timestamp; the note, when
+    offered, is its void reason), its settlement rows void
+    (already voided by the release, so that step no-ops), the
+    invoices they touched refresh, and the posted entry stands
+    as chain head. Returns the posted entry's id."""
     import engine_revisions as _rev
     _rev.ensure_revision_cols(con)
     shell = con.execute("SELECT * FROM cash_entries WHERE entry_id=?",
                         (entry_key,)).fetchone()
     if not shell:
         raise ValueError("That cash entry revision no longer stands")
-    orig_key = shell["revises_id"]
+    shell_d = dict(shell)
+    orig_key = shell_d.get("revises_id")
+    is_pending = bool(shell_d.get("rev_pending"))
     eno = (fields.pop("entry_no", None) or shell["entry_no"] or "")
+    by = (by or "").strip() or (fields.get("clerk") or "")         or (shell_d.get("clerk") or "")
+    if orig_key and is_pending:
+        # Release before post (build 'aw'): void the original's
+        # settlement rows now, inside this same act, so the fresh
+        # settlement below posts against the reopened balance —
+        # not against a balance the original still settles, which
+        # would route the whole amount to an open credit memo.
+        # finalize_revision's cash arm runs the same helper after
+        # the post; its UPDATEs carry COALESCE(voided,0)=0, so
+        # they no-op on rows released here.
+        _rev.void_cash_settlements(
+            con, orig_key, (note or "").strip(), by,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     con.execute("DELETE FROM cash_entries WHERE entry_id=?",
                 (entry_key,))
     new_id = record_cash_entry(con, entry_no=eno, **fields)
     con.execute("UPDATE cash_entries SET revises_id=? WHERE entry_id=?",
                 (orig_key, new_id))
-    if orig_key:
+    if orig_key and is_pending:
+        # The reposted entry IS the pending clone: stand its flag
+        # back up (the fresh INSERT defaulted it to 0) so finalize
+        # can commit it — original voids, its settlements void,
+        # statuses refresh, marker clears, flag clears, one commit.
+        con.execute(
+            "UPDATE cash_entries SET rev_pending=1 WHERE entry_id=?",
+            (new_id,))
+        _rev.finalize_revision(con, "cash", eno, note, by)
+        _rev.clear_revision_pending(con, "cash", entry_key)
+        con.commit()
+    elif orig_key:
+        # A pre-'av' shell (its original voided at the old confirm
+        # act): the chain simply re-points at the posted entry.
         con.execute("UPDATE cash_entries SET revised_by_id=? "
                     "WHERE entry_id=?", (new_id, orig_key))
-    con.commit()
+        con.commit()
     return new_id
 
 
@@ -4185,11 +4459,18 @@ def complete_petty_revision(con: sqlite3.Connection, pc_key: int,
                             category: str, txn_date: str | None = None,
                             payee: str = "", ref_no: str = "",
                             notes: str = "", clerk: str = "",
-                            pc_id: str = "") -> str:
-    """Complete a petty-cash revision (build 'ab', redirect #2):
-    petty rows carry no settlements, so the shell the confirm act
-    created is completed in place with the operator's edited
-    values — the voided original is never touched. The entry's
+                            pc_id: str = "", note: str = "",
+                            by: str = "") -> str:
+    """Complete a petty-cash revision (build 'av' pending model;
+    signature extended in 'av' with the revision's OPTIONAL note
+    and the desk user, both for the finalize signature): petty
+    rows carry no settlements, so the pending shell Edit created
+    is completed in place with the operator's edited values, and
+    the chain finalizes in the same act
+    (engine_revisions.finalize_revision, 'petty') — the original
+    voids only now (desk user + server timestamp; the note, when
+    offered, is its void reason), the clone's pending flag and
+    session marker clear, and it stands as chain head. The entry's
     number may be renamed off its 'Rev. N' prefill; uniqueness runs
     over the whole log, voided entries included."""
     who = require_clerk(clerk)
@@ -4197,6 +4478,7 @@ def complete_petty_revision(con: sqlite3.Connection, pc_key: int,
                       (pc_key,)).fetchone()
     if not row:
         raise ValueError("That petty entry revision no longer stands")
+    row_d = dict(row)
     direction = (direction or "").strip().lower()
     if direction not in ("in", "out"):
         raise ValueError("Petty cash is in or out")
@@ -4229,5 +4511,11 @@ def complete_petty_revision(con: sqlite3.Connection, pc_key: int,
          round(amt, 2), category, payee or "", ref_no or "",
          notes or "", who, pc_key))
     stamp_company_snapshot(con, "petty_cash", pc_key)
-    con.commit()
+    if row_d.get("revises_id") and row_d.get("rev_pending"):
+        import engine_revisions as _rev
+        _rev.finalize_revision(
+            con, "petty", new_no, note, (by or "").strip() or who)
+    else:
+        con.commit()
     return new_no
+

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import engine
 from logo_data import LOGO_JPEG
+from printbox import PRINTBOX_CSS, PRINTBOX_HTML, PRINTBOX_JS, print_trigger
 
 try:
     from reportlab.lib import colors
@@ -836,6 +837,8 @@ def credit_pack(con, cm_no: str) -> dict | None:
         })
     return {"cm": cm, "info": info, "cust": cust, "co": co, "lines": lines,
             "revised_to": _revto_for(con, "credit", cm),
+            "writein": engine.doc_writein(con, "credit_memos", "cm_no",
+                                          cm_no),
             "items": engine.credit_lines(con, cm_no)}
 
 
@@ -923,9 +926,14 @@ def html_credit(pack) -> str:
         ],
         revto=pack.get("revised_to") or "",
     )
+    _wadj, _wlabel, _wtaxed = pack.get("writein") or (0, "", False)
+    _wrow = (f"<tr><td></td><td class=\"n\">{html.escape(_wlabel or 'Write-in')}</td>"
+             f"<td class=\"n\">−${float(_wadj):,.2f}</td></tr>"
+             if (_wadj or _wlabel) else "")
     body = _doc_wrap(_header, f"""
     <table><thead><tr><th>ITEM</th><th>DESCRIPTION</th><th style='text-align:right'>QTY</th><th>UNIT</th><th style='text-align:right'>UNIT PRICE</th><th style='text-align:right'>LINE TOTAL</th></tr></thead><tbody>{item_rows}</tbody></table>
     <table class="tot">
+      {_wrow}
       <tr><td></td><td class="n">Credit total</td><td class="n">−${info['face']:,.2f}</td></tr>
       <tr><td></td><td class="n">Applied</td><td class="n">−${info['applied']:,.2f}</td></tr>
       <tr><td></td><td class="n">Unapplied</td><td class="n">−${info['unapplied']:,.2f}</td></tr>
@@ -970,9 +978,15 @@ def html_quote(con, quote_no: str):
             ("Status", q['status'] or ""),
         ],
     )
+    _wadj, _wlabel, _wtaxed = engine.doc_writein(
+        con, "quotes", "quote_no", quote_no)
+    _wrow = (f"<tr><td></td><td class=\"n\">{html.escape(_wlabel or 'Write-in')}</td>"
+             f"<td class=\"n\">${float(_wadj):,.2f}</td></tr>"
+             if (_wadj or _wlabel) else "")
     body = _doc_wrap(_header, f"""
     <table><tr><th>Type</th><th>Detail</th><th>Qty × rate</th><th>Amount</th></tr>{rows}</table>
     <table class="tot">
+      {_wrow}
       <tr><td></td><td class="n">Quoted</td><td class="n">${tot['quoted']:,.2f}</td></tr>
       <tr><td></td><td class="n">Face</td><td class="n">${tot['face']:,.2f}</td></tr>
     </table>
@@ -1022,12 +1036,18 @@ def html_change(con, co_no: str):
             ("Status", co['status'] or ""),
         ],
     )
+    _wadj, _wlabel, _wtaxed = engine.doc_writein(
+        con, "change_orders", "co_no", co_no)
+    _wrow = (f"<tr><td></td><td class=\"n\">{html.escape(_wlabel or 'Write-in')}</td>"
+             f"<td class=\"n\">${float(_wadj):,.2f}</td></tr>"
+             if (_wadj or _wlabel) else "")
     body = _doc_wrap(_header, f"""
     <table><tr><th>Dir</th><th>Type</th><th>Detail</th><th>Amount</th></tr>{rows}</table>
     <table class="tot">
       <tr><td></td><td class="n">Adds</td><td class="n">${adds:,.2f}</td></tr>
       <tr><td></td><td class="n">Subtracts</td><td class="n">${subs:,.2f}</td></tr>
-      <tr><td></td><td class="n">Total</td><td class="n">${adds - subs:,.2f}</td></tr>
+      {_wrow}
+      <tr><td></td><td class="n">Total</td><td class="n">${adds - subs + float(_wadj):,.2f}</td></tr>
     </table>
     <p>{html.escape(_fit_note(co['notes']))}</p>
     <p>A standalone document, settled on its own. An associated document settles separately.</p>
@@ -1139,21 +1159,28 @@ def ticket_pack(con, ticket_id: str) -> dict | None:
 def _doc_actions(html_path, pdf_path, back_href, back_label="Back"):
     """The print-page action bar (Jason 2026-10-24, 'm' look-see item
     3c — supersedes the 2026-10-18 two-button bar): ONE Print button
-    opening the standard three-choice menu — Print to Screen (this
-    sheet), PRINT (browser dialog), Print to Location (files the
+    opening the standard three choices — PRINT (browser dialog),
+    Print to Screen (this sheet), Print to Location (files the
     document, PDF where one exists else this HTML, into the
-    operator's print folder via POST /print/save) — plus Back. The
-    standalone PRINT and standalone Print to Location buttons are
-    gone: one Print per surface, three choices behind it."""
-    doc = pdf_path or html_path
-    return (f'<details class="pmenu"><summary>Print</summary>'
-            f'<span class="popts">'
-            f'<a href="{html.escape(html_path, quote=True)}">Print to Screen</a>'
-            f'<button type="button" onclick="window.print()">PRINT</button>'
-            f'<button type="button" data-doc="{html.escape(doc, quote=True)}" onclick="fsSaveLoc(this)">Print to Location</button>'
-            f'</span></details>'
-            f'<a href="{html.escape(back_href, quote=True)}">{html.escape(back_label)}</a>'
-            f'<span class="pstat"></span>')
+    operator's print folder via POST /print/save) — plus Back.
+    Build 'av' (Jason 2026-10-30): the button is ONLY the trigger
+    for the ONE centered universal print box (printbox.py), in doc
+    mode with this sheet as its screen path — PRINT on a print
+    sheet presents the sheet in the in-page view window and
+    prints it from its frame, and the box is carried by _sheet
+    below. One Print per surface, three choices behind it."""
+    _kinds = {"invoice": "Invoice", "quote": "Quote",
+              "change": "Change Order", "credit": "Credit Memo",
+              "ticket": "Rental Ticket", "work": "Work Ticket",
+              "delivery": "Delivery Ticket"}
+    _seg = [s for s in str(html_path).split("/") if s]
+    _title = None
+    if len(_seg) >= 3 and _seg[0] == "print" \
+            and _seg[1] in _kinds:
+        _title = f"{_kinds[_seg[1]]} {_seg[2]}"
+    return (print_trigger(title=_title, screen=html_path,
+                          pdf=pdf_path)
+            + f'<a href="{html.escape(back_href, quote=True)}">{html.escape(back_label)}</a>')
 
 
 def _sheet(title, body, actions=""):
@@ -1202,31 +1229,14 @@ footer.legal {{ margin-top:28px; font-size:9px; color:#5C6B7A; border-top:1px so
   a {{ color:#000; text-decoration:none; }}
 }}
 .bar .pstat {{ color:#ffd766; border:0; margin-left:12px; font-size:12px; }}
-.bar .pmenu {{ display:inline-block; position:relative; margin-left:12px; }}
-.bar .pmenu summary {{ color:#fff; border:1px solid #fff; padding:6px 10px; cursor:pointer; list-style:none; display:inline-block; }}
-.bar .pmenu summary::-webkit-details-marker {{ display:none; }}
-.bar .popts {{ position:absolute; left:0; top:calc(100% + 6px); background:#fff; border:1px solid #c5cdd6; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.25); padding:6px; z-index:50; min-width:200px; }}
-.bar .popts a, .bar .popts button {{ display:block; width:100%; box-sizing:border-box; color:#1a1a1a; background:none; border:0; margin:0; padding:7px 10px; text-align:left; text-decoration:none; cursor:pointer; font:inherit; }}
-.bar .popts a:hover, .bar .popts button:hover {{ background:#eef1f4; }}
+{PRINTBOX_CSS}
 </style></head>
 <body>
 <div class="bar"><span>{actions}</span></div>
 <div class="page">{body}</div>
+{PRINTBOX_HTML}
+{PRINTBOX_JS}
 <script>
-function fsSaveLoc(btn){{
-  var d = btn.closest('details'); if (d) d.removeAttribute('open');
-  var st = document.querySelector('.bar .pstat');
-  if (st) st.textContent = 'Saving\u2026';
-  var body = new URLSearchParams(); body.set('doc', btn.getAttribute('data-doc'));
-  fetch('/print/save', {{method:'POST', body: body}}).then(function(r){{ return r.json(); }})
-    .then(function(j){{ if (st) st.textContent = j.ok ? ('Saved to ' + j.path) : ('Could not save: ' + (j.error || 'error')); }})
-    .catch(function(e){{ if (st) st.textContent = 'Could not save.'; }});
-}}
-document.addEventListener('click', function(e){{
-  document.querySelectorAll('details.pmenu[open]').forEach(function(d){{
-    if (!d.contains(e.target)) d.removeAttribute('open');
-  }});
-}});
 if (/[?&]autoprint=1/.test(location.search)) {{
   window.addEventListener('load', function(){{ setTimeout(function(){{ window.print(); }}, 60); }});
 }}

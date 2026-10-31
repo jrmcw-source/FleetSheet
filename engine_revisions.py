@@ -1,25 +1,27 @@
-"""FleetSheet engine — void-and-revise (build 'ab', Jason's ruling
-2026-10-26, standing): editing a posted/issued document never
-updates it in place. The Edit act — a reason and the operator's
-name, confirmed — voids the original (reason, name, and timestamp
-signed into its record) and creates the revision as a NEW document
-carrying the original's full content, its number prefilled
-"<original> Rev. N". The chain links by engine key
-(revises_id / revised_by_id on every document table); numbers are
-never keys. The newest revision is the chain head — the live
-document; voided ancestors are read-only paper. Money recorded
-against any link of the chain resolves to the head (the accounting
-engine's settled/total reads walk the chain through here).
-
-The void + revision-creation happen when the operator CONFIRMS the
-reason/name prompt (JC-AB0): the Edit act itself is the deliberate,
-recorded act, on the pattern of his audited overrides. A revision
-created and never finished stands as an exact copy of the original
-at the head of the chain — the record stays coherent either way.
-The revision's own form opens unlocked under a session marker
-(options table, no schema of its own); its first Save completes
-the revision, and the POST layer refuses any in-place save of an
-existing document that carries no marker.
+"""FleetSheet engine — void-and-revise (build 'av', Jason's ruling
+2026-10-30, replacing the build 'ab' confirm-time model): editing a
+posted/issued document never updates it in place, and Edit no
+longer voids anything. The Edit act creates a PENDING revision —
+an editable clone (rev_pending=1) carrying the original's full
+content, its number prefilled "<original> Rev. N" — while the
+original stays live as the chain head, unvoided, and keeps
+answering every money and list read; the pending clone is
+invisible to those reads. The revision's own form opens unlocked
+under a session marker (options table, no schema of its own); the
+POST layer refuses any in-place save of an existing document that
+carries no marker. Save — or Print, which commits first — is the
+single commit act (finalize_revision): only then does the
+original void, signed automatically with the desk user and the
+server timestamp (no typed name, no required reason; an OPTIONAL
+internal revision note replaces the old reason and rides the
+void record when the operator offers one), and the revision
+becomes the chain head with rev_pending cleared. The chain links
+by engine key (revises_id / revised_by_id on every document
+table); numbers are never keys. Voided ancestors are read-only
+paper. Money recorded against any link of the chain resolves to
+the head (the accounting engine's settled/total reads walk the
+chain through here). A pending revision that is never finished
+never disturbs the record: the original stands, the clone waits.
 """
 from __future__ import annotations
 
@@ -93,6 +95,10 @@ def ensure_revision_cols(con: sqlite3.Connection) -> None:
                 con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_reason TEXT")
                 con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_by TEXT")
                 con.execute(f"ALTER TABLE {tbl} ADD COLUMN void_at TEXT")
+            if cols and "rev_pending" not in cols:
+                con.execute(
+                    f"ALTER TABLE {tbl} ADD COLUMN rev_pending "
+                    f"INTEGER NOT NULL DEFAULT 0")
             if tbl == "cash_entries" and cols and "entry_no" not in cols:
                 con.execute("ALTER TABLE cash_entries ADD COLUMN entry_no TEXT")
 
@@ -162,8 +168,9 @@ def revision_cols_ready(con, table: str) -> bool:
 
 
 def revision_pending(con, kind: str, key: int) -> bool:
-    """The revision-session marker: set when a revision is created
-    (the confirm act), cleared by the revision form's first Save.
+    """The revision-session marker: set when a pending revision is
+    created (the Edit act), cleared at finalize (the revision
+    form's Save or Print commit).
     It is the POST layer's license to complete a revision in place;
     without it, an existing document does not save in place."""
     if not key:
@@ -177,6 +184,53 @@ def set_revision_pending(con, kind: str, key: int) -> None:
 
 def clear_revision_pending(con, kind: str, key: int) -> None:
     set_option(con, f"revpend:{kind}:{key}", "")
+
+
+def pending_filter(con, table: str) -> str:
+    """SQL fragment excluding pending revisions from a scan of
+    `table`: " AND COALESCE(rev_pending,0)=0" when the column
+    stands on that table, else "". Append it to a WHERE clause (a
+    scan with no WHERE yet adds "WHERE 1=1" first). A pending
+    revision is invisible to money and list reads until its Save
+    or Print finalizes it."""
+    if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                       "AND name=?", (table,)).fetchone():
+        return ""
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({table})")]
+    return " AND COALESCE(rev_pending,0)=0" if "rev_pending" in cols else ""
+
+
+def pending_revision_ref(con, kind: str, ref: str):
+    """The number of ref's pending revision — the clone whose
+    revises_id resolves from ref's engine key and whose
+    rev_pending flag stands — else None. At most one pending
+    revision stands per document: reopening Edit resumes it."""
+    tbl, idcol = TABLES[kind]
+    ensure_revision_cols(con)
+    row = con.execute(f"SELECT {_pk(kind)} FROM {tbl} WHERE {idcol}=?",
+                      (ref,)).fetchone()
+    if not row:
+        return None
+    r = con.execute(
+        f"SELECT {idcol} FROM {tbl} WHERE revises_id=? "
+        f"AND COALESCE(rev_pending,0)=1", (row[0],)).fetchone()
+    return r[0] if r else None
+
+
+def revision_is_pending(con, kind: str, key: int) -> bool:
+    """True when the row at engine key `key` is a pending revision
+    (rev_pending=1). The lazy guard (ensure_revision_cols) runs
+    first, so the column's existence is settled before the read."""
+    if not key:
+        return False
+    tbl, _idc = TABLES[kind]
+    ensure_revision_cols(con)
+    cols = [r[1] for r in con.execute(f"PRAGMA table_info({tbl})")]
+    if "rev_pending" not in cols:
+        return False
+    r = con.execute(f"SELECT rev_pending FROM {tbl} "
+                    f"WHERE {_pk(kind)}=?", (key,)).fetchone()
+    return bool(r and r[0])
 
 
 def revision_info(con, kind: str, row) -> dict:
@@ -246,31 +300,137 @@ def _mark_void(con, kind: str, key: int, new_key: int, reason: str,
                 (*args, key))
 
 
-def _require_reason_name(reason: str, name: str) -> tuple:
-    reason = (reason or "").strip()
-    name = (name or "").strip()
-    if not reason:
-        raise ValueError("A revision needs its reason")
-    if not name:
-        raise ValueError("A revision needs the operator's name")
-    return reason, name
-
-
-def create_revision(con, kind: str, ref: str, reason: str,
-                    name: str) -> str:
-    """Void document ref and create its revision — ONE operation
-    (JC-AB0, the confirm act). Returns the revision's number.
-    Raises ValueError with the operator-facing reason when the
-    document may not be revised."""
+def create_pending_revision(con, kind: str, ref: str, by: str) -> str:
+    """Create document ref's PENDING revision (build 'av'): an
+    editable clone carrying the original's full content, marked
+    rev_pending=1, number prefilled "<original> Rev. N". The
+    original is NOT voided — it stays the live chain head until
+    the revision's Save or Print finalizes it (finalize_revision).
+    No reason, no typed name: the void signature at finalize is
+    the desk user and the server timestamp, taken automatically.
+    Returns the pending revision's number. Raises ValueError with
+    the operator-facing reason when the document may not be
+    revised."""
     ensure_revision_cols(con)
-    reason, name = _require_reason_name(reason, name)
+    existing = pending_revision_ref(con, kind, ref)
+    if existing is not None:
+        return existing
     at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    fn = {"ticket": _revise_ticket, "sale": _revise_sale,
-          "wo": _revise_wo, "quote": _revise_quote,
-          "change": _revise_change, "invoice": _revise_invoice,
-          "credit": _revise_credit, "cash": _revise_cash,
-          "petty": _revise_petty}[kind]
-    return fn(con, ref, reason, name, at)
+    fn = {"ticket": _clone_ticket, "sale": _clone_sale,
+          "wo": _clone_wo, "quote": _clone_quote,
+          "change": _clone_change, "invoice": _clone_invoice,
+          "credit": _clone_credit, "cash": _clone_cash,
+          "petty": _clone_petty}[kind]
+    return fn(con, ref, by, at)
+
+
+def void_cash_settlements(con, entry_key, note, by, at) -> set:
+    """Void one cash entry's settlement rows (collections +
+    doc_collections + payment_allocations, same column guards as
+    today) and refresh the touched invoices' statuses; returns
+    the set of invoice numbers touched."""
+    settled = con.execute(
+        "SELECT pay_id, invoice_id FROM collections "
+        "WHERE cash_entry_id=? AND COALESCE(voided,0)=0",
+        (entry_key,)).fetchall()
+    inv_nos = {num_of(con, "invoices", r[1]) for r in settled if r[1]}
+    for ltbl in ("collections", "doc_collections"):
+        con.execute(
+            f"UPDATE {ltbl} SET voided=1, void_reason=?, "
+            f"void_by=?, void_at=? WHERE cash_entry_id=? "
+            f"AND COALESCE(voided,0)=0",
+            (note, by, at, entry_key))
+    pacols = [r[1] for r in con.execute(
+        "PRAGMA table_info(payment_allocations)")]
+    if "voided" in pacols and "cash_entry_id" in pacols:
+        con.execute(
+            "UPDATE payment_allocations SET voided=1 "
+            "WHERE cash_entry_id=? AND COALESCE(voided,0)=0",
+            (entry_key,))
+    if inv_nos:
+        from engine_accounting import _refresh_invoice_status
+        for ino in inv_nos:
+            _refresh_invoice_status(con, ino)
+    return inv_nos
+
+
+def finalize_revision(con, kind: str, ref: str, note: str,
+                      by: str) -> str:
+    """Commit a pending revision (build 'av') — the revision
+    form's Save, or its Print (which commits first). ref is the
+    PENDING revision's number. All steps land before one final
+    commit: the original voids now, signed with the desk user
+    (`by`) and the server timestamp, automatically; its void
+    reason carries the revision's OPTIONAL note (empty when none
+    was offered); the clone's rev_pending flag clears and its
+    session marker clears, so the clone stands as chain head.
+    Per kind: a credit memo wears a FRESH company snapshot at
+    this, its posting, moment; a cash entry's ORIGINAL settlement
+    rows void alongside its entry (complete_cash_revision
+    releases the original's settlement first, inside the same
+    act, so the fresh settlement posts against the reopened
+    balance, and the clone's fresh settlement was posted by
+    complete_cash_revision before this call, so the
+    invoice-status refresh here reads the final money). Returns
+    the ORIGINAL's number."""
+    ensure_revision_cols(con)
+    tbl, idcol = TABLES[kind]
+    pk = _pk(kind)
+    row = con.execute(f"SELECT * FROM {tbl} WHERE {idcol}=?",
+                      (ref,)).fetchone()
+    if not row:
+        raise ValueError(f"Unknown document {ref}")
+    clone = dict(row)
+    if not clone.get("rev_pending"):
+        raise ValueError(f"{ref} is not a pending revision")
+    clone_key = clone[pk]
+    orig_key = clone.get("revises_id")
+    if not orig_key:
+        raise ValueError(f"{ref} is not a pending revision")
+    orow = con.execute(f"SELECT * FROM {tbl} WHERE {pk}=?",
+                       (orig_key,)).fetchone()
+    if not orow:
+        raise ValueError(f"{ref} is not a pending revision")
+    orig = dict(orow)
+    if orig.get("revised_by_id"):
+        head = chain_head_ref(con, kind, _num(con, kind, orig_key))
+        raise ValueError(
+            f"{_num(con, kind, orig_key)} was already revised — "
+            f"{head}, the live document at the head of its chain, "
+            f"stands instead")
+    at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    note = (note or "").strip()
+    by = (by or "").strip()
+    if kind == "sale":
+        # A sale document is its group: every original row voids
+        # to its own clone row, and every clone row's pending flag
+        # clears. The chain is marked from the head row's pair.
+        ogroup = orig.get("group_id") or orig_key
+        orows = con.execute(
+            "SELECT * FROM sales WHERE group_id=? ORDER BY seq, id",
+            (ogroup,)).fetchall()
+        cgroup = clone.get("group_id") or clone_key
+        for orow2 in orows:
+            crow = con.execute(
+                "SELECT id FROM sales WHERE revises_id=?",
+                (orow2["id"],)).fetchone()
+            if crow:
+                _mark_void(con, "sale", orow2["id"], crow[0],
+                           note, by, at)
+        con.execute(
+            "UPDATE sales SET rev_pending=0 WHERE group_id=?",
+            (cgroup,))
+    else:
+        _mark_void(con, kind, orig_key, clone_key, note, by, at)
+        con.execute(f"UPDATE {tbl} SET rev_pending=0 WHERE {pk}=?",
+                    (clone_key,))
+    clear_revision_pending(con, kind, clone_key)
+    if kind == "credit":
+        stamp_company_snapshot(con, "credit_memos", clone_key)
+    elif kind == "cash":
+        void_cash_settlements(con, orig_key, note, by, at)
+    con.commit()
+    return _num(con, kind, orig_key)
 
 
 def _head_row(con, kind: str, ref: str):
@@ -292,7 +452,7 @@ def _head_row(con, kind: str, ref: str):
     return row
 
 
-def _revise_ticket(con, ref, reason, name, at):
+def _clone_ticket(con, ref, by, at):
     row = _head_row(con, "ticket", ref)
     if row["invoice_id"]:
         raise ValueError(
@@ -305,17 +465,16 @@ def _revise_ticket(con, ref, reason, name, at):
         "ticket_id": new_no, "invoice_id": None,
         "revises_id": row["id"], "revised_by_id": None,
         "void_reason": None, "void_by": None, "void_at": None,
-        "clerk": name, "created_at": at})
+        "rev_pending": 1, "clerk": by, "created_at": at})
     for ln in con.execute("SELECT * FROM ticket_lines "
                           "WHERE ticket_id=?", (row["id"],)).fetchall():
         _copy_row(con, "ticket_lines", ln, {"ticket_id": new_key}, pk="line_id")
-    _mark_void(con, "ticket", row["id"], new_key, reason, name, at)
     set_revision_pending(con, "ticket", new_key)
     con.commit()
     return new_no
 
 
-def _revise_sale(con, ref, reason, name, at):
+def _clone_sale(con, ref, by, at):
     from engine_assets import next_sale_id  # lazy: import order
     gkey = doc_key(con, "sale", ref)
     rows = con.execute(
@@ -344,7 +503,7 @@ def _revise_sale(con, ref, reason, name, at):
             "sale_id": no, "group_id": None,
             "revises_id": r["id"], "revised_by_id": None,
             "void_reason": None, "void_by": None, "void_at": None,
-            "clerk": name, "created_at": at})
+            "rev_pending": 1, "clerk": by, "created_at": at})
         new_keys[r["id"]] = nk
         if i == 0:
             con.execute("UPDATE sales SET group_id=? WHERE id=?",
@@ -353,15 +512,12 @@ def _revise_sale(con, ref, reason, name, at):
         if i:
             con.execute("UPDATE sales SET group_id=? WHERE id=?",
                         (new_keys[head["id"]], new_keys[r["id"]]))
-    for r in rows:
-        _mark_void(con, "sale", r["id"], new_keys[r["id"]],
-                   reason, name, at)
     set_revision_pending(con, "sale", new_keys[head["id"]])
     con.commit()
     return new_no
 
 
-def _revise_wo(con, ref, reason, name, at):
+def _clone_wo(con, ref, by, at):
     row = _head_row(con, "wo", ref)
     if row["invoice_id"]:
         raise ValueError(
@@ -373,7 +529,7 @@ def _revise_wo(con, ref, reason, name, at):
     new_key = _copy_row(con, "work_orders", row, {
         "wo_id": new_no, "revises_id": row["id"],
         "revised_by_id": None, "void_reason": None, "void_by": None,
-        "void_at": None, "clerk": name, "created_at": at})
+        "void_at": None, "rev_pending": 1, "clerk": by, "created_at": at})
     try:
         lines = con.execute("SELECT * FROM wo_lines WHERE wo_id=?",
                             (row["id"],)).fetchall()
@@ -381,13 +537,12 @@ def _revise_wo(con, ref, reason, name, at):
         lines = []
     for ln in lines:
         _copy_row(con, "wo_lines", ln, {"wo_id": new_key}, pk="line_id")
-    _mark_void(con, "wo", row["id"], new_key, reason, name, at)
     set_revision_pending(con, "wo", new_key)
     con.commit()
     return new_no
 
 
-def _revise_quote(con, ref, reason, name, at):
+def _clone_quote(con, ref, by, at):
     row = _head_row(con, "quote", ref)
     ancestors = len(chain_ancestor_keys(con, "quote", row["id"])) - 1
     new_no = _unique_rev_no(con, "quote", ref, ancestors)
@@ -400,44 +555,42 @@ def _revise_quote(con, ref, reason, name, at):
     new_key = _copy_row(con, "quotes", row, {
         "quote_no": new_no, "revises_id": row["id"],
         "revised_by_id": None, "void_reason": None, "void_by": None,
-        "void_at": None, "clerk": name, "created_at": at,
+        "void_at": None, "rev_pending": 1, "clerk": by, "created_at": at,
         "status": ("Draft" if (row["status"] or "") in
                    ("Accepted", "Converted") else row["status"])})
     for ln in con.execute("SELECT * FROM quote_lines WHERE quote_id=?",
                           (row["id"],)).fetchall():
         _copy_row(con, "quote_lines", ln, {"quote_id": new_key}, pk="line_id")
-    _mark_void(con, "quote", row["id"], new_key, reason, name, at)
     set_revision_pending(con, "quote", new_key)
     con.commit()
     return new_no
 
 
-def _revise_change(con, ref, reason, name, at):
+def _clone_change(con, ref, by, at):
     row = _head_row(con, "change", ref)
     ancestors = len(chain_ancestor_keys(con, "change", row["id"])) - 1
     new_no = _unique_rev_no(con, "change", ref, ancestors)
     new_key = _copy_row(con, "change_orders", row, {
         "co_no": new_no, "revises_id": row["id"],
         "revised_by_id": None, "void_reason": None, "void_by": None,
-        "void_at": None, "clerk": name, "created_at": at})
+        "void_at": None, "rev_pending": 1, "clerk": by, "created_at": at})
     for ln in con.execute(
             "SELECT * FROM change_order_lines WHERE co_id=?",
             (row["id"],)).fetchall():
         _copy_row(con, "change_order_lines", ln, {"co_id": new_key}, pk="line_id")
-    _mark_void(con, "change", row["id"], new_key, reason, name, at)
     set_revision_pending(con, "change", new_key)
     con.commit()
     return new_no
 
 
-def _revise_invoice(con, ref, reason, name, at):
+def _clone_invoice(con, ref, by, at):
     row = _head_row(con, "invoice", ref)
     ancestors = len(chain_ancestor_keys(con, "invoice", row["id"])) - 1
     new_no = _unique_rev_no(con, "invoice", ref, ancestors)
     new_key = _copy_row(con, "invoices", row, {
         "invoice_no": new_no, "revises_id": row["id"],
         "revised_by_id": None, "void_reason": None, "void_by": None,
-        "void_at": None, "clerk": name, "created_at": at})
+        "void_at": None, "rev_pending": 1, "clerk": by, "created_at": at})
     for ln in con.execute("SELECT * FROM invoice_lines "
                           "WHERE invoice_id=?", (row["id"],)).fetchall():
         _copy_row(con, "invoice_lines", ln, {"invoice_id": new_key}, pk="line_id")
@@ -448,43 +601,42 @@ def _revise_invoice(con, ref, reason, name, at):
         docs = []
     for dc in docs:
         _copy_row(con, "invoice_docs", dc, {"invoice_id": new_key}, pk="doc_id")
-    _mark_void(con, "invoice", row["id"], new_key, reason, name, at)
     set_revision_pending(con, "invoice", new_key)
     con.commit()
     return new_no
 
 
-def _revise_credit(con, ref, reason, name, at):
+def _clone_credit(con, ref, by, at):
     row = _head_row(con, "credit", ref)
     ancestors = len(chain_ancestor_keys(con, "credit", row["id"])) - 1
     new_no = _unique_rev_no(con, "credit", ref, ancestors)
     new_key = _copy_row(con, "credit_memos", row, {
         "cm_no": new_no, "revises_id": row["id"],
         "revised_by_id": None, "void_reason": None, "void_by": None,
-        "void_at": None, "clerk": name, "created_at": at})
+        "void_at": None, "rev_pending": 1, "clerk": by, "created_at": at})
     for ln in con.execute("SELECT * FROM credit_memo_lines "
                           "WHERE cm_id=?", (row["id"],)).fetchall():
         _copy_row(con, "credit_memo_lines", ln, {"cm_id": new_key}, pk="line_id")
-    _mark_void(con, "credit", row["id"], new_key, reason, name, at)
-    # A credit memo stands complete at the confirm act — that act
-    # IS its posting, so the revision wears a FRESH company
-    # snapshot (redirect #3), not the voided memo's.
-    stamp_company_snapshot(con, "credit_memos", new_key)
+    # No company snapshot here (build 'av'): the clone is only
+    # pending — finalize_revision stamps the fresh snapshot at
+    # the commit, which is the memo's posting moment.
+    set_revision_pending(con, "credit", new_key)
     con.commit()
     return new_no
 
 
-def _revise_cash(con, ref, reason, name, at):
+def _clone_cash(con, ref, by, at):
     """Cash entry (redirect #2): the entry AND its settlement are
-    one money event, so the void takes both — the entry's chain
-    fields sign the entry, and its settlement rows in the payment
-    ledgers void alongside (their own void fields sign them). The
-    clone stands as a shell carrying the original's content; the
-    revision form's Save completes it through record_cash_entry's
-    own path (complete_cash_revision), which posts the settlement
-    fresh against the clone. A settling entry whose overage became
-    an open credit memo cannot be revised — the memo cannot be
-    un-issued (the app has no credit-memo void)."""
+    one money event. Under the pending model (build 'av') the
+    clone stands as a shell carrying the original's content and
+    NOTHING voids here — the original entry and its settlement
+    rows stay live until the revision form's Save completes the
+    clone through record_cash_entry's own path
+    (complete_cash_revision, which posts the settlement fresh
+    against the clone and then finalizes: original entry and its
+    settlement rows void at that commit). A settling entry whose
+    overage became an open credit memo cannot be revised — the
+    memo cannot be un-issued (the app has no credit-memo void)."""
     row = _head_row(con, "cash", ref)
     key = row["entry_id"]
     settled = con.execute(
@@ -510,37 +662,20 @@ def _revise_cash(con, ref, reason, name, at):
     new_key = _copy_row(con, "cash_entries", row, {
         "entry_no": new_no, "revises_id": key,
         "revised_by_id": None, "void_reason": None, "void_by": None,
-        "void_at": None, "clerk": name, "created_at": at},
+        "void_at": None, "rev_pending": 1, "clerk": by, "created_at": at},
         pk="entry_id")
-    inv_nos = {num_of(con, "invoices", r[1]) for r in settled if r[1]}
-    for tbl in ("collections", "doc_collections"):
-        con.execute(
-            f"UPDATE {tbl} SET voided=1, void_reason=?, void_by=?, "
-            f"void_at=? WHERE cash_entry_id=? "
-            f"AND COALESCE(voided,0)=0",
-            (reason, name, at, key))
-    pacols = [r[1] for r in con.execute(
-        "PRAGMA table_info(payment_allocations)")]
-    if "voided" in pacols and "cash_entry_id" in pacols:
-        con.execute(
-            "UPDATE payment_allocations SET voided=1 "
-            "WHERE cash_entry_id=? AND COALESCE(voided,0)=0", (key,))
-    _mark_void(con, "cash", key, new_key, reason, name, at)
-    if inv_nos:
-        from engine_accounting import _refresh_invoice_status
-        for ino in inv_nos:
-            _refresh_invoice_status(con, ino)
     set_revision_pending(con, "cash", new_key)
     con.commit()
     return new_no
 
 
-def _revise_petty(con, ref, reason, name, at):
+def _clone_petty(con, ref, by, at):
     """Petty cash entry (redirect #2): the template inside the
-    petty log only — the clone is a shell in the same log; the
-    revision form's Save completes it in place (complete_petty_
-    revision). Balances read chain heads only, so the voided
-    original drops out of the box the moment the revision stands."""
+    petty log only — the clone is a pending shell in the same log;
+    the revision form's Save completes it in place
+    (complete_petty_revision) and finalizes the chain at that
+    commit. Balances exclude pending rows, so the original alone
+    stands in the box until then."""
     row = _head_row(con, "petty", ref)
     key = row["id"]
     ancestors = len(chain_ancestor_keys(con, "petty", key)) - 1
@@ -548,8 +683,7 @@ def _revise_petty(con, ref, reason, name, at):
     new_key = _copy_row(con, "petty_cash", row, {
         "pc_id": new_no, "revises_id": key,
         "revised_by_id": None, "void_reason": None, "void_by": None,
-        "void_at": None, "clerk": name, "created_at": at})
-    _mark_void(con, "petty", key, new_key, reason, name, at)
+        "void_at": None, "rev_pending": 1, "clerk": by, "created_at": at})
     set_revision_pending(con, "petty", new_key)
     con.commit()
     return new_no

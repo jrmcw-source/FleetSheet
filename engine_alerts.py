@@ -12,6 +12,7 @@ import time
 from datetime import date, timedelta
 
 import engine_core as _core
+from engine_revisions import pending_filter as _pending_filter
 
 __all__ = ["alerts_for", "ack_alert", "is_acked", "ladder_level", "TAP", "SLAP", "PUNCH",
            "get_ticker_cats", "set_ticker_cats", "TICKER_CATS", "CAT_LABELS",
@@ -204,12 +205,13 @@ def _shipping_bad_paper(con: sqlite3.Connection) -> list:
 
     out = []
     for r in con.execute(
-            """SELECT t.ticket_id, t.status, t.on_rent, a.asset_id, a.unit_no,
+            f"""SELECT t.ticket_id, t.status, t.on_rent, a.asset_id, a.unit_no,
                       c.account_name
                FROM tickets t
                JOIN assets a ON a.id = t.asset_id
                JOIN customers c ON c.id = t.customer_id
-               WHERE t.status IN ('Reserved','Dispatched')"""):
+               WHERE t.status IN ('Reserved','Dispatched')
+                 {_pending_filter(con, "tickets")}"""):
         m = ticket_money(con, r["ticket_id"])
         fit = m.get("fit", "PASS")
         if fit == "PASS":
@@ -241,20 +243,22 @@ def _nooff_contention(con: sqlite3.Connection) -> list:
     Thursday" \u2014 not the same tap told twice."""
     rows = []
     for r in con.execute(
-            """SELECT t.ticket_id, a.unit_no, a.category, c.account_name
+            f"""SELECT t.ticket_id, a.unit_no, a.category, c.account_name
                FROM tickets t
                JOIN assets a ON a.id = t.asset_id
                JOIN customers c ON c.id = t.customer_id
                WHERE t.status IN ('On Rent','Standby')
                  AND (t.off_rent IS NULL OR t.off_rent = '')
-                 AND a.category IS NOT NULL AND a.category != ''"""):
+                 AND a.category IS NOT NULL AND a.category != ''
+                 {_pending_filter(con, "tickets")}"""):
         want = con.execute(
-            """SELECT t2.ticket_id, t2.on_rent, c2.account_name
+            f"""SELECT t2.ticket_id, t2.on_rent, c2.account_name
                FROM tickets t2
                JOIN assets a2 ON a2.id = t2.asset_id
                JOIN customers c2 ON c2.id = t2.customer_id
                WHERE t2.status = 'Reserved' AND t2.ticket_id != ?
                  AND a2.category = ?
+                 {_pending_filter(con, "tickets")}
                ORDER BY t2.on_rent LIMIT 1""",
             (r["ticket_id"], r["category"])).fetchone()
         if not want:
@@ -345,9 +349,10 @@ def _po_expiry_taps(con: sqlite3.Connection, tapped: set) -> list:
             continue
         cands = []
         for inv in con.execute(
-                """SELECT invoice_no FROM invoices
+                f"""SELECT invoice_no FROM invoices
                    WHERE customer_id = ? AND TRIM(po) = ?
-                   AND status NOT IN ('Paid','Write-off','Draft')""",
+                   AND status NOT IN ('Paid','Write-off','Draft')
+                     {_pending_filter(con, "invoices")}""",
                 (p["customer_id"], (p["po_no"] or "").strip())):
             ino = inv["invoice_no"]
             if ino in tapped:
@@ -397,13 +402,14 @@ def _asset_conflict_items(con: sqlite3.Connection) -> list:
     today = date.today()
     soon = (today + timedelta(days=14)).isoformat()
     for r in con.execute(
-            """SELECT DISTINCT a.asset_id, a.unit_no, t.ticket_id, t.on_rent, c.account_name
+            f"""SELECT DISTINCT a.asset_id, a.unit_no, t.ticket_id, t.on_rent, c.account_name
                FROM assets a
                JOIN tickets t ON t.asset_id = a.id
                JOIN customers c ON c.id = t.customer_id
                WHERE a.active = 1
                AND t.status IN ('Reserved','Dispatched')
-               AND t.on_rent <= ?""", (soon,)):
+               AND t.on_rent <= ?
+                 {_pending_filter(con, "tickets")}""", (soon,)):
         exp = operative_cert_expiry(con, r["asset_id"])
         if exp and exp < today.isoformat():
             out.append((f"aconf:{r['ticket_id']}",
@@ -464,17 +470,19 @@ def _asset_live_po_items(con: sqlite3.Connection) -> list:
                      else " (reserved)")
         if href is None:
             inv = con.execute(
-                """SELECT invoice_no FROM invoices
+                f"""SELECT invoice_no FROM invoices
                    WHERE customer_id = ? AND TRIM(po) = ?
                      AND status NOT IN ('Paid','Write-off','Draft','Sent')
+                     {_pending_filter(con, "invoices")}
                    ORDER BY invoice_date DESC LIMIT 1""",
                 (p["customer_id"], (p["po_no"] or "").strip())).fetchone()
             if inv:
                 href = f"/invoice/{inv['invoice_no']}"
             else:
                 tk = con.execute(
-                    """SELECT ticket_id FROM tickets
+                    f"""SELECT ticket_id FROM tickets
                        WHERE customer_id = ? AND po = ? AND status = 'Reserved'
+                         {_pending_filter(con, "tickets")}
                        ORDER BY rowid DESC LIMIT 1""",
                     (p["customer_id"], p["po_no"])).fetchone()
                 if tk:
@@ -496,9 +504,9 @@ def _asset_accepted_quote_items(con: sqlite3.Connection) -> list:
     out = []
     today = date.today()
     for q in con.execute(
-            """SELECT q.quote_no, q.customer_id, q.valid_until, c.account_name
+            f"""SELECT q.quote_no, q.customer_id, q.valid_until, c.account_name
                FROM quotes q JOIN customers c ON c.id = q.customer_id
-               WHERE q.status='Accepted' ORDER BY q.valid_until"""):
+               WHERE q.status='Accepted'{_pending_filter(con, "quotes")} ORDER BY q.valid_until"""):
         vu = (q["valid_until"] or "").strip()[:10]
         try:
             delta = (date.fromisoformat(vu) - today).days if vu else None
@@ -524,12 +532,13 @@ def _asset_offrent_items(con: sqlite3.Connection) -> list:
     out = []
     soon = (date.today() + timedelta(days=7)).isoformat()
     for r in con.execute(
-            """SELECT t.ticket_id, t.off_rent, a.unit_no, c.account_name
+            f"""SELECT t.ticket_id, t.off_rent, a.unit_no, c.account_name
                FROM tickets t
                JOIN assets a ON a.id = t.asset_id
                JOIN customers c ON c.id = t.customer_id
                WHERE t.status='On Rent' AND t.off_rent IS NOT NULL
-               AND t.off_rent <= ? ORDER BY t.off_rent""", (soon,)):
+               AND t.off_rent <= ?
+                 {_pending_filter(con, "tickets")} ORDER BY t.off_rent""", (soon,)):
         out.append((f"aoff:{r['ticket_id']}",
                     f"{r['unit_no']} due back {_fmt_mdy(r['off_rent'])} "
                     f"({r['account_name']})",
@@ -696,9 +705,10 @@ def alerts_for(con: sqlite3.Connection, section: str = "dash") -> list:
     today = date.today()
     tapped_invoices = set()
     for inv in con.execute(
-        """SELECT i.invoice_no, i.invoice_date, i.terms, i.status, c.account_name
+        f"""SELECT i.invoice_no, i.invoice_date, i.terms, i.status, c.account_name
            FROM invoices i JOIN customers c ON c.id = i.customer_id
-           WHERE i.status NOT IN ('Paid','Write-off','Draft')"""
+           WHERE i.status NOT IN ('Paid','Write-off','Draft')
+             {_pending_filter(con, "invoices")}"""
     ):
         bal = _balances.get(inv["invoice_no"], 0.0)
         if bal <= 0.009:
