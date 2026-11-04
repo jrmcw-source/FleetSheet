@@ -29,7 +29,29 @@ Small equipment rental businesses live in spreadsheets, whiteboards, and memory.
 
 ## Screenshots
 
-> Screenshots coming with the first packaged release. The UI follows a compact design standard: dense professional business software (think Dynamics/Great Plains), every page fitting one screen where possible, zero wasted space.
+![Today](docs/screenshots/today.png)
+*Today — what's due, what's late, what's done, in one glance. Snooze what can wait.*
+
+![Assets](docs/screenshots/assets.png)
+*Assets — every unit and where it stands.*
+
+![Compliance](docs/screenshots/compliance.png)
+*Compliance — every certification and inspection with an expiration date, in one place.*
+
+![Invoicing and accounts receivable](docs/screenshots/invoicing-ar.png)
+*Invoicing & accounts receivable.*
+
+![Invoice form](docs/screenshots/invoice-form.png)
+*An invoice being revised — a total on every line. Save or Print voids the original and posts the revision.*
+
+![Invoice summary](docs/screenshots/invoice-summary.png)
+*A locked invoice summary — what's paid, what's still open, and every credit explained in the open.*
+
+![Administration](docs/screenshots/admin.png)
+*Administration — one switch per kind of work. Turn one off and its pages hide; the records are never touched.*
+
+![Billing setup](docs/screenshots/billing-setup.png)
+*Billing setup — your payment terms, your units, your line items. Add your own; untick what you don't use.*
 
 ## Installation (Windows)
 
